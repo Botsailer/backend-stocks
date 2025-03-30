@@ -25,3 +25,30 @@ exports.sendResetPasswordEmail = async (toEmail, resetUrl) => {
     throw err;
   }
 };
+
+
+exports.sendVerificationEmail = async (toEmail, verificationUrl) => {
+    const mailOptions = {
+    
+    from: '"Backend-App" <auth@therobobox.co>',
+    to: toEmail,
+    subject: 'Email Verification',
+    html: `
+      <p>Thank you for signing up!</p>
+      <p>Please click on the following link to verify your email address:</p>
+      <p><a href="${verificationUrl}" style="color: #007bff;">Verify Email</a></p>
+      <p>If you did not sign up, please ignore this email.</p>
+    `,
+    };
+    try {
+        console.log('Sending verification email to:', toEmail);
+        console.log('Verification URL:', verificationUrl);
+        const info = await transporter.sendMail(mailOptions);
+        console.log('Verification email sent: ', info.response);
+        return info;
+    }
+    catch (err) {
+        console.error('Error sending verification email: ', err);
+        throw err;
+    }
+}

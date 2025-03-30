@@ -13,6 +13,7 @@ async function connect() {
 }
 
 async function createUser(userData) {
+  console.log('in DbAdapter Creating user with data:', userData);
   const user = new User(userData);
   const savedUser = await user.save();
   return savedUser._id;
@@ -29,5 +30,6 @@ async function findBannedUser(query) {
 async function updateUser(query, updateData) {
   return User.findOneAndUpdate(query, updateData, { new: true });
 }
+
 
 module.exports = { connect, createUser, findBannedUser ,findUser, updateUser };

@@ -1,13 +1,19 @@
-// config/config.js
 module.exports = {
   server: {
-    port: process.env.PORT || 3000,
-    jwtSecret: process.env.JWT_SECRET || 'defaultsecret'
+    port: process.env.PORT || 3000
   },
   database: {
-    type: process.env.DB_TYPE || 'mongodb',
     mongodb: {
       uri: process.env.MONGODB_URI || 'mongodb://localhost:27017/authdb'
     }
+  },
+  jwt: {
+    accessTokenSecret: process.env.ACCESS_TOKEN_SECRET || 'accesssecret',
+    refreshTokenSecret: process.env.REFRESH_TOKEN_SECRET || 'refreshsecret'
+  },
+  email: {
+    service: process.env.EMAIL_SERVICE || 'smtp',
+    user: process.env.EMAIL_USER,
+    pass: process.env.EMAIL_PASS
   }
 };
