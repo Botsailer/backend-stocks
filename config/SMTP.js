@@ -2,19 +2,21 @@
 const nodemailer = require('nodemailer');
 
 const transporter = nodemailer.createTransport({
-  host: process.env.EMAIL_HOST || 'smtp.example.com', // e.g., smtp.gmail.com
-  port: process.env.EMAIL_PORT || 587, // use 465 for secure
-  secure: process.env.EMAIL_PORT == 465, // true if port is 465
-  
+  host: process.env.EMAIL_HOST || 'smtp.example.com',
+  port: process.env.EMAIL_PORT || 587,
+  secure: process.env.EMAIL_PORT == 465,
   tls: {
-    ciphers: 'SSLv3',
-    },
-    debug: true,
+    // You might try removing or updating this option
+    ciphers: 'SSLv3'
+  },
+  debug: true,
+  logger: true,
   auth: {
     user: process.env.EMAIL_USER || 'user@example.com',
     pass: process.env.EMAIL_PASS || 'password'
   }
 });
+
 
 // Verify transporter configuration
 transporter.verify((error, success) => {
