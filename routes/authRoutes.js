@@ -16,7 +16,7 @@ module.exports = (dbAdapter) => {
    * /auth/signup:
    *   post:
    *     summary: Register a new user.
-   *     description: Creates a new local user with a hashed password. Sends an email verification link upon successful registration.
+   *     description: Creates a new local user with a hashed password, sends an email verification link upon successful registration.
    *     tags: [Authentication]
    *     requestBody:
    *       required: true
@@ -45,7 +45,7 @@ module.exports = (dbAdapter) => {
    *                 example: "mainUserId123"
    *     responses:
    *       201:
-   *         description: User created successfully. Verification email sent.
+   *         description: User created successfully, verification email sent.
    *         content:
    *           application/json:
    *             schema:
@@ -58,7 +58,7 @@ module.exports = (dbAdapter) => {
    *       400:
    *         description: Missing required fields or username/email already exists.
    *       500:
-   *         description: Internal server error while creating the user.
+   *         description: Internal error during user creation.
    */
   router.post('/signup', async (req, res) => {
     console.log("dbAdapter in authRoutes", dbAdapter);
@@ -145,7 +145,9 @@ module.exports = (dbAdapter) => {
    *     tags: [Authentication]
    *     responses:
    *       200:
-   *         description: OAuth login successful; returns tokens.
+   *         description: OAuth login successful; returns access and refresh tokens.
+   *       403:
+   *         description: The user is banned.
    *       500:
    *         description: Error during the OAuth callback process.
    */
@@ -192,13 +194,24 @@ module.exports = (dbAdapter) => {
    * /auth/logout:
    *   post:
    *     summary: Log out the user.
-   *     description: Instructs the client to clear JWT tokens.
+   *     description: 
+   *       Clears the user's stored refresh token (for local and OAuth users), destroys the session if applicable,
+   *       and revokes OAuth access tokens if needed.
    *     tags: [Authentication]
    *     responses:
    *       200:
    *         description: Logged out successfully.
+   *         content:
+   *           application/json:
+   *             schema:
+   *               type: object
+   *               properties:
+   *                 message:
+   *                   type: string
+   *       500:
+   *         description: Error during logout.
    */
- router.post('/logout', async (req, res) => {
+  router.post('/logout', async (req, res) => {
     await authController.logout(req, res, dbAdapter);
   });
 
@@ -289,6 +302,32 @@ module.exports = (dbAdapter) => {
    */
   router.post('/reset-password', async (req, res) => {
     await authController.resetPassword(req, res, dbAdapter);
+  });
+
+  /**
+   * @swagger
+   * /auth/verify:
+   *   get:
+   *     summary: Verify email address.
+   *     description: Validates the email verification token and marks the user's email as verified.
+   *     tags: [Authentication]
+   *     parameters:
+   *       - in: query
+   *         name: token
+   *         required: true
+   *         schema:
+   *           type: string
+   *         description: The email verification token.
+   *     responses:
+   *       200:
+   *         description: Email verified successfully.
+   *       400:
+   *         description: Invalid or missing token, or token expired.
+   *       500:
+   *         description: Error during email verification.
+   */
+  router.get('/verify', async (req, res) => {
+    await authController.verifyEmail(req, res, dbAdapter);
   });
 
   return router;

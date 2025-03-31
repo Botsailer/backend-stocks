@@ -1,9 +1,11 @@
 // services/emailService.js
 const transporter = require('../config/SMTP');
 
+const from = process.env.EMAIL_USER
+
 exports.sendResetPasswordEmail = async (toEmail, resetUrl) => {
   const mailOptions = {
-    from: '"Backend-App" <auth@therobobox.co>',
+    from: `"Backend-App" <${from}>`,
     to: toEmail,
     subject: 'Password Reset Request',
     html: `
@@ -30,7 +32,7 @@ exports.sendResetPasswordEmail = async (toEmail, resetUrl) => {
 exports.sendVerificationEmail = async (toEmail, verificationUrl) => {
     const mailOptions = {
     
-    from: '"Backend-App" <auth@therobobox.co>',
+    from: `"Backend-App" <${from}>`,
     to: toEmail,
     subject: 'Email Verification',
     html: `
