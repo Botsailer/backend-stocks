@@ -1,6 +1,7 @@
 require('dotenv').config();
 const express = require('express');
 const passport = require('passport');
+const cors = require('cors');
 const app = express();
 const config = require('./config/config');
 const dbAdapter = require('./utils/db'); // This should export functions: connect, createUser, findUser, updateUser, findBannedUser
@@ -8,6 +9,7 @@ const authRoutes = require('./routes/authRoutes');
 const setupSwagger = require('./swaggerOptions'); // optional, for swagger docs
 
 // Middleware
+app.use(cors()); // Enable CORS for all routes
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
