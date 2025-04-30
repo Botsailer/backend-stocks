@@ -1,79 +1,70 @@
-const LocalStrategy = require('passport-local').Strategy;
-const GoogleStrategy = require('passport-google-oauth20').Strategy;
-const bcrypt = require('bcryptjs');
-require('dotenv').config();
+// config/passport.js
+const { Strategy: LocalStrategy } = require('passport-local');
+const { Strategy: JwtStrategy, ExtractJwt } = require('passport-jwt');
+const GoogleStrategy             = require('passport-google-oauth20').Strategy;
+const bcrypt                     = require('bcryptjs');
+const db                         = require('../utils/db');
 
-module.exports = (passport, dbAdapter) => {
-  /**
-   * Local Strategy
-   * This strategy accepts a single field "username" which can be either a username or an email.
-   */
+module.exports = (passport) => {
+  // Local
   passport.use(new LocalStrategy(
     { usernameField: 'username', passwordField: 'password' },
     async (username, password, done) => {
       try {
-        // Query that checks both username and email fields
-        const query = {
-          $or: [
-            { username: username },
-            { email: username }
-          ],
-          provider: 'local'
-        };
-        const user = await dbAdapter.findUser(query);
-        if (!user) return done(null, false, { message: 'User not found' });
-        const isMatch = await bcrypt.compare(password, user.password);
-        if (!isMatch) return done(null, false, { message: 'Incorrect password' });
+        const user = await db.findUser({
+          provider: 'local',
+          $or: [{ username }, { email: username }]
+        });
+        if (!user) return done(null, false);
+        const match = await bcrypt.compare(password, user.password);
+        if (!match) return done(null, false);
         return done(null, user);
-      } catch (err) {
-        return done(err);
-      }
+      } catch (err) { return done(err); }
     }
   ));
 
-  /**
-   * Google OAuth Strategy
-   * Allows users to authenticate via Google. If the user does not exist, a new account is created.
-   */
+  // JWT
+  passport.use(new JwtStrategy({
+      jwtFromRequest: ExtractJwt.fromAuthHeaderAsBearerToken(),
+      secretOrKey:    process.env.ACCESS_TOKEN_SECRET
+    },
+    async (payload, done) => {
+      try {
+        const user = await db.findUser({ _id: payload.uid });
+        if (!user) return done(null, false);
+        // Enforce changedPasswordAt & tokenVersion
+        if (user.changedPasswordAt.getTime() > payload.iat*1000) return done(null, false);
+        if (payload.tokenVersion !== user.tokenVersion)          return done(null, false);
+        return done(null, user);
+      } catch (err) { return done(err); }
+    }
+  ));
+
+  // Google
   passport.use(new GoogleStrategy({
-      clientID: process.env.GOOGLECLIENTID,
+      clientID:     process.env.GOOGLECLIENTID,
       clientSecret: process.env.GOOGLECLIENTSECRET,
-      callbackURL: process.env.GOOGLE_CALLBACK_URL
+      callbackURL:  process.env.GOOGLE_CALLBACK_URL
     },
     async (accessToken, refreshToken, profile, done) => {
       try {
-        let user = await dbAdapter.findUser({ provider: 'google', providerId: profile.id });
+        let user = await db.findUser({ provider: 'google', providerId: profile.id });
         if (!user) {
-          // Create a new user with details from Google profile
-          user = {
-            username: profile.emails && profile.emails[0].value,
-            email: profile.emails && profile.emails[0].value,
+          user = await db.createUser({
+            username: profile.emails[0].value,
+            email:    profile.emails[0].value,
             provider: 'google',
-            providerId: profile.id,
-            mainUserId: null
-          };
-          const uid = await dbAdapter.createUser(user);
-          user._id = uid;
+            providerId: profile.id
+          });
         }
-        return done(null, user);
-      } catch (err) {
-        return done(err);
-      }
+        done(null, user);
+      } catch (err) { done(err); }
     }
   ));
 
-  // Serialize the user for session support (if sessions are used)
-  passport.serializeUser((user, done) => {
-    done(null, user._id);
-  });
-
-  // Deserialize the user based on the user id stored in session
+  passport.serializeUser((user, done) => done(null, user._id));
   passport.deserializeUser(async (id, done) => {
-    try {
-      const user = await dbAdapter.findUser({ _id: id });
-      done(null, user);
-    } catch (err) {
-      done(err);
-    }
+    const user = await db.findUser({ _id: id });
+    done(null, user);
   });
 };

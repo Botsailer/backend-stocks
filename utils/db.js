@@ -1,35 +1,40 @@
 // utils/db.js
-const mongoose = require('mongoose');
-const User = require('../models/user');
-const config = require('../config/config');
-const BannedUsers = require('../models/BannedUsers');
+const mongoose   = require('mongoose');
+const User       = require('../models/user');
+const admin      = require('../models/admin')
+const BannedUser = require('../models/BannedUsers');
+const config     = require('../config/config');
 
 async function connect() {
   await mongoose.connect(config.database.mongodb.uri, {
-    useNewUrlParser: true,
+    useNewUrlParser:    true,
     useUnifiedTopology: true
   });
   console.log('Connected to database');
 }
 
-async function createUser(userData) {
-  console.log('in DbAdapter Creating user with data:', userData);
-  const user = new User(userData);
-  const savedUser = await user.save();
-  return savedUser._id;
+async function createUser(data) {
+  const user = new User(data);
+  const saved = await user.save();
+  return saved;
+}
+
+async function createAdmin(data) {
+  const adminUser = new admin(data);
+  const savedAdmin = await adminUser.save();
+  return savedAdmin;
 }
 
 async function findUser(query) {
   return User.findOne(query);
 }
 
+async function updateUser(query, update, opts = { new: true }) {
+  return User.findOneAndUpdate(query, update, opts);
+}
+
 async function findBannedUser(query) {
-  return BannedUsers.findOne(query);
+  return BannedUser.findOne(query);
 }
 
-async function updateUser(query, updateData) {
-  return User.findOneAndUpdate(query, updateData, { new: true });
-}
-
-
-module.exports = { connect, createUser, findBannedUser ,findUser, updateUser };
+module.exports = { connect, createAdmin, createUser, findUser, updateUser, findBannedUser };

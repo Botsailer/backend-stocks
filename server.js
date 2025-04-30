@@ -1,4 +1,3 @@
-require('dotenv').config();
 const express = require('express');
 const passport = require('passport');
 const cors = require('cors');
@@ -33,9 +32,10 @@ dbAdapter.connect()
     app.use(passport.initialize());
     require('./config/passport')(passport, dbAdapter);
     // Pass dbAdapter to the routes so that they have access to database methods
-    app.use('/auth', authRoutes(dbAdapter));
+    app.use('/auth', authRoutes);
     app.listen(config.server.port, () =>
-      console.log(`Auth service running on port ${config.server.port}`)
+      console.log(`Auth service running on port ${config.server.port}`),
+      console.log("swagger docs available at /api-docs")
     );
   })
   .catch(err => console.error('Database connection error:', err));

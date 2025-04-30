@@ -9,326 +9,412 @@ const router = express.Router();
  *   name: Authentication
  *   description: Endpoints for user authentication and account management.
  */
-module.exports = (dbAdapter) => {
 
-  /**
-   * @swagger
-   * /auth/signup:
-   *   post:
-   *     summary: Register a new user.
-   *     description: Creates a new local user with a hashed password, sends an email verification link upon successful registration.
-   *     tags: [Authentication]
-   *     requestBody:
-   *       required: true
-   *       description: User signup data (username, email, password, optional mainUserId).
-   *       content:
-   *         application/json:
-   *           schema:
-   *             type: object
-   *             required:
-   *               - username
-   *               - email
-   *               - password
-   *             properties:
-   *               username:
-   *                 type: string
-   *                 description: The user’s username.
-   *               email:
-   *                 type: string
-   *                 description: The user’s email address.
-   *               password:
-   *                 type: string
-   *                 description: The user’s password.
-   *               mainUserId:
-   *                 type: string
-   *                 description: (Optional) Reference to the main user record.
-   *                 example: "mainUserId123"
-   *     responses:
-   *       201:
-   *         description: User created successfully, verification email sent.
-   *         content:
-   *           application/json:
-   *             schema:
-   *               type: object
-   *               properties:
-   *                 message:
-   *                   type: string
-   *                 uid:
-   *                   type: string
-   *       400:
-   *         description: Missing required fields or username/email already exists.
-   *       500:
-   *         description: Internal error during user creation.
-   */
-  router.post('/signup', async (req, res) => {
-    console.log("dbAdapter in authRoutes", dbAdapter);
-    await authController.signup(req, res, dbAdapter);
-  });
+/**
+ * @swagger
+ * /auth/signup:
+ *   post:
+ *     tags:
+ *       - Authentication
+ *     summary: Create a new user and send verification email
+ *     description: |
+ *       Registers a new local user. Hashes the password, sets initial metadata,
+ *       and sends an email verification link.
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required:
+ *               - username
+ *               - email
+ *               - password
+ *             properties:
+ *               username:
+ *                 type: string
+ *                 description: Unique username for login
+ *               email:
+ *                 type: string
+ *                 format: email
+ *                 description: User's email address, used for login and verification
+ *               password:
+ *                 type: string
+ *                 format: password
+ *                 description: Plain-text password (min length enforced in controller)
+ *               mainUserId:
+ *                 type: string
+ *                 description: Optional reference to an existing main user record
+ *             example:
+ *               username: "johndoe"
+ *               email: "john@example.com"
+ *               password: "P@ssw0rd!"
+ *               mainUserId: "abc123"
+ *     responses:
+ *       201:
+ *         description: User created, verification email sent
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 message:
+ *                   type: string
+ *                   example: "Signup successful—check your email"
+ *       400:
+ *         description: Validation error or user already exists
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/ErrorResponse'
+ *       500:
+ *         description: Internal server error
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/ErrorResponse'
+ */
+router.post('/signup', async (req, res) => {
+  await authController.signup(req, res);
+});
 
-  /**
-   * @swagger
-   * /auth/login:
-   *   post:
-   *     summary: Log in an existing user.
-   *     description: Authenticates a user using local credentials (either username or email) and returns JWT tokens.
-   *     tags: [Authentication]
-   *     security:
-   *       - bearerAuth: []
-   *     requestBody:
-   *       required: true
-   *       description: Login credentials. The field "username" accepts either a username or an email.
-   *       content:
-   *         application/json:
-   *           schema:
-   *             type: object
-   *             required:
-   *               - username
-   *               - password
-   *             properties:
-   *               username:
-   *                 type: string
-   *                 description: The user’s username or email.
-   *               password:
-   *                 type: string
-   *                 description: The user’s password.
-   *     responses:
-   *       200:
-   *         description: Login successful; returns access and refresh tokens.
-   *         content:
-   *           application/json:
-   *             schema:
-   *               type: object
-   *               properties:
-   *                 accessToken:
-   *                   type: string
-   *                 refreshToken:
-   *                   type: string
-   *       401:
-   *         description: Invalid credentials.
-   *       403:
-   *         description: The user is banned.
-   */
-  router.post(
-    '/login',
-    // Middleware: if email is provided but username is not, assign email to username
-    (req, res, next) => {
-      if (req.body.email && !req.body.username) {
-        req.body.username = req.body.email;
-      }
-      next();
-    },
-    passport.authenticate('local', { session: false }),
-    async (req, res) => {
-      await authController.login(req, res, dbAdapter);
+/**
+ * @swagger
+ * /auth/login:
+ *   post:
+ *     tags:
+ *       - Authentication
+ *     summary: Authenticate user and issue JWT tokens
+ *     description: |
+ *       Logs in a user via local strategy (username or email + password).
+ *       Returns access and refresh tokens on success.
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required:
+ *               - username
+ *               - password
+ *             properties:
+ *               username:
+ *                 type: string
+ *                 description: Username or email of the user
+ *               password:
+ *                 type: string
+ *                 format: password
+ *                 description: User's password
+ *             example:
+ *               username: "john@example.com"
+ *               password: "P@ssw0rd!"
+ *     responses:
+ *       200:
+ *         description: Authentication successful
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 accessToken:
+ *                   type: string
+ *                   description: JWT access token
+ *                 refreshToken:
+ *                   type: string
+ *                   description: JWT refresh token
+ *       401:
+ *         description: Invalid credentials
+ *       403:
+ *         description: User is banned or blocked
+ */
+router.post(
+  '/login',
+  // allow email alias for username field
+  (req, res, next) => {
+    if (req.body.email && !req.body.username) {
+      req.body.username = req.body.email;
     }
-  );
+    next();
+  },
+  passport.authenticate('local', { session: false }),
+  authController.login
+);
 
-  /**
-   * @swagger
-   * /auth/google:
-   *   get:
-   *     summary: Initiate Google OAuth login.
-   *     description: Redirects the user to Google for authentication.
-   *     tags: [Authentication]
-   *     responses:
-   *       302:
-   *         description: Redirects to Google OAuth login.
-   */
-  router.get('/google', passport.authenticate('google', { scope: ['profile', 'email'] }));
+/**
+ * @swagger
+ * /auth/google:
+ *   get:
+ *     tags:
+ *       - Authentication
+ *     summary: Redirect to Google for OAuth authentication
+ *     description: Initiates Google OAuth2 flow requesting profile and email scopes.
+ *     responses:
+ *       302:
+ *         description: Redirects to Google OAuth consent screen
+ */
+router.get(
+  '/google',
+  passport.authenticate('google', { scope: ['profile', 'email'] })
+);
 
-  /**
-   * @swagger
-   * /auth/google/callback:
-   *   get:
-   *     summary: Google OAuth callback.
-   *     description: Handles the callback from Google OAuth and returns JWT tokens.
-   *     tags: [Authentication]
-   *     responses:
-   *       200:
-   *         description: OAuth login successful; returns access and refresh tokens.
-   *       403:
-   *         description: The user is banned.
-   *       500:
-   *         description: Error during the OAuth callback process.
-   */
-  router.get(
-    '/google/callback',
-    passport.authenticate('google', { session: false }),
-    async (req, res) => {
-      await authController.oauthCallback(req, res, dbAdapter);
-    }
-  );
+/**
+ * @swagger
+ * /auth/google/callback:
+ *   get:
+ *     tags:
+ *       - Authentication
+ *     summary: Google OAuth2 callback
+ *     description: Handles Google's callback, logs in or creates user, returns JWT tokens.
+ *     responses:
+ *       200:
+ *         description: OAuth login successful
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 accessToken:
+ *                   type: string
+ *                 refreshToken:
+ *                   type: string
+ *       403:
+ *         description: User is banned
+ *       500:
+ *         description: Internal server error during OAuth callback
+ */
+router.get(
+  '/google/callback',
+  passport.authenticate('google', { session: false }),
+  authController.oauthCallback
+);
 
-  /**
-   * @swagger
-   * /auth/refresh:
-   *   post:
-   *     summary: Refresh JWT tokens.
-   *     description: Generates new access and refresh tokens using a valid refresh token.
-   *     tags: [Authentication]
-   *     requestBody:
-   *       required: true
-   *       description: Contains the refresh token.
-   *       content:
-   *         application/json:
-   *           schema:
-   *             type: object
-   *             properties:
-   *               refreshToken:
-   *                 type: string
-   *                 description: A valid refresh token.
-   *     responses:
-   *       200:
-   *         description: New JWT tokens are returned.
-   *       401:
-   *         description: Refresh token is missing.
-   *       403:
-   *         description: Invalid refresh token or user not found.
-   */
-  router.post('/refresh', async (req, res) => {
-    await authController.refresh(req, res, dbAdapter);
-  });
+/**
+ * @swagger
+ * /auth/refresh:
+ *   post:
+ *     tags:
+ *       - Authentication
+ *     summary: Refresh JWT tokens
+ *     description: |
+ *       Accepts a valid refresh token in the request body and returns new
+ *       access and refresh tokens (rotation). Invalidates old refresh token.
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               refreshToken:
+ *                 type: string
+ *                 description: The user's current refresh token
+ *             example:
+ *               refreshToken: "eyJhbGciOiJIUzI1NiIs..."
+ *     responses:
+ *       200:
+ *         description: Tokens refreshed successfully
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 accessToken:
+ *                   type: string
+ *                 refreshToken:
+ *                   type: string
+ *       401:
+ *         description: Missing refresh token
+ *       403:
+ *         description: Invalid or revoked refresh token
+ */
+router.post('/refresh', authController.refresh);
 
-  /**
-   * @swagger
-   * /auth/logout:
-   *   post:
-   *     summary: Log out the user.
-   *     description: 
-   *       Clears the user's stored refresh token (for local and OAuth users), destroys the session if applicable,
-   *       and revokes OAuth access tokens if needed.
-   *     tags: [Authentication]
-   *     responses:
-   *       200:
-   *         description: Logged out successfully.
-   *         content:
-   *           application/json:
-   *             schema:
-   *               type: object
-   *               properties:
-   *                 message:
-   *                   type: string
-   *       500:
-   *         description: Error during logout.
-   */
-  router.post('/logout', async (req, res) => {
-    await authController.logout(req, res, dbAdapter);
-  });
+/**
+ * @swagger
+ * /auth/logout:
+ *   post:
+ *     tags:
+ *       - Authentication
+ *     summary: Log out the user
+ *     description: |
+ *       Revokes the user's refresh token and invalidates all active sessions.
+ *       Requires a valid access token in the Authorization header.
+ *     security:
+ *       - bearerAuth: []
+ *     responses:
+ *       200:
+ *         description: Logged out successfully
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 message:
+ *                   type: string
+ *                   example: "Logged out successfully"
+ *       401:
+ *         description: Missing or invalid access token
+ */
+router.post(
+  '/logout',
+  passport.authenticate('jwt', { session: false }),
+  authController.logout
+);
 
-  /**
-   * @swagger
-   * /auth/forgot-password:
-   *   post:
-   *     summary: Request a password reset.
-   *     description: Generates a reset token and sends an email with a password reset link.
-   *     tags: [Authentication]
-   *     requestBody:
-   *       required: true
-   *       description: Email address used for account recovery.
-   *       content:
-   *         application/json:
-   *           schema:
-   *             type: object
-   *             properties:
-   *               email:
-   *                 type: string
-   *                 description: The user's email address.
-   *     responses:
-   *       200:
-   *         description: Reset password email sent.
-   *       400:
-   *         description: Email is missing from the request.
-   *       404:
-   *         description: User not found.
-   *       500:
-   *         description: Internal error sending reset email.
-   */
-  router.post('/forgot-password', async (req, res) => {
-    await authController.forgotPassword(req, res, dbAdapter);
-  });
+/**
+ * @swagger
+ * /auth/forgot-password:
+ *   post:
+ *     tags:
+ *       - Authentication
+ *     summary: Send password reset email
+ *     description: |
+ *       Generates a one-time reset token and emails a link to the user to reset
+ *       their password.
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               email:
+ *                 type: string
+ *                 format: email
+ *                 description: The email address associated with the user account
+ *             example:
+ *               email: "john@example.com"
+ *     responses:
+ *       200:
+ *         description: Reset email sent
+ *       400:
+ *         description: Email missing from request
+ *       404:
+ *         description: No user found with that email
+ */
+router.post('/forgot-password', authController.forgotPassword);
 
-  /**
-   * @swagger
-   * /auth/reset-password:
-   *   get:
-   *     summary: Render the reset password page.
-   *     description: Displays the reset password form using a provided token.
-   *     tags: [Authentication]
-   *     parameters:
-   *       - in: query
-   *         name: token
-   *         required: true
-   *         schema:
-   *           type: string
-   *         description: The reset token.
-   *     responses:
-   *       200:
-   *         description: Reset password form rendered successfully.
-   *       400:
-   *         description: Invalid or missing token.
-   */
-  router.get('/reset-password', async (req, res) => {
-    await authController.renderResetPassword(req, res, dbAdapter);
-  });
+/**
+ * @swagger
+ * /auth/reset-password:
+ *   get:
+ *     tags:
+ *       - Authentication
+ *     summary: Render reset-password form
+ *     description: Displays the password reset form when provided a valid token.
+ *     parameters:
+ *       - in: query
+ *         name: token
+ *         schema:
+ *           type: string
+ *         required: true
+ *         description: One-time reset token sent in email
+ *     responses:
+ *       200:
+ *         description: Reset form rendered
+ *       400:
+ *         description: Missing or invalid token
+ */
+router.get('/reset-password', authController.renderResetPassword);
 
-  /**
-   * @swagger
-   * /auth/reset-password:
-   *   post:
-   *     summary: Reset the user's password.
-   *     description: Validates the reset token and updates the user’s password.
-   *     tags: [Authentication]
-   *     requestBody:
-   *       required: true
-   *       description: Contains the reset token and the new password.
-   *       content:
-   *         application/json:
-   *           schema:
-   *             type: object
-   *             properties:
-   *               token:
-   *                 type: string
-   *                 description: The reset token.
-   *               newPassword:
-   *                 type: string
-   *                 description: The new password.
-   *     responses:
-   *       200:
-   *         description: Password reset successfully.
-   *       400:
-   *         description: Missing token/new password or invalid/expired token.
-   *       500:
-   *         description: Error while resetting the password.
-   */
-  router.post('/reset-password', async (req, res) => {
-    await authController.resetPassword(req, res, dbAdapter);
-  });
+/**
+ * @swagger
+ * /auth/reset-password:
+ *   post:
+ *     tags:
+ *       - Authentication
+ *     summary: Process password reset
+ *     description: Validates reset token and updates user's password.
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required:
+ *               - token
+ *               - newPassword
+ *             properties:
+ *               token:
+ *                 type: string
+ *                 description: One-time reset token
+ *               newPassword:
+ *                 type: string
+ *                 format: password
+ *                 description: New password to set
+ *             example:
+ *               token: "eyJhbGciOi..."
+ *               newPassword: "N3wP@ssw0rd!"
+ *     responses:
+ *       200:
+ *         description: Password successfully reset
+ *       400:
+ *         description: Missing fields or invalid/expired token
+ */
+router.post('/reset-password', authController.resetPassword);
 
-  /**
-   * @swagger
-   * /auth/verify:
-   *   get:
-   *     summary: Verify email address.
-   *     description: Validates the email verification token and marks the user's email as verified.
-   *     tags: [Authentication]
-   *     parameters:
-   *       - in: query
-   *         name: token
-   *         required: true
-   *         schema:
-   *           type: string
-   *         description: The email verification token.
-   *     responses:
-   *       200:
-   *         description: Email verified successfully.
-   *       400:
-   *         description: Invalid or missing token, or token expired.
-   *       500:
-   *         description: Error during email verification.
-   */
-  router.get('/verify', async (req, res) => {
-    await authController.verifyEmail(req, res, dbAdapter);
-  });
+/**
+ * @swagger
+ * /auth/verify:
+ *   get:
+ *     tags:
+ *       - Authentication
+ *     summary: Verify user email
+ *     description: Confirms a user's email address using a verification token.
+ *     parameters:
+ *       - in: query
+ *         name: token
+ *         schema:
+ *           type: string
+ *         required: true
+ *         description: Email verification JWT token
+ *     responses:
+ *       200:
+ *         description: Email verified successfully
+ *       400:
+ *         description: Missing or invalid token
+ */
+router.get('/verify', authController.verifyEmail);
 
-  return router;
-};
+/**
+ * @swagger
+ * /auth/change-email:
+ *   post:
+ *     tags:
+ *       - Authentication
+ *     summary: Change user's email address
+ *     description: |
+ *       Updates the user's email, resets verification status,
+ *       and forces logout. Requires valid access token.
+ *     security:
+ *       - bearerAuth: []
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required:
+ *               - newEmail
+ *             properties:
+ *               newEmail:
+ *                 type: string
+ *                 format: email
+ *                 description: The new email address to set
+ *             example:
+ *               newEmail: "new@example.com"
+ *     responses:
+ *       200:
+ *         description: Email changed; verification email sent
+ *       400:
+ *         description: Missing newEmail field
+ *       401:
+ *         description: Missing or invalid access token
+ */
+router.post(
+  '/change-email',
+  passport.authenticate('jwt', { session: false }),
+  authController.changeEmail
+);
+
+module.exports = router;
