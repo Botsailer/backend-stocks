@@ -33,6 +33,9 @@ dbAdapter.connect()
     require('./config/passport')(passport, dbAdapter);
     // Pass dbAdapter to the routes so that they have access to database methods
     app.use('/auth', authRoutes);
+    app.use('/admin', require('./routes/admin'));
+    app.use('/api/portfolios' , require('./routes/Portfolio'));
+    app.use('/api/tips', require('./routes/tips')); 
     app.listen(config.server.port, () =>
       console.log(`Auth service running on port ${config.server.port}`),
       console.log("swagger docs available at /api-docs")
