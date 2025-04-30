@@ -30,7 +30,7 @@ const requireAdmin = require('../middleware/requirreAdmin');
  *       401:
  *         description: Unauthorized (missing/invalid token)
  */
-router.get('/portfolios', requireAdmin, portfolioController.getAllPortfolios);
+router.get('/', requireAdmin, portfolioController.getAllPortfolios);
 
 /**
  * @swagger
