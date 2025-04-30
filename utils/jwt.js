@@ -38,15 +38,18 @@ async function verifyAccessToken(token, user) {
 }
 
 async function verifyRefreshToken(token, user) {
-  const payload = jwt.verify(token, REFRESH_SECRET);
-  if (payload.tokenVersion !== user.tokenVersion) {
-    throw new Error('Refresh token revoked');
-  }
-  // Check it matches stored
-  if (user.refreshToken !== token) {
-    throw new Error('Invalid refresh token');
-  }
-  return payload;
+    const payload = jwt.verify(token, REFRESH_SECRET);
+    console.log('Payload tokenVersion:', payload.tokenVersion);
+    console.log('User tokenVersion:', user?.tokenVersion);
+    console.log('User refreshToken:', user?.refreshToken);
+
+    if (payload.tokenVersion !== user?.tokenVersion) {
+        throw new Error('Refresh token revoked');
+    }
+    if (user.refreshToken !== token) {
+        throw new Error('Invalid refresh token');
+    }
+    return payload;
 }
 
 module.exports = {

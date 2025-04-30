@@ -3,6 +3,9 @@ const express = require('express');
 const router  = express.Router();
 const portfolioController = require('../controllers/portfolioController');
 const requireAdmin = require('../middleware/requirreAdmin');
+
+
+
 /**
  * @swagger
  * tags:
@@ -30,7 +33,13 @@ const requireAdmin = require('../middleware/requirreAdmin');
  *       401:
  *         description: Unauthorized (missing/invalid token)
  */
-router.get('/portfolios', portfolioController.getAllPortfolios);
+router.get('/portfolios', requireAdmin,portfolioController.getAllPortfolios);
+
+
+
+
+
+
 
 /**
  * @swagger

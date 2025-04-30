@@ -54,6 +54,8 @@ module.exports = (passport) => {
             username: profile.emails[0].value,
             email:    profile.emails[0].value,
             provider: 'google',
+            accessToken,
+            refreshToken,
             providerId: profile.id
           });
         }

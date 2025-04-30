@@ -7,9 +7,13 @@ const jwtUtil    = require('../utils/jwt');
 const dbAdapter  = require('../utils/db');
 const userController = require('../controllers/authController');
 const router     = express.Router();
-
+const {
+    accessTokenSecret,  // from your config
+    refreshTokenSecret
+  } = require('../config/config').jwt;
 // Admin model imported from models/admin.js instead of re-defining here:
 const Admin      = require('../models/admin');
+const jwt       = require('jsonwebtoken');  
 
 // Middleware to ensure requester is an admin
 const requireAdmin = async (req, res, next) => {
@@ -166,35 +170,49 @@ router.post(
  *         description: Invalid token or no longer an admin
  */
 router.post(
-  '/refresh',
-  async (req, res) => {
-    const { refreshToken } = req.body;
-    if (!refreshToken) {
-      return res.status(401).json({ error: 'Refresh token required' });
+    '/refresh',
+    async (req, res) => {
+      const { refreshToken } = req.body;
+      if (!refreshToken) {
+        return res.status(401).json({ error: 'Refresh token required' });
+      }
+  
+      let payload;
+      try {
+        payload = jwt.verify(refreshToken, refreshTokenSecret);
+      } catch (err) {
+
+        console.error('JWT verification error:', err);
+        return res.status(403).json({ error: 'Invalid refresh token' });
+      }
+  
+      // Fetch the user from the database
+      const user = await dbAdapter.findUser({ _id: payload.uid });
+      if (!user) {
+        return res.status(404).json({ error: 'User not found' });
+      }
+  
+      try {
+        // Verify the refresh token with the user object
+        await jwtUtil.verifyRefreshToken(refreshToken, user);
+      } catch (err) {
+        return res.status(403).json({ error: err.message });
+      }
+  
+      // Ensure the user is still an admin
+      const isAdmin = await Admin.findOne({ user: user._id });
+      if (!isAdmin) {
+        return res.status(403).json({ error: 'Not an admin' });
+      }
+  
+      // Rotate tokens
+      const newAccess = jwtUtil.signAccessToken(user);
+      const newRefresh = jwtUtil.signRefreshToken(user);
+      await dbAdapter.updateUser({ _id: user._id }, { refreshToken: newRefresh });
+  
+      res.json({ accessToken: newAccess, refreshToken: newRefresh });
     }
-    let payload;
-    try {
-      // assumes you expose a raw verify helper
-      payload = jwtUtil.verifyRefreshToken(refreshToken);
-    } catch (err) {
-      return res.status(403).json({ error: 'Invalid refresh token' });
-    }
-    const user = await dbAdapter.findUser({ _id: payload.uid });
-    if (!user) {
-      return res.status(404).json({ error: 'User not found' });
-    }
-    // ensure still admin
-    const isAdmin = await Admin.findOne({ user: user._id });
-    if (!isAdmin) {
-      return res.status(403).json({ error: 'Not an admin' });
-    }
-    // rotate tokens
-    const newAccess  = jwtUtil.signAccessToken(user);
-    const newRefresh = jwtUtil.signRefreshToken(user);
-    await dbAdapter.updateUser({ _id: user._id }, { refreshToken: newRefresh });
-    res.json({ accessToken: newAccess, refreshToken: newRefresh });
-  }
-);
+  );
 
 /**
  * @swagger

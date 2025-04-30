@@ -50,13 +50,13 @@ exports.login = async (req, res) => {
   const user = req.user; // set by passport
   const banned = await db.findBannedUser({ userId: user._id });
   if (banned) {
-    return res.status(403).json({ error: 'User banned' });
+      return res.status(403).json({ error: 'User banned' });
   }
 
   const accessToken  = jwtUtil.signAccessToken(user);
   const refreshToken = jwtUtil.signRefreshToken(user);
 
-  await db.updateUser({ _id: user._id }, { refreshToken });
+  await db.updateUser({ _id: user._id }, { refreshToken }); // Save refreshToken in the database
   res.json({ accessToken, refreshToken });
 };
 
@@ -107,11 +107,11 @@ exports.refresh = async (req, res) => {
 exports.logout = async (req, res) => {
   if (req.logout) req.logout();
   await db.updateUser(
-    { _id: req.user._id },
-    {
-      refreshToken:  null,
-      tokenVersion: req.user.tokenVersion + 1
-    }
+      { _id: req.user._id },
+      {
+          refreshToken: null,
+          tokenVersion: req.user.tokenVersion + 1 
+      }
   );
   res.clearCookie('refreshToken', { httpOnly: true, secure: true, sameSite: 'strict' });
   res.json({ message: 'Logged out' });
@@ -148,7 +148,6 @@ exports.changeEmail = async (req, res) => {
     return res.status(400).json({ error: 'New email is required' });
   }
 
-  // update email + reset verification
   await db.updateUser(
     { _id: req.user._id },
     {
@@ -174,6 +173,7 @@ exports.changeEmail = async (req, res) => {
 
 exports.forgotPassword = async (req, res) => {
   const { email } = req.body;
+  console.log('Email received in request:', email); // Debug log
   if (!email) {
     return res.status(400).json({ error: 'Email is required' });
   }
@@ -185,6 +185,11 @@ exports.forgotPassword = async (req, res) => {
   if (!user) {
     return res.status(404).json({ error: 'User not found' });
   }
+  console.log('User found:', user); // Debug log
+
+  // Use user.email or fallback to user.username
+  const recipientEmail = user.email || user.username;
+  console.log('Sending email to:', recipientEmail); // Debug log
 
   const resetToken = jwt.sign(
     { uid: user._id },
@@ -192,7 +197,7 @@ exports.forgotPassword = async (req, res) => {
     { expiresIn: '1h' }
   );
   const resetUrl = `${req.protocol}://${req.get('host')}/auth/reset-password?token=${resetToken}`;
-  await emailService.sendResetPasswordEmail(user.email, resetUrl);
+  await emailService.sendResetPasswordEmail(recipientEmail, resetUrl);
 
   res.json({ message: 'Reset password email sent' });
 };

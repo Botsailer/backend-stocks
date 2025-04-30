@@ -6,6 +6,7 @@ const config = require('./config/config');
 const dbAdapter = require('./utils/db'); // This should export functions: connect, createUser, findUser, updateUser, findBannedUser
 const authRoutes = require('./routes/authRoutes');
 const setupSwagger = require('./swaggerOptions'); // optional, for swagger docs
+const { makeAdmin } = require('./services/adminservices');
 
 // Middleware
 app.use(cors()); // Enable CORS for all routes
@@ -29,6 +30,15 @@ app.get('/', (req, res) => {
 // Connect to the database, then configure passport and routes
 dbAdapter.connect()
   .then(() => {
+
+ 
+// try {
+//   const admin =  makeAdmin('67e8e017575543ed535030cb');
+//   console.log('Promoted to admin:', admin);
+// } catch (err) {
+//   console.error(err.message);
+// }
+
     app.use(passport.initialize());
     require('./config/passport')(passport, dbAdapter);
     // Pass dbAdapter to the routes so that they have access to database methods
