@@ -9,7 +9,7 @@ const setupSwagger = require('./swaggerOptions'); // optional, for swagger docs
 const { makeAdmin } = require('./services/adminservices');
 
 // Middleware
-app.use(cors()); // Enable CORS for all routes
+app.use(cors()); 
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
@@ -27,28 +27,20 @@ app.get('/', (req, res) => {
   res.render('index', { title: 'Authentication Module Home' });
 });
 
-// Connect to the database, then configure passport and routes
+
 dbAdapter.connect()
   .then(() => {
 
- 
-// try {
-//   const admin =  makeAdmin('67e8e017575543ed535030cb');
-//   console.log('Promoted to admin:', admin);
-// } catch (err) {
-//   console.error(err.message);
-// }
-
     app.use(passport.initialize());
     require('./config/passport')(passport, dbAdapter);
-    // Pass dbAdapter to the routes so that they have access to database methods
     app.use('/auth', authRoutes);
     app.use('/admin', require('./routes/admin'));
     app.use('/api' , require('./routes/Portfolio'));
     app.use('/api/tips', require('./routes/tips')); 
+    app.use('/api/admin/configs', require('./routes/configRoute'));
     app.listen(config.server.port, () =>
       console.log(`Auth service running on port ${config.server.port}`),
-      console.log("swagger docs available at /api-docs")
+      console.log(`swagger docs available at http://${config.server.host}:${config.server.port}/api-docs`)
     );
   })
   .catch(err => console.error('Database connection error:', err));

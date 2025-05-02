@@ -1,7 +1,8 @@
 //config/config.js
 module.exports = {
   server: {
-    port: process.env.PORT || 3000
+    port: process.env.PORT || 3000,
+    host: process.env.HOST || 'localhost',
   },
   database: {
     mongodb: {

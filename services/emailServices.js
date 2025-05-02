@@ -1,56 +1,83 @@
-// services/emailService.js
-const transporter = require('../config/SMTP');
+const nodemailer = require('nodemailer');
+const { getSmtpConfig } = require('../utils/configSettings');
 
-const from = process.env.EMAIL_USER
+// Function to create/update transporter with current config
+async function createTransporter() {
+  const config = await getSmtpConfig();
+  
+  return nodemailer.createTransport({
+    host: config.host,
+    port: config.port,
+    secure: config.port === 465, // true for 465, false for other ports
+    auth: {
+      user: config.user,
+      pass: config.pass
+    }
+  });
+}
 
-exports.sendResetPasswordEmail = async (toEmail, resetUrl) => {
-  const mailOptions = {
-    from: `"Backend-App" <${from}>`,
-    to: toEmail,
-    subject: 'Password Reset Request',
-    html: `
-      <p>You requested a password reset.</p>
-      <p>Please click on the following link to reset your password:</p>
-      <p><a href="${resetUrl}" style="color: #007bff;">Reset Password</a></p>
-      <p>If you did not request this, please ignore this email.</p>
-    `,
-  };
-
+/**
+ * Send an email using the configured SMTP settings
+ * @param {string} to - Recipient email address
+ * @param {string} subject - Email subject
+ * @param {string} text - Plain text body
+ * @param {string} html - HTML body (optional)
+ */
+exports.sendEmail = async (to, subject, text, html) => {
   try {
-    console.log('Sending email to:', toEmail);
-    console.log('Reset URL:', resetUrl);
-    const info = await transporter.sendMail(mailOptions);
-    console.log('Email sent: ', info.response);
-    return info;
-  } catch (err) {
-    console.error('Error sending email: ', err);
-    throw err;
+    const transporter = await createTransporter();
+    
+    const mailOptions = {
+      from: `"Stock Portfolio" <${(await getSmtpConfig()).user}>`,
+      to,
+      subject,
+      text,
+      html: html || text
+    };
+
+    return await transporter.sendMail(mailOptions);
+  } catch (error) {
+    console.error('Error sending email:', error);
+    throw error;
   }
 };
 
+// Other email helpers like sendVerificationEmail, sendResetPasswordEmail, etc.
+exports.sendVerificationEmail = async (to, verifyUrl) => {
+  const subject = 'Verify Your Email Address';
+  const text = `Please verify your email address by clicking this link: ${verifyUrl}`;
+  const html = `
+    <div style="max-width:600px; margin:0 auto; padding:20px; font-family:sans-serif;">
+      <h2 style="color:#4a77e5;">Verify Your Email Address</h2>
+      <p>To verify your email address, please click the button below:</p>
+      <div style="margin:30px 0;">
+        <a href="${verifyUrl}" style="background-color:#4a77e5; color:white; padding:10px 20px; text-decoration:none; border-radius:5px; display:inline-block;">Verify Email</a>
+      </div>
+      <p>Or copy and paste this link in your browser:</p>
+      <p>${verifyUrl}</p>
+      <p>This link will expire in 1 hour.</p>
+    </div>
+  `;
+  
+  return await exports.sendEmail(to, subject, text, html);
+};
 
-exports.sendVerificationEmail = async (toEmail, verificationUrl) => {
-    const mailOptions = {
-    
-    from: `"Backend-App" <${from}>`,
-    to: toEmail,
-    subject: 'Email Verification',
-    html: `
-      <p>Thank you for signing up!</p>
-      <p>Please click on the following link to verify your email address:</p>
-      <p><a href="${verificationUrl}" style="color: #007bff;">Verify Email</a></p>
-      <p>If you did not sign up, please ignore this email.</p>
-    `,
-    };
-    try {
-        console.log('Sending verification email to:', toEmail);
-        console.log('Verification URL:', verificationUrl);
-        const info = await transporter.sendMail(mailOptions);
-        console.log('Verification email sent: ', info.response);
-        return info;
-    }
-    catch (err) {
-        console.error('Error sending verification email: ', err);
-        throw err;
-    }
-}
+exports.sendResetPasswordEmail = async (to, resetUrl) => {
+  const subject = 'Reset Your Password';
+  const text = `To reset your password, please click this link: ${resetUrl}`;
+  const html = `
+    <div style="max-width:600px; margin:0 auto; padding:20px; font-family:sans-serif;">
+      <h2 style="color:#4a77e5;">Reset Your Password</h2>
+      <p>To reset your password, please click the button below:</p>
+      <div style="margin:30px 0;">
+        <a href="${resetUrl}" style="background-color:#4a77e5; color:white; padding:10px 20px; text-decoration:none; border-radius:5px; display:inline-block;">Reset Password</a>
+      </div>
+      <p>Or copy and paste this link in your browser:</p>
+      <p>${resetUrl}</p>
+      <p>This link will expire in 1 hour.</p>
+      <p>If you didn't request this, please ignore this email.</p>
+    </div>
+  `;
+  
+  return await exports.sendEmail(to, subject, text, html);
+};

@@ -1,4 +1,7 @@
 // routes/portfolio.js
+// -------------------
+// Express router for admin-only CRUD operations on Portfolio model
+
 const express = require('express');
 const router = express.Router();
 const portfolioController = require('../controllers/portfolioController');
@@ -24,16 +27,31 @@ const requireAdmin = require('../middleware/requirreAdmin');
  *       type: object
  *       required:
  *         - symbol
- *         - quantity
+ *         - weight
+ *         - sector
  *       properties:
  *         symbol:
  *           type: string
  *           description: Stock ticker symbol (e.g., AAPL)
- *         quantity:
+ *         weight:
  *           type: number
- *           description: Number of shares held
+ *           format: float
+ *           description: Percentage weight of the holding (0-100)
+ *         sector:
+ *           type: string
+ *           description: Sector classification of the stock (e.g., Technology)
+ *         status:
+ *           type: string
+ *           enum: [Hold, Fresh-Buy, partial-sell, addon-buy, Sell]
+ *           description: Current transaction status of the holding
  *     Portfolio:
  *       type: object
+ *       required:
+ *         - name
+ *         - subscriptionFee
+ *         - minInvestment
+ *         - durationMonths
+ *         - expiryDate
  *       properties:
  *         _id:
  *           type: string
@@ -46,7 +64,23 @@ const requireAdmin = require('../middleware/requirreAdmin');
  *           description: Detailed description of the portfolio strategy
  *         cashRemaining:
  *           type: number
+ *           format: float
  *           description: Amount of uninvested cash in USD
+ *         subscriptionFee:
+ *           type: number
+ *           format: float
+ *           description: Subscription fee for enrolling in the portfolio
+ *         minInvestment:
+ *           type: number
+ *           format: float
+ *           description: Minimum required investment in USD
+ *         durationMonths:
+ *           type: integer
+ *           description: Duration of the portfolio in months
+ *         expiryDate:
+ *           type: string
+ *           format: date-time
+ *           description: Automatically computed expiry date (createdAt + durationMonths)
  *         holdings:
  *           type: array
  *           items:
@@ -56,11 +90,19 @@ const requireAdmin = require('../middleware/requirreAdmin');
  *         name: "Tech Growth Fund"
  *         description: "Aggressive technology-focused equity portfolio"
  *         cashRemaining: 12000.50
+ *         subscriptionFee: 99.99
+ *         minInvestment: 1000
+ *         durationMonths: 12
+ *         expiryDate: "2026-02-05T00:00:00.000Z"
  *         holdings:
  *           - symbol: "AAPL"
- *             quantity: 50
+ *             weight: 30
+ *             sector: "Technology"
+ *             status: "Hold"
  *           - symbol: "GOOGL"
- *             quantity: 20
+ *             weight: 20
+ *             sector: "Communication Services"
+ *             status: "Fresh-Buy"
  */
 
 /**
@@ -68,7 +110,7 @@ const requireAdmin = require('../middleware/requirreAdmin');
  * /api/portfolios:
  *   get:
  *     summary: Retrieve all portfolios
- *     description: Returns a list of all portfolios, sorted alphabetically by name. Requires admin privileges.
+ *     description: Returns a list of all portfolios, sorted alphabetically by name. Admin privileges required.
  *     tags:
  *       - Portfolios
  *     security:
@@ -92,14 +134,6 @@ const requireAdmin = require('../middleware/requirreAdmin');
  *                 $ref: '#/components/schemas/Portfolio'
  *       '401':
  *         description: Unauthorized or missing token
- *         content:
- *           application/json:
- *             schema:
- *               type: object
- *               properties:
- *                 message:
- *                   type: string
- *                   example: "Missing or malformed token"
  *       '403':
  *         description: Forbidden - insufficient privileges
  */
@@ -109,8 +143,8 @@ router.get('/portfolios', requireAdmin, portfolioController.getAllPortfolios);
  * @swagger
  * /api/portfolios/{id}:
  *   get:
- *     summary: Retrieve a single portfolio by ID
- *     description: Fetches a portfolio including its holdings details. Admin access required.
+ *     summary: Retrieve a portfolio by ID
+ *     description: Fetches a single portfolio including its holdings. Admin privileges required.
  *     tags:
  *       - Portfolios
  *     security:
@@ -122,13 +156,13 @@ router.get('/portfolios', requireAdmin, portfolioController.getAllPortfolios);
  *           type: string
  *           example: "Bearer <JWT>"
  *         required: true
- *         description: Valid JWT token
+ *         description: JWT access token with admin privileges
  *       - in: path
  *         name: id
  *         schema:
  *           type: string
  *         required: true
- *         description: MongoDB ObjectId of the portfolio to retrieve
+ *         description: MongoDB ObjectId of the portfolio
  *     responses:
  *       '200':
  *         description: Portfolio found and returned
@@ -136,18 +170,12 @@ router.get('/portfolios', requireAdmin, portfolioController.getAllPortfolios);
  *           application/json:
  *             schema:
  *               $ref: '#/components/schemas/Portfolio'
+ *       '401':
+ *         description: Unauthorized or missing token
+ *       '403':
+ *         description: Forbidden - insufficient privileges
  *       '404':
  *         description: Portfolio not found
- *         content:
- *           application/json:
- *             schema:
- *               type: object
- *               properties:
- *                 error:
- *                   type: string
- *                   example: "Not found"
- *       '401':
- *         description: Unauthorized
  */
 router.get('/portfolios/:id', requireAdmin, portfolioController.getPortfolioById);
 
@@ -156,7 +184,7 @@ router.get('/portfolios/:id', requireAdmin, portfolioController.getPortfolioById
  * /api/portfolios:
  *   post:
  *     summary: Create a new portfolio
- *     description: Administrators can create a new portfolio. Validates unique name and weight constraints.
+ *     description: Administrators can create a new portfolio. Validates unique name and holding weight constraints.
  *     tags:
  *       - Portfolios
  *     security:
@@ -168,7 +196,7 @@ router.get('/portfolios/:id', requireAdmin, portfolioController.getPortfolioById
  *           type: string
  *           example: "Bearer <JWT>"
  *         required: true
- *         description: JWT access token
+ *         description: JWT access token with admin privileges
  *     requestBody:
  *       required: true
  *       content:
@@ -177,7 +205,10 @@ router.get('/portfolios/:id', requireAdmin, portfolioController.getPortfolioById
  *             type: object
  *             required:
  *               - name
- *               - cashRemaining
+ *               - subscriptionFee
+ *               - minInvestment
+ *               - durationMonths
+ *               - expiryDate
  *             properties:
  *               name:
  *                 type: string
@@ -189,8 +220,27 @@ router.get('/portfolios/:id', requireAdmin, portfolioController.getPortfolioById
  *                 example: "Medium-risk balanced fund with dividend focus"
  *               cashRemaining:
  *                 type: number
+ *                 format: float
  *                 description: Initial cash allocation in USD
  *                 example: 50000
+ *               subscriptionFee:
+ *                 type: number
+ *                 format: float
+ *                 description: Subscription fee for enrolling in the portfolio
+ *                 example: 49.99
+ *               minInvestment:
+ *                 type: number
+ *                 format: float
+ *                 description: Minimum required investment in USD
+ *                 example: 1000
+ *               durationMonths:
+ *                 type: integer
+ *                 description: Duration of the portfolio in months
+ *                 example: 6
+ *               expiryDate:
+ *                 type: string
+ *                 format: date-time
+ *                 description: Manually set expiry date or omitted to auto-calculate
  *               holdings:
  *                 type: array
  *                 description: List of initial stock holdings
@@ -205,14 +255,6 @@ router.get('/portfolios/:id', requireAdmin, portfolioController.getPortfolioById
  *               $ref: '#/components/schemas/Portfolio'
  *       '400':
  *         description: Validation error or duplicate name
- *         content:
- *           application/json:
- *             schema:
- *               type: object
- *               properties:
- *                 error:
- *                   type: string
- *                   example: "duplicate key error: name must be unique"
  */
 router.post('/portfolios', requireAdmin, portfolioController.createPortfolio);
 
@@ -233,13 +275,13 @@ router.post('/portfolios', requireAdmin, portfolioController.createPortfolio);
  *           type: string
  *           example: "Bearer <JWT>"
  *         required: true
- *         description: Admin JWT token
+ *         description: JWT access token with admin privileges
  *       - in: path
  *         name: id
  *         schema:
  *           type: string
  *         required: true
- *         description: ObjectId of the portfolio
+ *         description: MongoDB ObjectId of the portfolio to update
  *     requestBody:
  *       required: true
  *       content:
@@ -253,6 +295,18 @@ router.post('/portfolios', requireAdmin, portfolioController.createPortfolio);
  *                 type: string
  *               cashRemaining:
  *                 type: number
+ *                 format: float
+ *               subscriptionFee:
+ *                 type: number
+ *                 format: float
+ *               minInvestment:
+ *                 type: number
+ *                 format: float
+ *               durationMonths:
+ *                 type: integer
+ *               expiryDate:
+ *                 type: string
+ *                 format: date-time
  *               holdings:
  *                 type: array
  *                 items:
@@ -266,14 +320,6 @@ router.post('/portfolios', requireAdmin, portfolioController.createPortfolio);
  *               $ref: '#/components/schemas/Portfolio'
  *       '400':
  *         description: Invalid input or business rule violation
- *         content:
- *           application/json:
- *             schema:
- *               type: object
- *               properties:
- *                 error:
- *                   type: string
- *                   example: "Stock removal not allowed unless status=Sell"
  *       '404':
  *         description: Portfolio not found
  */
@@ -296,13 +342,13 @@ router.put('/portfolios/:id', requireAdmin, portfolioController.updatePortfolio)
  *           type: string
  *           example: "Bearer <JWT>"
  *         required: true
- *         description: Admin JWT token
+ *         description: JWT access token with admin privileges
  *       - in: path
  *         name: id
  *         schema:
  *           type: string
  *         required: true
- *         description: ObjectId of the portfolio to delete
+ *         description: MongoDB ObjectId of portfolio to delete
  *     responses:
  *       '200':
  *         description: Portfolio and related data deleted successfully

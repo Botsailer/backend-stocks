@@ -64,7 +64,7 @@ const requireAdmin = require('../middleware/requirreAdmin');
 
 /**
  * @swagger
- * /api/portfolios/{portfolioId}/tips:
+ * /api/tips/portfolios/{portfolioId}/tips:
  *   get:
  *     summary: List all tips for a given portfolio
  *     tags: [Tips]
