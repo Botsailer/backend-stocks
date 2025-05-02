@@ -1,38 +1,38 @@
-// Schema for daily price logs of portfolio holdings
+// models/PriceLog.js
 const mongoose = require('mongoose');
 const { Schema } = mongoose;
 
+/**
+ * Records a daily snapshot of an entire portfolio’s performance:
+ * - portfolio: ObjectId of the Portfolio
+ * - date: timestamp of the snapshot
+ * - portfolioValue: total value across all holdings (baseSum + net change)
+ * - cashRemaining: updated cash buffer after threshold enforcement
+ */
 const PriceLogSchema = new Schema({
-    portfolio: {
-      type: mongoose.Schema.Types.ObjectId,
-      ref: 'Portfolio',
-      required: true,
-      index: true
-    },
-    symbol: {
-      type: String,
-      required: true,
-      trim: true,
-      uppercase: true
-    },
-    date: {
-      type: Date,
-      required: true
-    },
-    price: {
-      type: Number,
-      required: true,
-      min: 0
-    },
-    value: {
-      type: Number,
-      required: true,
-      min: 0
-    }
-  }, { timestamps: false });
-  
-  // Prevent duplicate entries for same stock on same day
-  PriceLogSchema.index({ portfolio: 1, symbol: 1, date: 1 }, { unique: true });
-  
-  module.exports = mongoose.model('PriceLog', PriceLogSchema);
-  
+  portfolio: {
+    type: Schema.Types.ObjectId,
+    ref: 'Portfolio',
+    required: true
+  },
+  date: {
+    type: Date,
+    required: true,
+    default: () => new Date()
+  },
+  portfolioValue: {
+    type: Number,
+    required: true,
+    min: 0
+  },
+  cashRemaining: {
+    type: Number,
+    required: true,
+    min: 0
+  }
+}, { timestamps: true });
+
+// Compound index for quick lookup by portfolio and date descending
+PriceLogSchema.index({ portfolio: 1, date: -1 });
+
+module.exports = mongoose.model('PriceLog', PriceLogSchema);
