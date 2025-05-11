@@ -2,22 +2,18 @@
 const express    = require('express');
 const passport   = require('passport');
 const bcrypt     = require('bcryptjs');
-const mongoose   = require('mongoose');
+const jwt        = require('jsonwebtoken');
 const jwtUtil    = require('../utils/jwt');
 const dbAdapter  = require('../utils/db');
-const userController = require('../controllers/authController');
-const router     = express.Router();
-const {
-    accessTokenSecret,  // from your config
-    refreshTokenSecret
-  } = require('../config/config').jwt;
-// Admin model imported from models/admin.js instead of re-defining here:
+const authCtl    = require('../controllers/authController');
+const userCtl    = require('../controllers/adminUsersController');
 const Admin      = require('../models/admin');
-const jwt       = require('jsonwebtoken');  
+const { accessTokenSecret, refreshTokenSecret } = require('../config/config').jwt;
 
-// Middleware to ensure requester is an admin
+const router     = express.Router();
+
+/** Middleware to ensure requester is an admin */
 const requireAdmin = async (req, res, next) => {
-  // At this point req.user is set by passport-jwt
   const isAdmin = await Admin.findOne({ user: req.user._id });
   if (!isAdmin) {
     return res.status(403).json({ error: 'Admin only' });
@@ -25,20 +21,79 @@ const requireAdmin = async (req, res, next) => {
   next();
 };
 
-// --- Swagger Security Scheme (only declare once globally) ---
-// @swagger
-// components:
-//   securitySchemes:
-//     bearerAuth:
-//       type: http
-//       scheme: bearer
-//       bearerFormat: JWT
+// --- Swagger Security Scheme (declare once globally) ---
+/**
+ * @swagger
+ * components:
+ *   securitySchemes:
+ *     bearerAuth:
+ *       type: http
+ *       scheme: bearer
+ *       bearerFormat: JWT
+ *
+ *   schemas:
+ *     User:
+ *       type: object
+ *       properties:
+ *         _id:
+ *           type: string
+ *         username:
+ *           type: string
+ *         email:
+ *           type: string
+ *           format: email
+ *         provider:
+ *           type: string
+ *         emailVerified:
+ *           type: boolean
+ *         createdAt:
+ *           type: string
+ *           format: date-time
+ *         updatedAt:
+ *           type: string
+ *           format: date-time
+ * 
+ *     NewUser:
+ *       type: object
+ *       required: [username, email, password]
+ *       properties:
+ *         username:
+ *           type: string
+ *         email:
+ *           type: string
+ *           format: email
+ *         password:
+ *           type: string
+ *           format: password
+ *
+ *     UpdateUser:
+ *       type: object
+ *       properties:
+ *         username:
+ *           type: string
+ *         email:
+ *           type: string
+ *           format: email
+ *         password:
+ *           type: string
+ *           format: password
+ *
+ *     BanInfo:
+ *       type: object
+ *       required: [reason]
+ *       properties:
+ *         reason:
+ *           type: string
+ */
 
+// --- Administration tag ---
 /**
  * @swagger
  * tags:
  *   - name: Administration
- *     description: Admin-only endpoints (requires Bearer JWT & existence in Admin collection)
+ *     description: Admin auth (login/logout/refresh/change-password)
+ *   - name: AdminUsers
+ *     description: Admin-only user management
  */
 
 /**
@@ -58,12 +113,8 @@ const requireAdmin = async (req, res, next) => {
  *             properties:
  *               username:
  *                 type: string
- *                 description: Username or email
  *               password:
  *                 type: string
- *             example:
- *               username: "admin@example.com"
- *               password: "Secret123!"
  *     responses:
  *       200:
  *         description: Issued access and refresh tokens
@@ -84,7 +135,6 @@ const requireAdmin = async (req, res, next) => {
 router.post(
   '/login',
   (req, res, next) => {
-    // allow login by email if sent
     if (req.body.email && !req.body.username) {
       req.body.username = req.body.email;
     }
@@ -93,12 +143,10 @@ router.post(
   passport.authenticate('local', { session: false }),
   async (req, res) => {
     const user = req.user;
-    // check admin record
     const isAdmin = await Admin.findOne({ user: user._id });
     if (!isAdmin) {
       return res.status(403).json({ error: 'Forbidden: not an admin' });
     }
-    // issue tokens
     const accessToken  = jwtUtil.signAccessToken(user);
     const refreshToken = jwtUtil.signRefreshToken(user);
     await dbAdapter.updateUser({ _id: user._id }, { refreshToken });
@@ -112,7 +160,7 @@ router.post(
  *   post:
  *     tags: [Administration]
  *     summary: Admin logout
- *     description: Revoke refresh token and bump tokenVersion.  
+ *     description: Revoke refresh token and bump tokenVersion.
  *     security:
  *       - bearerAuth: []
  *     responses:
@@ -169,50 +217,35 @@ router.post(
  *       403:
  *         description: Invalid token or no longer an admin
  */
-router.post(
-    '/refresh',
-    async (req, res) => {
-      const { refreshToken } = req.body;
-      if (!refreshToken) {
-        return res.status(401).json({ error: 'Refresh token required' });
-      }
-  
-      let payload;
-      try {
-        payload = jwt.verify(refreshToken, refreshTokenSecret);
-      } catch (err) {
-
-        console.error('JWT verification error:', err);
-        return res.status(403).json({ error: 'Invalid refresh token' });
-      }
-  
-      // Fetch the user from the database
-      const user = await dbAdapter.findUser({ _id: payload.uid });
-      if (!user) {
-        return res.status(404).json({ error: 'User not found' });
-      }
-  
-      try {
-        // Verify the refresh token with the user object
-        await jwtUtil.verifyRefreshToken(refreshToken, user);
-      } catch (err) {
-        return res.status(403).json({ error: err.message });
-      }
-  
-      // Ensure the user is still an admin
-      const isAdmin = await Admin.findOne({ user: user._id });
-      if (!isAdmin) {
-        return res.status(403).json({ error: 'Not an admin' });
-      }
-  
-      // Rotate tokens
-      const newAccess = jwtUtil.signAccessToken(user);
-      const newRefresh = jwtUtil.signRefreshToken(user);
-      await dbAdapter.updateUser({ _id: user._id }, { refreshToken: newRefresh });
-  
-      res.json({ accessToken: newAccess, refreshToken: newRefresh });
-    }
-  );
+router.post('/refresh', async (req, res) => {
+  const { refreshToken } = req.body;
+  if (!refreshToken) {
+    return res.status(401).json({ error: 'Refresh token required' });
+  }
+  let payload;
+  try {
+    payload = jwt.verify(refreshToken, refreshTokenSecret);
+  } catch (err) {
+    return res.status(403).json({ error: 'Invalid refresh token' });
+  }
+  const user = await dbAdapter.findUser({ _id: payload.uid });
+  if (!user) {
+    return res.status(404).json({ error: 'User not found' });
+  }
+  try {
+    await jwtUtil.verifyRefreshToken(refreshToken, user);
+  } catch (err) {
+    return res.status(403).json({ error: err.message });
+  }
+  const isAdmin = await Admin.findOne({ user: user._id });
+  if (!isAdmin) {
+    return res.status(403).json({ error: 'Not an admin' });
+  }
+  const newAccess  = jwtUtil.signAccessToken(user);
+  const newRefresh = jwtUtil.signRefreshToken(user);
+  await dbAdapter.updateUser({ _id: user._id }, { refreshToken: newRefresh });
+  res.json({ accessToken: newAccess, refreshToken: newRefresh });
+});
 
 /**
  * @swagger
@@ -250,7 +283,231 @@ router.post(
   '/change-password',
   passport.authenticate('jwt', { session: false }),
   requireAdmin,
-  userController.changePassword
+  authCtl.changePassword
+);
+
+// --- AdminUser CRUD & Ban/Unban ---
+
+/**
+ * @swagger
+ * /admin/users:
+ *   get:
+ *     tags: [AdminUsers]
+ *     summary: List all users
+ *     security:
+ *       - bearerAuth: []
+ *     responses:
+ *       200:
+ *         description: Array of users
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: array
+ *               items:
+ *                 $ref: '#/components/schemas/User'
+ */
+router.get(
+  '/users',
+  passport.authenticate('jwt', { session: false }),
+  requireAdmin,
+  userCtl.listUsers
+);
+
+/**
+ * @swagger
+ * /admin/users:
+ *   post:
+ *     tags: [AdminUsers]
+ *     summary: Create a new user
+ *     security:
+ *       - bearerAuth: []
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             $ref: '#/components/schemas/NewUser'
+ *     responses:
+ *       201:
+ *         description: Created user
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/User'
+ *       400:
+ *         description: Validation error
+ */
+router.post(
+  '/users',
+  passport.authenticate('jwt', { session: false }),
+  requireAdmin,
+  userCtl.createUser
+);
+
+/**
+ * @swagger
+ * /admin/users/{id}:
+ *   get:
+ *     tags: [AdminUsers]
+ *     summary: Fetch a user by ID
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema:
+ *           type: string
+ *         description: MongoDB User ID
+ *     responses:
+ *       200:
+ *         description: User object
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/User'
+ *       404:
+ *         description: User not found
+ */
+router.get(
+  '/users/:id',
+  passport.authenticate('jwt', { session: false }),
+  requireAdmin,
+  userCtl.getUser
+);
+
+/**
+ * @swagger
+ * /admin/users/{id}:
+ *   put:
+ *     tags: [AdminUsers]
+ *     summary: Update a user by ID
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema:
+ *           type: string
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             $ref: '#/components/schemas/UpdateUser'
+ *     responses:
+ *       200:
+ *         description: Updated user object
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/User'
+ *       400:
+ *         description: Validation error
+ *       404:
+ *         description: User not found
+ */
+router.put(
+  '/users/:id',
+  passport.authenticate('jwt', { session: false }),
+  requireAdmin,
+  userCtl.updateUser
+);
+
+/**
+ * @swagger
+ * /admin/users/{id}:
+ *   delete:
+ *     tags: [AdminUsers]
+ *     summary: Delete a user by ID
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema:
+ *           type: string
+ *     responses:
+ *       200:
+ *         description: Deletion confirmation
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 message:
+ *                   type: string
+ *                   example: "User deleted"
+ *       404:
+ *         description: User not found
+ */
+router.delete(
+  '/users/:id',
+  passport.authenticate('jwt', { session: false }),
+  requireAdmin,
+  userCtl.deleteUser
+);
+
+/**
+ * @swagger
+ * /admin/users/{id}/ban:
+ *   post:
+ *     tags: [AdminUsers]
+ *     summary: Ban a user
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema:
+ *           type: string
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             $ref: '#/components/schemas/BanInfo'
+ *     responses:
+ *       200:
+ *         description: User banned
+ *       400:
+ *         description: Already banned
+ */
+router.post(
+  '/users/:id/ban',
+  passport.authenticate('jwt', { session: false }),
+  requireAdmin,
+  userCtl.banUser
+);
+
+/**
+ * @swagger
+ * /admin/users/{id}/unban:
+ *   post:
+ *     tags: [AdminUsers]
+ *     summary: Unban a user
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema:
+ *           type: string
+ *     responses:
+ *       200:
+ *         description: User unbanned
+ *       404:
+ *         description: Ban record not found
+ */
+router.post(
+  '/users/:id/unban',
+  passport.authenticate('jwt', { session: false }),
+  requireAdmin,
+  userCtl.unbanUser
 );
 
 module.exports = router;

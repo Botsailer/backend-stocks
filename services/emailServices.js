@@ -8,11 +8,18 @@ async function createTransporter() {
   return nodemailer.createTransport({
     host: config.host,
     port: config.port,
-    secure: config.port === 465, // true for 465, false for other ports
+    secure: config.port === 465,
     auth: {
       user: config.user,
       pass: config.pass
-    }
+    },
+    // Add these connection options
+    connectionTimeout: 10000, // 10 seconds
+    greetingTimeout: 10000,   // 10 seconds
+    tls: {
+      rejectUnauthorized: false // Less strict SSL checking (use only in development)
+    },
+    debug: true // Enable debugging for troubleshooting
   });
 }
 
@@ -38,10 +45,24 @@ exports.sendEmail = async (to, subject, text, html) => {
     return await transporter.sendMail(mailOptions);
   } catch (error) {
     console.error('Error sending email:', error);
-    throw error;
+    
+    // Log more details for troubleshooting
+    if (process.env.NODE_ENV === 'development') {
+      console.log('Mail options:', {
+        to,
+        subject,
+        config: await getSmtpConfig()
+      });
+    }
+    
+    // Don't throw the error in production to prevent app crashes
+    if (process.env.NODE_ENV === 'production') {
+      return { error: 'Failed to send email', success: false };
+    } else {
+      throw error; // Still throw in development for debugging
+    }
   }
 };
-
 // Other email helpers like sendVerificationEmail, sendResetPasswordEmail, etc.
 exports.sendVerificationEmail = async (to, verifyUrl) => {
   const subject = 'Verify Your Email Address';

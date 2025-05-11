@@ -34,6 +34,40 @@ exports.createTip = async (req, res) => {
   }
 };
 
+
+exports.getTipByIdWithoutPortfolio = async (req, res) => {
+  try {
+    const tip = await Tip.findById(req.params.id);
+    if (!tip) return res.status(404).json({ error: 'Not found' });
+    res.json(tip);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+};
+
+
+exports.getalltipswithoutPortfolio = async (req, res) => {
+  try {
+    const tips = await Tip.find().sort('-createdAt');
+    res.json(tips);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+};
+
+exports.createTipWithoutPortfolio = async (req, res) => {
+  try {
+    const { title, content, status } = req.body;
+    const tip = new Tip({ title, content, status });
+    const saved = await tip.save();
+    res.status(201).json(saved);
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+}
+
+
+
 exports.updateTip = async (req, res) => {
   try {
     const updates = req.body;

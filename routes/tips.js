@@ -243,6 +243,109 @@ router.post(
   tipController.createTip
 );
 
+
+/**
+ * @swagger
+ * /api/tips:
+ *   get:
+ *     summary: Get all tips (without portfolio filter)
+ *     tags: [Tips]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: header
+ *         name: Authorization
+ *         required: true
+ *         schema:
+ *           type: string
+ *           example: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
+ *         description: JWT access token
+ *     responses:
+ *       200:
+ *         description: An array of Tip objects, newest first
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: array
+ *               items:
+ *                 $ref: '#/components/schemas/Tip'
+ *       401:
+ *         $ref: '#/components/responses/UnauthorizedError'
+ *       403:
+ *         $ref: '#/components/responses/ForbiddenError'
+ */
+router.get(
+  '/tips',
+  requireAdmin,
+  tipController.getalltipswithoutPortfolio
+);
+
+/**
+ * @swagger
+ * /api/tips:
+ *   post:
+ *     summary: Create a new tip without portfolio association
+ *     tags: [Tips]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: header
+ *         name: Authorization
+ *         required: true
+ *         schema:
+ *           type: string
+ *           example: Bearer eyJhbGciOi...
+ *         description: JWT access token
+ *     requestBody:
+ *       description: Tip object that needs to be added
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required:
+ *               - title
+ *               - content
+ *             properties:
+ *               title:
+ *                 type: string
+ *                 description: Title of the tip
+ *                 example: "General Investment Advice"
+ *               content:
+ *                 type: string
+ *                 description: Detailed advice content
+ *                 example: "Always diversify your investments."
+ *               status:
+ *                 type: string
+ *                 description: Current status of the tip
+ *                 enum: [Active, Closed]
+ *                 example: Active
+ *     responses:
+ *       201:
+ *         description: Tip successfully created
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/Tip'
+ *       400:
+ *         description: Validation error
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 error:
+ *                   type: string
+ *                   example: Validation failed
+ */
+router.post(
+  '/tips',
+  requireAdmin,
+  tipController.createTipWithoutPortfolio
+);
+
+
+
 /**
  * @swagger
  * /api/tips/{id}:

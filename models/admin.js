@@ -26,4 +26,6 @@ const AdminSchema = new mongoose.Schema({
   timestamps: true,         // adds createdAt / updatedAt
 });
 
+
+
 module.exports = mongoose.model('Admin', AdminSchema);

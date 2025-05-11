@@ -6,7 +6,6 @@ const TipSchema = new Schema({
     portfolio: {
       type: mongoose.Schema.Types.ObjectId,
       ref: 'Portfolio',
-      required: true,
       index: true
     },
     title: {
@@ -15,7 +14,7 @@ const TipSchema = new Schema({
       trim: true
     },
     content: {
-      type: String,  // rich text content (HTML/Markdown)
+      type: String,  
       default: ''
     },
     status: {
