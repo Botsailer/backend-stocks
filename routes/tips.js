@@ -174,7 +174,7 @@ router.get(
 
 /**
  * @swagger
- * /api/portfolios/{portfolioId}/tips:
+ * /api/tips/portfolios/{portfolioId}/tips:
  *   post:
  *     summary: Create a new tip under a portfolio
  *     tags: [Tips]
