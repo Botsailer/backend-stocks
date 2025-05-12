@@ -36,6 +36,7 @@ dbAdapter.connect()
     app.use('/auth', authRoutes);
     app.use('/admin', require('./routes/admin'));
     app.use('/api' , require('./routes/Portfolio'));
+    app.use('/api/user', require('./routes/userRoute'));
     app.use('/api/tips', require('./routes/tips')); 
     app.use('/api/admin/configs', require('./routes/configRoute'));
     app.listen(config.server.port, () =>
