@@ -283,12 +283,6 @@ exports.deleteUser = async (req, res) => {
  *         required: true
  *         schema:
  *           type: string
- *     requestBody:
- *       required: false
- *       content:
- *         application/json:
- *           schema:
- *             $ref: '#/components/schemas/BanInfo'
  *     responses:
  *       200:
  *         description: User banned
