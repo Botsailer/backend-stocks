@@ -70,15 +70,37 @@ const bcrypt      = require('bcryptjs');
  */
 exports.listUsers = async (req, res) => {
   try {
-    const users = await User.find().select('-password -refreshToken')
-      .populate('bannedUsers', 'reason bannedBy createdAt')
+    // First get all users
+    const users = await User.find()
+      .select('-password -refreshToken')
       .sort({ createdAt: -1 });
-    res.json(users);
+    
+    // Then get ban information separately
+    const bans = await BannedUser.find()
+      .select('userId reason bannedBy createdAt')
+      .populate('bannedBy', 'username');
+    
+    // Create a map of user IDs to their ban info
+    const banMap = {};
+    bans.forEach(ban => {
+      banMap[ban.userId.toString()] = {
+        reason: ban.reason,
+        bannedBy: ban.bannedBy,
+        bannedAt: ban.createdAt
+      };
+    });
+    
+    const usersWithBanStatus = users.map(user => {
+      const userData = user.toObject();
+      userData.banInfo = banMap[user._id.toString()] || null;
+      return userData;
+    });
+    
+    res.json(usersWithBanStatus);
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
 };
-
 /**
  * POST /admin/users
  * @swagger
