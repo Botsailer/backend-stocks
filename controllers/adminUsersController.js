@@ -70,7 +70,9 @@ const bcrypt      = require('bcryptjs');
  */
 exports.listUsers = async (req, res) => {
   try {
-    const users = await User.find().select('-password -refreshToken');
+    const users = await User.find().select('-password -refreshToken')
+      .populate('bannedUsers', 'reason bannedBy createdAt')
+      .sort({ createdAt: -1 });
     res.json(users);
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -258,7 +260,7 @@ exports.deleteUser = async (req, res) => {
  *         schema:
  *           type: string
  *     requestBody:
- *       required: true
+ *       required: false
  *       content:
  *         application/json:
  *           schema:
@@ -275,7 +277,7 @@ exports.banUser = async (req, res) => {
     if (exists) return res.status(400).json({ error: 'User already banned' });
     const ban = new BannedUser({
       userId: req.params.id,
-      reason: req.body.reason,
+      reason: req.body.reason || 'No reason provided',
       bannedBy: req.user._id
     });
     await ban.save();
