@@ -77,7 +77,7 @@ exports.listUsers = async (req, res) => {
     
     // Then get ban information separately
     const bans = await BannedUser.find()
-      .select('userId reason bannedBy createdAt')
+      .select('userId reason bannedBy bannedAt createdAt')
       .populate('bannedBy', 'username');
     
     // Create a map of user IDs to their ban info
@@ -86,10 +86,12 @@ exports.listUsers = async (req, res) => {
       banMap[ban.userId.toString()] = {
         reason: ban.reason,
         bannedBy: ban.bannedBy,
-        bannedAt: ban.createdAt
+    bannedAt:ban.bannedAt
+
       };
     });
     
+    // Add ban info to user objects
     const usersWithBanStatus = users.map(user => {
       const userData = user.toObject();
       userData.banInfo = banMap[user._id.toString()] || null;
@@ -300,7 +302,7 @@ exports.banUser = async (req, res) => {
     const ban = new BannedUser({
       userId: req.params.id,
       reason: req.body.reason || 'No reason provided',
-      bannedBy: req.user._id
+      bannedBy:'admin'
     });
     await ban.save();
     res.json({ message: 'User banned' });
