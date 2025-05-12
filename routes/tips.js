@@ -123,7 +123,7 @@ router.get(
 
 /**
  * @swagger
- * /api/tips/{id}:
+ * /api/tips/tips/{id}:
  *   get:
  *     summary: Get a single tip by its ID
  *     tags: [Tips]
@@ -275,7 +275,7 @@ router.post(
  *         $ref: '#/components/responses/ForbiddenError'
  */
 router.get(
-  '/tips',
+  '/',
   requireAdmin,
   tipController.getalltipswithoutPortfolio
 );
@@ -339,7 +339,7 @@ router.get(
  *                   example: Validation failed
  */
 router.post(
-  '/tips',
+  '/',
   requireAdmin,
   tipController.createTipWithoutPortfolio
 );
@@ -416,7 +416,7 @@ router.post(
  *                   example: Not found
  */
 router.put(
-  '/tips/:id',
+  '/:id',
   requireAdmin,
   tipController.updateTip
 );
@@ -471,7 +471,7 @@ router.put(
  *                   example: Not found
  */
 router.delete(
-  '/tips/:id',
+  '/:id',
   requireAdmin,
   tipController.deleteTip
 );
