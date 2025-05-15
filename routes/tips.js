@@ -1,8 +1,8 @@
 // routes/tip.js
-const express = require('express');
-const router  = express.Router();
-const tipController = require('../controllers/tipsController');
-const requireAdmin = require('../middleware/requirreAdmin');
+const express = require("express");
+const router = express.Router();
+const tipController = require("../controllers/tipsController");
+const requireAdmin = require("../middleware/requirreAdmin");
 
 /**
  * @swagger
@@ -45,6 +45,27 @@ const requireAdmin = require('../middleware/requirreAdmin');
  *           enum: [Active, Closed]
  *           description: Whether the tip is still Active or has been Closed
  *           example: "Active"
+ *         buyrange:
+ *           type: string
+ *           description: The recommended buy range for the stock
+ *           example: "100-150"
+ *         targetprice:
+ *           type: string
+ *           description: The target price for the stock
+ *           example: "180"
+ *         addmoreat:
+ *           type: string
+ *           description: The price point to add more to the position
+ *           example: "95"
+ *         tipurl:
+ *           type: string
+ *           description: URL with additional information about the tip
+ *           example: "https://example.com/analysis/stock-xyz"
+ *         horizon:
+ *           type: string
+ *           description: Investment time horizon for the tip
+ *           default: "Long Term"
+ *           example: "Long Term"
  *         createdAt:
  *           type: string
  *           format: date-time
@@ -53,6 +74,7 @@ const requireAdmin = require('../middleware/requirreAdmin');
  *           type: string
  *           format: date-time
  *           description: Timestamp when the tip was last updated
+ *
  */
 
 /**
@@ -116,7 +138,7 @@ const requireAdmin = require('../middleware/requirreAdmin');
  *                   example: Admin only
  */
 router.get(
-  '/portfolios/:portfolioId/tips',
+  "/portfolios/:portfolioId/tips",
   requireAdmin,
   tipController.getTipsByPortfolio
 );
@@ -166,11 +188,7 @@ router.get(
  *                   type: string
  *                   example: Not found
  */
-router.get(
-  '/tips/:id',
-  requireAdmin,
-  tipController.getTipById
-);
+router.get("/tips/:id", requireAdmin, tipController.getTipById);
 
 /**
  * @swagger
@@ -219,6 +237,27 @@ router.get(
  *                 description: Current status of the tip
  *                 enum: [Active, Closed]
  *                 example: Active
+ *               buyrange:
+ *                 type: string
+ *                 description: The recommended buy range for the stock
+ *                 example: "100-150"
+ *               targetprice:
+ *                 type: string
+ *                 description: The target price for the stock
+ *                 example: "180"
+ *               addmoreat:
+ *                 type: string
+ *                 description: The price point to add more to the position
+ *                 example: "95"
+ *               tipurl:
+ *                 type: string
+ *                 description: URL with additional information about the tip
+ *                 example: "https://example.com/analysis/stock-xyz"
+ *               horizon:
+ *                 type: string
+ *                 description: Investment time horizon for the tip
+ *                 default: "Long Term"
+ *                 example: "Long Term"
  *     responses:
  *       201:
  *         description: Tip successfully created
@@ -238,11 +277,10 @@ router.get(
  *                   example: Invalid portfolio
  */
 router.post(
-  '/portfolios/:portfolioId/tips',
+  "/portfolios/:portfolioId/tips",
   requireAdmin,
   tipController.createTip
 );
-
 
 /**
  * @swagger
@@ -274,11 +312,7 @@ router.post(
  *       403:
  *         $ref: '#/components/responses/ForbiddenError'
  */
-router.get(
-  '/',
-  requireAdmin,
-  tipController.getalltipswithoutPortfolio
-);
+router.get("/", requireAdmin, tipController.getalltipswithoutPortfolio);
 
 /**
  * @swagger
@@ -320,6 +354,27 @@ router.get(
  *                 description: Current status of the tip
  *                 enum: [Active, Closed]
  *                 example: Active
+ *               buyrange:
+ *                 type: string
+ *                 description: The recommended buy range for the stock
+ *                 example: "100-150"
+ *               targetprice:
+ *                 type: string
+ *                 description: The target price for the stock
+ *                 example: "180"
+ *               addmoreat:
+ *                 type: string
+ *                 description: The price point to add more to the position
+ *                 example: "95"
+ *               tipurl:
+ *                 type: string
+ *                 description: URL with additional information about the tip
+ *                 example: "https://example.com/analysis/stock-xyz"
+ *               horizon:
+ *                 type: string
+ *                 description: Investment time horizon for the tip
+ *                 default: "Long Term"
+ *                 example: "Long Term"
  *     responses:
  *       201:
  *         description: Tip successfully created
@@ -338,13 +393,7 @@ router.get(
  *                   type: string
  *                   example: Validation failed
  */
-router.post(
-  '/',
-  requireAdmin,
-  tipController.createTipWithoutPortfolio
-);
-
-
+router.post("/", requireAdmin, tipController.createTipWithoutPortfolio);
 
 /**
  * @swagger
@@ -387,6 +436,21 @@ router.post(
  *                 type: string
  *                 enum: [Active, Closed]
  *                 example: Closed
+ *               buyrange:
+ *                 type: string
+ *                 example: "120-170"
+ *               targetprice:
+ *                 type: string
+ *                 example: "200"
+ *               addmoreat:
+ *                 type: string
+ *                 example: "110"
+ *               tipurl:
+ *                 type: string
+ *                 example: "https://example.com/updated-analysis"
+ *               horizon:
+ *                 type: string
+ *                 example: "Long Term"
  *     responses:
  *       200:
  *         description: Tip updated successfully
@@ -415,11 +479,7 @@ router.post(
  *                   type: string
  *                   example: Not found
  */
-router.put(
-  '/:id',
-  requireAdmin,
-  tipController.updateTip
-);
+router.put("/:id", requireAdmin, tipController.updateTip);
 
 /**
  * @swagger
@@ -470,10 +530,6 @@ router.put(
  *                   type: string
  *                   example: Not found
  */
-router.delete(
-  '/:id',
-  requireAdmin,
-  tipController.deleteTip
-);
+router.delete("/:id", requireAdmin, tipController.deleteTip);
 
 module.exports = router;
