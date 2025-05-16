@@ -6,8 +6,8 @@
 const express = require('express');
 const router = express.Router();
 const subscriptionController = require('../controllers/subscriptionController');
-const requireAuth = require('../middleware/requireAuth');
-
+const passport = require('passport');
+const requireAuth = passport.authenticate('jwt', { session: false });
 /**
  * @swagger
  * tags:

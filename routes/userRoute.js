@@ -36,6 +36,83 @@ const requireAuth = passport.authenticate('jwt', { session: false });
 router.get('/profile', requireAuth, userController.getProfile);
 
 
+// Custom middleware for optional authentication (allows public access but authenticates if token is present)
+const optionalAuth = (req, res, next) => {
+  passport.authenticate('jwt', { session: false }, (err, user) => {
+    if (user) {
+      req.user = user;
+    }
+    next();
+  })(req, res, next);
+};
+
+/**
+ * @swagger
+ * /api/user/tips:
+ *   get:
+ *     summary: Get tips with subscription-based access control
+ *     description: |
+ *       Public endpoint that shows tips with controlled access based on subscription status.
+ *       - Unauthenticated users will see only tip titles
+ *       - Authenticated but unsubscribed users will see only tip titles
+ *       - Users subscribed to a portfolio will see complete tip details for that portfolio's tips
+ *       
+ *       Each tip includes an `isSubscribed` boolean property indicating whether the user 
+ *       can view full details.
+ *     tags: [User]
+ *     security:
+ *       - bearerAuth: []
+ *       - {}  # Empty security requirement means optional authentication
+ *     responses:
+ *       200:
+ *         description: List of tips with subscription-based access control
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: array
+ *               items:
+ *                 oneOf:
+ *                   - type: object
+ *                     properties:
+ *                       _id: 
+ *                         type: string
+ *                         description: Tip ID
+ *                       title:
+ *                         type: string
+ *                         description: Tip title (limited access)
+ *                       isSubscribed:
+ *                         type: boolean
+ *                         description: Indicates user doesn't have access to full details
+ *                         example: false
+ *                   - type: object
+ *                     properties:
+ *                       _id:
+ *                         type: string
+ *                       title:
+ *                         type: string
+ *                       content:
+ *                         type: string
+ *                       status:
+ *                         type: string
+ *                       buyrange:
+ *                         type: string
+ *                       targetprice:
+ *                         type: string
+ *                       addmoreat:
+ *                         type: string
+ *                       tipurl:
+ *                         type: string
+ *                       horizon:
+ *                         type: string
+ *                       isSubscribed:
+ *                         type: boolean
+ *                         example: true
+ *       500:
+ *         description: Server error
+ */
+router.get('/tips', requireAuth, userController.getTips);
+
+
 
 /**
  * @swagger

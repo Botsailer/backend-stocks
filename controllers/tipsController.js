@@ -68,6 +68,9 @@ exports.createTipWithoutPortfolio = async (req, res) => {
 
 
 
+
+
+
 exports.updateTip = async (req, res) => {
   try {
     const updates = req.body;

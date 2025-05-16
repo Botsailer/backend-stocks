@@ -9,7 +9,7 @@ const Portfolio = require('../models/modelPortFolio');
 const Subscription = require('../models/subscription');
 const Cart = require('../models/carts'); // Use a single consistent name with PascalCase
 const PaymentHistory = require('../models/paymenthistory');
-
+const Tip = require('../models/portfolioTips');
 /**
  * Get user's profile information
  */
@@ -69,6 +69,52 @@ exports.getUserSubscriptions = async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 };
+
+/**
+ * Get tips with subscription-based access control
+ * Public can see titles only, subscribers see full details
+ */
+exports.getTips = async (req, res) => {
+  try {
+    // Get all tips with populated portfolio information upfront
+    const tips = await Tip.find().populate('portfolio', 'name').sort('-createdAt');
+    let userSubscriptions = [];
+    
+    // If user is authenticated, get their subscriptions
+    if (req.user) {
+      const subscriptions = await Subscription.find({ 
+        user: req.user._id,
+        isActive: true 
+      });
+      userSubscriptions = subscriptions.map(sub => sub.portfolio.toString());
+    }
+    
+    // Process tips based on authentication and subscription status
+    const processedTips = tips.map(tip => {
+      // If user is not authenticated, or tip has a portfolio they're not subscribed to
+      if (!req.user || (tip.portfolio && !userSubscriptions.includes(tip.portfolio._id.toString()))) {
+        return {
+          _id: tip._id,
+          title: tip.title,
+          // Only include the portfolio name if it exists
+          portfolio: tip.portfolio ? { _id: tip.portfolio._id, name: tip.portfolio.name } : null,
+          isSubscribed: false
+        };
+      }
+
+      return {
+        ...tip.toObject(),
+        isSubscribed: true
+      };
+    });
+    
+    res.json(processedTips);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+};
+
+
 
 /**
  * Get user's payment history

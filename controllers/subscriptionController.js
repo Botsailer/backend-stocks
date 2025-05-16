@@ -2,32 +2,30 @@ const Razorpay = require('razorpay');
 const crypto = require('crypto');
 const Subscription = require('../models/subscription');
 const PaymentHistory = require('../models/paymenthistory');
-const Portfolio = require('../models/Portfolio');
-const { getPaymentConfig } = require('../utils/configManager');
+const Portfolio = require('../models/modelPortFolio');
+const { getPaymentConfig } = require('../utils/configSettings');
 
-// Initialize Razorpay with default empty values, will be populated before use
-let razor = new Razorpay({
-  key_id: '',
-  key_secret: ''
-});
+// Instead of initializing with empty values, declare a variable to hold the instance
+let razor = null;
 
 // Function to initialize/update Razorpay instance with current config
 async function initRazorpay() {
   const config = await getPaymentConfig();
+  
+  // Make sure we have valid config values before creating instance
+  if (!config.key_id || !config.key_secret) {
+    throw new Error('Payment gateway configuration missing: key_id and key_secret are required');
+  }
+  
   razor = new Razorpay({
     key_id: config.key_id,
     key_secret: config.key_secret
   });
+  
+  return razor;
 }
-
-// Initialize on module load
-initRazorpay().catch(console.error);
-
 exports.createOrder = async (req, res) => {
   try {
-    // Ensure we have the latest payment config
-    await initRazorpay();
-    
     const userId = req.user.id;
     const { portfolioId } = req.body;
 
@@ -36,12 +34,44 @@ exports.createOrder = async (req, res) => {
     const portfolio = await Portfolio.findById(portfolioId);
     if (!portfolio) return res.status(404).json({ error: 'Portfolio not found' });
 
-    const amount = portfolio.subscriptionFee * 100; // Convert to paise
+    // Handle free subscriptions directly
+    if (!portfolio.subscriptionFee || portfolio.subscriptionFee === 0) {
+      let sub = await Subscription.findOne({ user: userId, portfolio: portfolioId });
+      if (!sub) {
+        sub = await Subscription.create({ user: userId, portfolio: portfolioId });
+      }
+      
+      // Directly activate the subscription
+      await sub.recordPayment(new Date());
+      
+      return res.json({ 
+        success: true, 
+        message: 'Free subscription activated successfully',
+        subscription: sub
+      });
+    }
+
+    // Initialize Razorpay if not already initialized (for paid subscriptions)
+    if (!razor) {
+      try {
+        await initRazorpay();
+      } catch (configError) {
+        console.error('Payment gateway configuration error:', configError.message);
+        return res.status(503).json({ 
+          error: 'Payment service temporarily unavailable',
+          details: 'Our payment system is currently experiencing issues. Please try again later or contact support.'
+        });
+      }
+    }
+    
+    // Ensure amount is a valid integer - round and convert to paise
+    const amount = Math.round(portfolio.subscriptionFee * 100);
+    
     const order = await razor.orders.create({
       amount,
       currency: 'INR',
-      receipt: `sub_${userId}_${portfolioId}_${Date.now()}`,
-    });
+     receipt: `s_${userId.toString().slice(-8)}_${portfolioId.toString().slice(-8)}_${Date.now().toString().slice(-10)}`,
+  });
 
     let sub = await Subscription.findOne({ user: userId, portfolio: portfolioId });
     if (!sub) sub = await Subscription.create({ user: userId, portfolio: portfolioId });
@@ -57,10 +87,27 @@ exports.createOrder = async (req, res) => {
     res.json({ orderId: order.id, amount, currency: order.currency });
   } catch (error) {
     console.error('Error creating order:', error);
-    res.status(500).json({ error: 'Failed to create payment order' });
+    
+    // Check for specific Razorpay API errors
+    if (error.statusCode === 401) {
+      return res.status(503).json({ 
+        error: 'Payment authorization failed',
+        details: 'Our payment system credentials are invalid or expired. Please contact support.'
+      });
+    } else if (error.statusCode === 400) {
+      return res.status(400).json({
+        error: 'Invalid payment parameters',
+        details: 'The payment details provided were invalid. Please try again or contact support.'
+      });
+    }
+    
+    res.status(500).json({ 
+      error: 'Failed to create payment order',
+      details: 'There was an issue processing your payment request. Please try again later.'
+    });
   }
 };
-
+// The rest of your code remains the same
 exports.verifyPayment = async (req, res) => {
   try {
     const { orderId, paymentId, signature } = req.body;
