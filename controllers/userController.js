@@ -96,7 +96,6 @@ exports.getTips = async (req, res) => {
         return {
           _id: tip._id,
           title: tip.title,
-          // Only include the portfolio name if it exists
           portfolio: tip.portfolio ? { _id: tip.portfolio._id, name: tip.portfolio.name } : null,
           isSubscribed: false
         };

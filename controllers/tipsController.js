@@ -23,10 +23,10 @@ exports.getTipById = async (req, res) => {
 
 exports.createTip = async (req, res) => {
   try {
-    const { title, content, status } = req.body;
+    const { title, content, status ,buyrange,targetprice,addmoreat,tipurl,horizon} = req.body;
     const portfolio = await Portfolio.findById(req.params.portfolioId);
     if (!portfolio) return res.status(400).json({ error: 'Invalid portfolio' });
-    const tip = new Tip({ portfolio: portfolio._id, title, content, status });
+    const tip = new Tip({ portfolio: portfolio._id, title, content, status ,buyrange,targetprice,addmoreat,tipurl,horizon});
     const saved = await tip.save();
     res.status(201).json(saved);
   } catch (err) {
