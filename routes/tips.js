@@ -1,4 +1,3 @@
-// routes/tip.js
 const express = require("express");
 const router = express.Router();
 const tipController = require("../controllers/tipsController");
@@ -17,7 +16,6 @@ const requireAdmin = require("../middleware/requirreAdmin");
  *       type: object
  *       required:
  *         - _id
- *         - portfolio
  *         - title
  *         - content
  *         - status
@@ -30,7 +28,7 @@ const requireAdmin = require("../middleware/requirreAdmin");
  *           example: 60f72b8a2e4e3c0015c4d1a2
  *         portfolio:
  *           type: string
- *           description: ObjectId of the portfolio this tip belongs to
+ *           description: ObjectId of the portfolio this tip belongs to (optional)
  *           example: 60f72a9b1d2f3b0014b3c0f1
  *         title:
  *           type: string
@@ -74,7 +72,27 @@ const requireAdmin = require("../middleware/requirreAdmin");
  *           type: string
  *           format: date-time
  *           description: Timestamp when the tip was last updated
- *
+ *   responses:
+ *     UnauthorizedError:
+ *       description: Missing/Malformed or invalid token
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               message:
+ *                 type: string
+ *                 example: Missing or malformed token
+ *     ForbiddenError:
+ *       description: User is not an admin
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               message:
+ *                 type: string
+ *                 example: Admin only
  */
 
 /**
@@ -93,13 +111,6 @@ const requireAdmin = require("../middleware/requirreAdmin");
  *     security:
  *       - bearerAuth: []
  *     parameters:
- *       - in: header
- *         name: Authorization
- *         required: true
- *         schema:
- *           type: string
- *           example: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
- *         description: JWT access token
  *       - in: path
  *         name: portfolioId
  *         required: true
@@ -117,25 +128,9 @@ const requireAdmin = require("../middleware/requirreAdmin");
  *               items:
  *                 $ref: '#/components/schemas/Tip'
  *       401:
- *         description: Missing/Malformed or invalid token
- *         content:
- *           application/json:
- *             schema:
- *               type: object
- *               properties:
- *                 message:
- *                   type: string
- *                   example: Missing or malformed token
+ *         $ref: '#/components/responses/UnauthorizedError'
  *       403:
- *         description: User is not an admin
- *         content:
- *           application/json:
- *             schema:
- *               type: object
- *               properties:
- *                 message:
- *                   type: string
- *                   example: Admin only
+ *         $ref: '#/components/responses/ForbiddenError'
  */
 router.get(
   "/portfolios/:portfolioId/tips",
@@ -152,13 +147,6 @@ router.get(
  *     security:
  *       - bearerAuth: []
  *     parameters:
- *       - in: header
- *         name: Authorization
- *         required: true
- *         schema:
- *           type: string
- *           example: Bearer eyJhbGciOiJI...
- *         description: JWT access token
  *       - in: path
  *         name: id
  *         required: true
@@ -199,13 +187,6 @@ router.get("/tips/:id", requireAdmin, tipController.getTipById);
  *     security:
  *       - bearerAuth: []
  *     parameters:
- *       - in: header
- *         name: Authorization
- *         required: true
- *         schema:
- *           type: string
- *           example: Bearer eyJhbGciOi...
- *         description: JWT access token
  *       - in: path
  *         name: portfolioId
  *         required: true
@@ -236,7 +217,8 @@ router.get("/tips/:id", requireAdmin, tipController.getTipById);
  *                 type: string
  *                 description: Current status of the tip
  *                 enum: [Active, Closed]
- *                 example: Active
+ *                 default: "Active"
+ *                 example: "Active"
  *               buyrange:
  *                 type: string
  *                 description: The recommended buy range for the stock
@@ -290,14 +272,6 @@ router.post(
  *     tags: [Tips]
  *     security:
  *       - bearerAuth: []
- *     parameters:
- *       - in: header
- *         name: Authorization
- *         required: true
- *         schema:
- *           type: string
- *           example: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
- *         description: JWT access token
  *     responses:
  *       200:
  *         description: An array of Tip objects, newest first
@@ -322,14 +296,6 @@ router.get("/", requireAdmin, tipController.getalltipswithoutPortfolio);
  *     tags: [Tips]
  *     security:
  *       - bearerAuth: []
- *     parameters:
- *       - in: header
- *         name: Authorization
- *         required: true
- *         schema:
- *           type: string
- *           example: Bearer eyJhbGciOi...
- *         description: JWT access token
  *     requestBody:
  *       description: Tip object that needs to be added
  *       required: true
@@ -353,7 +319,8 @@ router.get("/", requireAdmin, tipController.getalltipswithoutPortfolio);
  *                 type: string
  *                 description: Current status of the tip
  *                 enum: [Active, Closed]
- *                 example: Active
+ *                 default: "Active"
+ *                 example: "Active"
  *               buyrange:
  *                 type: string
  *                 description: The recommended buy range for the stock
@@ -404,13 +371,6 @@ router.post("/", requireAdmin, tipController.createTipWithoutPortfolio);
  *     security:
  *       - bearerAuth: []
  *     parameters:
- *       - in: header
- *         name: Authorization
- *         required: true
- *         schema:
- *           type: string
- *           example: Bearer eyJhbGc...
- *         description: JWT access token
  *       - in: path
  *         name: id
  *         required: true
@@ -435,7 +395,7 @@ router.post("/", requireAdmin, tipController.createTipWithoutPortfolio);
  *               status:
  *                 type: string
  *                 enum: [Active, Closed]
- *                 example: Closed
+ *                 example: "Closed"
  *               buyrange:
  *                 type: string
  *                 example: "120-170"
@@ -490,13 +450,6 @@ router.put("/:id", requireAdmin, tipController.updateTip);
  *     security:
  *       - bearerAuth: []
  *     parameters:
- *       - in: header
- *         name: Authorization
- *         required: true
- *         schema:
- *           type: string
- *           example: Bearer eyJhbG...
- *         description: JWT access token
  *       - in: path
  *         name: id
  *         required: true
