@@ -6,65 +6,27 @@ const Tip = require('../models/portfolioTips');
 const Portfolio = require('../models/modelPortFolio');
 
 /**
- * Helper function to normalize request body keys to lowercase
- * This makes the API case-insensitive for field names
+ * Utility function to map Tip document to camelCase response
  */
-const normalizeRequestBody = (body) => {
-  const normalized = {};
-  
-  if (!body) return normalized;
-  
-  Object.keys(body).forEach(key => {
-    normalized[key.toLowerCase()] = body[key];
-  });
-  
-  return normalized;
-};
-
-/**
- * Format response data to use consistent field names
- * This ensures API returns data with specific field naming convention
- */
-const formatResponseData = (data) => {
-  if (!data) return null;
-  
-  // Handle array response
-  if (Array.isArray(data)) {
-    return data.map(item => formatResponseData(item));
-  }
-
-  // For plain objects, including Mongoose documents that we convert to plain JS objects
-  const formatted = data.toObject ? data.toObject() : {...data};
-  
-  // Format specific fields that need camelCase
-  if (formatted.addmoreat !== undefined) {
-    formatted.addMoreAt = formatted.addmoreat;
-    delete formatted.addmoreat;
-  }
-  
-  if (formatted.buyrange !== undefined) {
-    formatted.buyRange = formatted.buyrange;
-    delete formatted.buyrange;
-  }
-  
-  if (formatted.targetprice !== undefined) {
-    formatted.targetPrice = formatted.targetprice;
-    delete formatted.targetprice;
-  }
-  
-  if (formatted.tipurl !== undefined) {
-    formatted.tipUrl = formatted.tipurl;
-    delete formatted.tipurl;
-  }
-  
-  // Rename downloadlinks to downloadLinks if it exists
-  if (formatted.downloadlinks !== undefined) {
-    formatted.downloadLinks = formatted.downloadlinks;
-    delete formatted.downloadlinks;
-  }
-  
-  return formatted;
-};
+function mapTipToCamelCase(tip) {
+  if (!tip) return null;
+  return {
+    id: tip._id,
+    portfolio: tip.portfolio,
+    title: tip.title,
+    content: tip.content,
+    status: tip.status,
+    buyRange: tip.buyRange,
+    targetPrice: tip.targetPrice,
+    addMoreAt: tip.addMoreAt,
+    tipUrl: tip.tipUrl,
+    horizon: tip.horizon,
+    type: tip.type, // if present in schema
+    downloadLinks: tip.downloadLinks,
+    createdAt: tip.createdAt,
+    updatedAt: tip.updatedAt,
+  };
+}
 
 /**
  * Get all tips for a specific portfolio
@@ -72,7 +34,7 @@ const formatResponseData = (data) => {
 exports.getTipsByPortfolio = async (req, res) => {
   try {
     const tips = await Tip.find({ portfolio: req.params.portfolioId }).sort('-createdAt');
-    res.json(formatResponseData(tips));
+    res.json(tips.map(mapTipToCamelCase));
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -85,7 +47,7 @@ exports.getTipById = async (req, res) => {
   try {
     const tip = await Tip.findById(req.params.id);
     if (!tip) return res.status(404).json({ error: 'Not found' });
-    res.json(formatResponseData(tip));
+    res.json(mapTipToCamelCase(tip));
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -96,42 +58,34 @@ exports.getTipById = async (req, res) => {
  */
 exports.createTip = async (req, res) => {
   try {
-    // Normalize all request body keys to lowercase
-    const normalized = normalizeRequestBody(req.body);
-    
-    // Extract values from normalized body
-    const { 
-      title, 
-      content, 
-      status, 
-      buyrange, 
-      targetprice, 
-      addmoreat, 
-      tipurl, 
-      horizon, 
-      downloadlinks,
-      type
-    } = normalized;
-    
+    // Map request body to camelCase
+    const {
+      title,
+      content,
+      status,
+      buyRange,
+      targetPrice,
+      addMoreAt,
+      tipUrl,
+      horizon,
+      downloadLinks
+    } = req.body;
     const portfolio = await Portfolio.findById(req.params.portfolioId);
     if (!portfolio) return res.status(400).json({ error: 'Invalid portfolio' });
-    
-    const tip = new Tip({ 
-      portfolio: portfolio._id, 
-      title, 
-      content, 
+    const tip = new Tip({
+      portfolio: portfolio._id,
+      title,
+      content,
       status: status || 'Active',
-      buyrange, 
-      targetprice, 
-      addmoreat, 
-      tipurl, 
+      buyRange,
+      targetPrice,
+      addMoreAt,
+      tipUrl,
       horizon: horizon || 'Long Term',
-      downloadlinks: downloadlinks || [],
-      type
+      downloadLinks: downloadLinks || []
     });
-    
     const saved = await tip.save();
-    res.status(201).json(formatResponseData(saved));
+    res.status(201).json(mapTipToCamelCase(saved));
   } catch (err) {
     res.status(400).json({ error: err.message });
   }
@@ -143,7 +97,7 @@ exports.createTip = async (req, res) => {
 exports.getalltipswithoutPortfolio = async (req, res) => {
   try {
     const tips = await Tip.find().sort('-createdAt');
-    res.json(formatResponseData(tips));
+    res.json(tips.map(mapTipToCamelCase));
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -154,38 +108,30 @@ exports.getalltipswithoutPortfolio = async (req, res) => {
  */
 exports.createTipWithoutPortfolio = async (req, res) => {
   try {
-    // Normalize all request body keys to lowercase
-    const normalized = normalizeRequestBody(req.body);
-    
-    // Extract values from normalized body
-    const { 
-      title, 
-      content, 
-      status, 
-      buyrange, 
-      targetprice, 
-      addmoreat, 
-      tipurl, 
-      horizon, 
-      downloadlinks,
-      type
-    } = normalized;
-    
-    const tip = new Tip({ 
-      title, 
-      content, 
+    const {
+      title,
+      content,
+      status,
+      buyRange,
+      targetPrice,
+      addMoreAt,
+      tipUrl,
+      horizon,
+      downloadLinks
+    } = req.body;
+    const tip = new Tip({
+      title,
+      content,
       status: status || 'Active',
-      buyrange,
-      targetprice,
-      addmoreat,
-      tipurl,
+      buyRange,
+      targetPrice,
+      addMoreAt,
+      tipUrl,
       horizon: horizon || 'Long Term',
-      downloadlinks: downloadlinks || [],
-      type
+      downloadLinks: downloadLinks || []
     });
-    
     const saved = await tip.save();
-    res.status(201).json(formatResponseData(saved));
+    res.status(201).json(mapTipToCamelCase(saved));
   } catch (err) {
     res.status(400).json({ error: err.message });
   }
@@ -196,44 +142,34 @@ exports.createTipWithoutPortfolio = async (req, res) => {
  */
 exports.updateTip = async (req, res) => {
   try {
-    // Normalize all request body keys to lowercase
-    const normalized = normalizeRequestBody(req.body);
-    
-    // Extract values from normalized body
-    const { 
-      title, 
-      content, 
-      status, 
-      buyrange, 
-      targetprice, 
-      addmoreat, 
-      tipurl, 
-      horizon, 
-      downloadlinks,
-      type
-    } = normalized;
-    
-    // Only include fields that are provided in the update
+    const {
+      title,
+      content,
+      status,
+      buyRange,
+      targetPrice,
+      addMoreAt,
+      tipUrl,
+      horizon,
+      downloadLinks
+    } = req.body;
     const updates = {};
-    if (title !== undefined) updates.title = title;
-    if (content !== undefined) updates.content = content;
-    if (status !== undefined) updates.status = status;
-    if (buyrange !== undefined) updates.buyrange = buyrange;
-    if (targetprice !== undefined) updates.targetprice = targetprice;
-    if (addmoreat !== undefined) updates.addmoreat = addmoreat;
-    if (tipurl !== undefined) updates.tipurl = tipurl;
-    if (horizon !== undefined) updates.horizon = horizon;
-    if (downloadlinks !== undefined) updates.downloadlinks = downloadlinks;
-    if (type !== undefined) updates.type = type;
-    
+    if (title) updates.title = title;
+    if (content) updates.content = content;
+    if (status) updates.status = status;
+    if (buyRange) updates.buyRange = buyrange;
+    if (targetPrice) updates.targetPrice = targetPrice;
+    if (addMoreAt) updates.addMoreAt = addMoreAt;
+    if (tipUrl) updates.tipUrl = tipUrl;
+    if (horizon) updates.horizon = horizon;
+    if (downloadLinks) updates.downloadLinks = downloadLinks;
     const tip = await Tip.findByIdAndUpdate(
-      req.params.id, 
-      updates, 
+      req.params.id,
+      updates,
       { new: true, runValidators: true }
     );
-    
     if (!tip) return res.status(404).json({ error: 'Not found' });
-    res.json(formatResponseData(tip));
+    res.json(mapTipToCamelCase(tip));
   } catch (err) {
     res.status(400).json({ error: err.message });
   }
@@ -259,14 +195,7 @@ exports.getDownloadLinks = async (req, res) => {
   try {
     const tip = await Tip.findById(req.params.id);
     if (!tip) return res.status(404).json({ error: 'Tip not found' });
-    
-    // Access using consistent naming and format the response
-    const links = tip.downloadlinks || [];
-    res.json(links.map(link => ({
-      _id: link._id,
-      name: link.name,
-      url: link.url
-    })));
+    res.json(tip.downloadLinks || []);
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -277,29 +206,16 @@ exports.getDownloadLinks = async (req, res) => {
  */
 exports.addDownloadLink = async (req, res) => {
   try {
-    // Normalize request body keys
-    const normalized = normalizeRequestBody(req.body);
-    const { name, url } = normalized;
-    
+    const { name, url } = req.body;
     if (!name || !url) {
       return res.status(400).json({ error: 'Name and URL are required for download links' });
     }
-    
     const tip = await Tip.findById(req.params.id);
     if (!tip) return res.status(404).json({ error: 'Tip not found' });
-    
-    // Ensure the field exists
-    tip.downloadlinks = tip.downloadlinks || [];
-    tip.downloadlinks.push({ name, url });
-    
+    tip.downloadLinks = tip.downloadLinks || [];
+    tip.downloadLinks.push({ name, url });
     const updated = await tip.save();
-    const newLink = updated.downloadlinks[updated.downloadlinks.length - 1];
-    
-    res.status(201).json({
-      _id: newLink._id,
-      name: newLink.name,
-      url: newLink.url
-    });
+    res.status(201).json(updated.downloadLinks[updated.downloadLinks.length - 1]);
   } catch (err) {
     res.status(400).json({ error: err.message });
   }
@@ -310,40 +226,20 @@ exports.addDownloadLink = async (req, res) => {
  */
 exports.updateDownloadLink = async (req, res) => {
   try {
-    // Normalize request body keys
-    const normalized = normalizeRequestBody(req.body);
-    const { name, url } = normalized;
-    
+    const { name, url } = req.body;
     if (!name && !url) {
       return res.status(400).json({ error: 'At least one field (name or URL) is required' });
     }
-    
     const tip = await Tip.findById(req.params.id);
     if (!tip) return res.status(404).json({ error: 'Tip not found' });
-    
-    // Work with consistent field access
-    const links = tip.downloadlinks || [];
-    
-    const linkIndex = links.findIndex(link => link._id.toString() === req.params.linkId);
-    
+    const linkIndex = tip.downloadLinks.findIndex(link => link._id.toString() === req.params.linkId);
     if (linkIndex === -1) {
       return res.status(404).json({ error: 'Download link not found' });
     }
-    
-    if (name) links[linkIndex].name = name;
-    if (url) links[linkIndex].url = url;
-    
-    // Update with consistent field name
-    tip.downloadlinks = links;
-    
+    if (name) tip.downloadLinks[linkIndex].name = name;
+    if (url) tip.downloadLinks[linkIndex].url = url;
     const updated = await tip.save();
-    const updatedLink = updated.downloadlinks[linkIndex];
-    
-    res.json({
-      _id: updatedLink._id,
-      name: updatedLink.name,
-      url: updatedLink.url
-    });
+    res.json(updated.downloadLinks[linkIndex]);
   } catch (err) {
     res.status(400).json({ error: err.message });
   }
@@ -356,22 +252,13 @@ exports.deleteDownloadLink = async (req, res) => {
   try {
     const tip = await Tip.findById(req.params.id);
     if (!tip) return res.status(404).json({ error: 'Tip not found' });
-    
-    // Work with consistent field access
-    const links = tip.downloadlinks || [];
-    
-    const initialLength = links.length;
-    const filteredLinks = links.filter(
+    const initialLength = tip.downloadLinks.length;
+    tip.downloadLinks = tip.downloadLinks.filter(
       link => link._id.toString() !== req.params.linkId
     );
-    
-    if (filteredLinks.length === initialLength) {
+    if (tip.downloadLinks.length === initialLength) {
       return res.status(404).json({ error: 'Download link not found' });
     }
-    
-    // Update with consistent field name
-    tip.downloadlinks = filteredLinks;
-    
     await tip.save();
     res.json({ message: 'Download link deleted' });
   } catch (err) {
