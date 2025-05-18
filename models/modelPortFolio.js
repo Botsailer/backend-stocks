@@ -42,6 +42,18 @@ const StockHoldingSchema = new Schema({
   }
 }, { _id: false });
 
+
+const portfolioDownLoadLinkSchema = new Schema({
+  link: {
+    type: String,
+    required: true
+  },
+  createdAt: {
+    type: Date,
+    default: Date.now
+  }
+});
+
 const PortfolioSchema = new Schema({
   name: {
     type: String,
@@ -75,6 +87,11 @@ const PortfolioSchema = new Schema({
     required: true,
     min: 1
   },
+  PortfolioCategory: {
+    type:String,
+    required: true,
+    default:'Basic'
+  },
   expiryDate: {
     type: Date,
     required: true
@@ -83,7 +100,11 @@ const PortfolioSchema = new Schema({
   holdings: {
     type: [StockHoldingSchema],
     default: []
-  }
+  },
+  downloadLinks: {
+    type: [portfolioDownLoadLinkSchema],
+    default: []
+  },
 }, { timestamps: true });
 
 // Auto-calculate expiryDate from createdAt + durationMonths

@@ -1,101 +1,70 @@
-// controllers/portfolioController.js
 const Portfolio = require('../models/modelPortFolio');
-const PriceLog  = require('../models/PriceLog');
+const PriceLog = require('../models/PriceLog');
 
-
-/**
- * GET /api/portfolios
- */
 exports.getAllPortfolios = async (req, res) => {
   try {
     const portfolios = await Portfolio.find().sort('name');
-    res.status(200).json(portfolios);
-  } catch (err) {
-    res.status(500).json({ error: err.message });
+    res.json(portfolios);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
   }
 };
 
-/**
- * GET /api/portfolios/:id
- */
 exports.getPortfolioById = async (req, res) => {
   try {
-    const p = await Portfolio.findById(req.params.id);
-    if (!p) return res.status(404).json({ error: 'Portfolio not found' });
-    res.json(p);
-  } catch (err) {
-    res.status(500).json({ error: err.message });
+    const portfolio = await Portfolio.findById(req.params.id);
+    if (!portfolio) return res.status(404).json({ error: 'Portfolio not found' });
+    res.json(portfolio);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
   }
 };
 
-/**
- * POST /api/portfolios
- */
 exports.createPortfolio = async (req, res) => {
   try {
-    const { name, description, subscriptionFee, minInvestment, durationMonths, expiryDate, holdings } = req.body;
+    const { name, description, subscriptionFee, minInvestment, durationMonths, 
+      expiryDate, holdings, PortfolioCategory, downloadLinks, cashRemaining } = req.body;
 
-    // Ensure total weight = 100
-    const totalWeight = holdings.reduce((sum, h) => sum + (h.weight || 0), 0);
-    if (totalWeight !== 100) {
-      return res.status(400).json({ error: 'Total holdings weight must equal 100%' });
-    }
-
-    const p = new Portfolio({
+    const portfolio = new Portfolio({
       name,
-      description,
+      description: description || '',
       subscriptionFee,
       minInvestment,
       durationMonths,
-      expiryDate,
-      holdings
+      expiryDate: expiryDate || new Date(Date.now() + durationMonths * 30 * 24 * 60 * 60 * 1000),
+      holdings: holdings || [],
+      PortfolioCategory: PortfolioCategory || 'Basic',
+      downloadLinks: downloadLinks || [],
+      cashRemaining: cashRemaining || 0
     });
-    await p.save();
-    res.status(201).json(p);
-  } catch (err) {
-    res.status(400).json({ error: err.message });
+
+    await portfolio.save();
+    res.status(201).json(portfolio);
+  } catch (error) {
+    res.status(400).json({ error: error.message });
   }
 };
 
-/**
- * PUT /api/portfolios/:id
- */
 exports.updatePortfolio = async (req, res) => {
   try {
     const updates = req.body;
-    // Prevent removal of holdings unless status = 'Sell'
-    if (updates.holdings) {
-      const original = await Portfolio.findById(req.params.id);
-      const removed = original.holdings.filter(h =>
-        !updates.holdings.some(u => u.symbol === h.symbol)
-      );
-      if (removed.some(r => r.status !== 'Sell')) {
-        return res.status(400).json({ error: 'Can only remove holdings with status Sell' });
-      }
-    }
-    const p = await Portfolio.findByIdAndUpdate(
-      req.params.id,
-      updates,
-      { new: true, runValidators: true }
-    );
-    if (!p) return res.status(404).json({ error: 'Portfolio not found' });
-    res.json(p);
-  } catch (err) {
-    res.status(400).json({ error: err.message });
+    const portfolio = await Portfolio.findByIdAndUpdate(req.params.id, updates, { new: true });
+    
+    if (!portfolio) return res.status(404).json({ error: 'Portfolio not found' });
+    res.json(portfolio);
+  } catch (error) {
+    res.status(400).json({ error: error.message });
   }
 };
 
-/**
- * DELETE /api/portfolios/:id
- */
 exports.deletePortfolio = async (req, res) => {
   try {
-    const p = await Portfolio.findByIdAndDelete(req.params.id);
-    if (!p) return res.status(404).json({ error: 'Portfolio not found' });
-    // Cascade delete logs
-    await PriceLog.deleteMany({ portfolio: p._id });
-    res.json({ message: 'Portfolio and associated logs deleted' });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
+    const portfolio = await Portfolio.findByIdAndDelete(req.params.id);
+    if (!portfolio) return res.status(404).json({ error: 'Portfolio not found' });
+    
+    await PriceLog.deleteMany({ portfolio: portfolio._id });
+    res.json({ message: 'Portfolio deleted successfully' });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
   }
 };
