@@ -321,9 +321,6 @@ router.get("/", requireAdmin, tipController.getalltipswithoutPortfolio);
  *               addMoreAt:
  *                 type: string
  *                 example: "N/A"
- *               addMoreAt:
- *                 type: string
- *                 example: "N/A"
  *               tipUrl:
  *                 type: string
  *                 example: "https://example.com/market-outlook"
