@@ -39,6 +39,8 @@ dbAdapter.connect()
     app.use('/api/user', require('./routes/userRoute'));
     app.use('/api/subscriptions', require('./routes/Subscription'));
     app.use('/api/admin/subscriptions', require('./routes/adminSubscription'));
+    app.use('/api/stock-symbols', require('./routes/stocksymbol'));
+
     app.use('/api/tips', require('./routes/tips')); 
     app.use('/api/admin/configs', require('./routes/configRoute'));
     app.listen(config.server.port, () =>
