@@ -312,16 +312,19 @@ router.get("/", requireAdmin, tipController.getalltipswithoutPortfolio);
  *                 type: string
  *                 enum: [Active, Closed]
  *                 default: "Active"
- *               buyrange:
+ *               buyRange:
  *                 type: string
  *                 example: "N/A"
- *               targetprice:
+ *               targetPrice:
  *                 type: string
  *                 example: "N/A"
- *               addmoreat:
+ *               addMoreAt:
  *                 type: string
  *                 example: "N/A"
- *               tipurl:
+ *               addMoreAt:
+ *                 type: string
+ *                 example: "N/A"
+ *               tipUrl:
  *                 type: string
  *                 example: "https://example.com/market-outlook"
  *               horizon:
@@ -389,13 +392,13 @@ router.post("/", requireAdmin, tipController.createTipWithoutPortfolio);
  *               status:
  *                 type: string
  *                 enum: [Active, Closed]
- *               buyrange:
+ *               buyRange:
  *                 type: string
- *               targetprice:
+ *               targetPrice:
  *                 type: string
- *               addmoreat:
+ *               addMoreAt:
  *                 type: string
- *               tipurl:
+ *               tipUrl:
  *                 type: string
  *               horizon:
  *                 type: string

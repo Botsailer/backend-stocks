@@ -10,6 +10,9 @@ const Portfolio = require('../models/modelPortFolio');
  */
 function mapTipToCamelCase(tip) {
   if (!tip) return null;
+
+
+
   return {
     id: tip._id,
     portfolio: tip.portfolio,
@@ -21,7 +24,7 @@ function mapTipToCamelCase(tip) {
     addMoreAt: tip.addMoreAt,
     tipUrl: tip.tipUrl,
     horizon: tip.horizon,
-    type: tip.type, // if present in schema
+    type: tip.type,
     downloadLinks: tip.downloadLinks,
     createdAt: tip.createdAt,
     updatedAt: tip.updatedAt,
@@ -58,7 +61,6 @@ exports.getTipById = async (req, res) => {
  */
 exports.createTip = async (req, res) => {
   try {
-    // Map request body to camelCase
     const {
       title,
       content,
