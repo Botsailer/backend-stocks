@@ -12,7 +12,7 @@ function mapTipToCamelCase(tip) {
   if (!tip) return null;
 
 
-
+  
   return {
     id: tip._id,
     portfolio: tip.portfolio,

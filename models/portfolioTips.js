@@ -1,4 +1,3 @@
-// Schema for admin tips linked to a portfolio
 const mongoose = require("mongoose");
 const { Schema } = mongoose;
 
