@@ -2,6 +2,17 @@
 const mongoose = require("mongoose");
 const { Schema } = mongoose;
 
+const downloadLinksSchema = new Schema({
+  name: {
+    type: String,
+    required: true,
+  },
+  url: {
+    type: String,
+    required: true,
+  },
+});
+
 const TipSchema = new Schema(
   {
     portfolio: {
@@ -29,6 +40,10 @@ const TipSchema = new Schema(
     tipurl: String,
     horizon: { type: String, default: "Long Term" },
   },
+  {
+    downloadLinks: [downloadLinksSchema],
+  },
+  { _id: true, versionKey: false },
   { timestamps: true }
 );
 
