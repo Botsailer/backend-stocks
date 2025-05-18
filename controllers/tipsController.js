@@ -159,7 +159,7 @@ exports.updateTip = async (req, res) => {
     if (title) updates.title = title;
     if (content) updates.content = content;
     if (status) updates.status = status;
-    if (buyRange) updates.buyRange = buyrange;
+    if (buyRange) updates.buyRange = buyRange;
     if (targetPrice) updates.targetPrice = targetPrice;
     if (addMoreAt) updates.addMoreAt = addMoreAt;
     if (tipUrl) updates.tipUrl = tipUrl;
