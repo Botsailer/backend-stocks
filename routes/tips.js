@@ -6,34 +6,14 @@ const requireAdmin = require("../middleware/requirreAdmin");
 /**
  * @swagger
  * components:
- *   securitySchemes:
- *     bearerAuth:
- *       type: http
- *       scheme: bearer
- *       bearerFormat: JWT
  *   schemas:
- *     DownloadLink:
- *       type: object
- *       required:
- *         - name
- *         - url
- *       properties:
- *         _id:
- *           type: string
- *           description: Unique identifier for the download link
- *           example: 60f72c8b3e4e3c0015c4d1b3
- *         name:
- *           type: string
- *           description: Name of the download link
- *           example: "Research Report"
- *         url:
- *           type: string
- *           description: URL for the download
- *           example: "https://example.com/reports/q2-2025.pdf"
  *     Tip:
  *       type: object
  *       required:
  *         - title
+ *       description: |
+ *         **Field names are case-insensitive when sending data (e.g. "buyRange", "BUYRANGE", "buyrange" all work), but spelling must be correct.**
+ *         **All responses will always use the exact camelCase field names as shown below.**
  *       properties:
  *         _id:
  *           type: string
@@ -57,19 +37,19 @@ const requireAdmin = require("../middleware/requirreAdmin");
  *           description: Whether the tip is still Active or has been Closed
  *           default: "Active"
  *           example: "Active"
- *         buyrange:
+ *         buyRange:
  *           type: string
  *           description: The recommended buy range for the stock
  *           example: "100-150"
- *         targetprice:
+ *         targetPrice:
  *           type: string
  *           description: The target price for the stock
  *           example: "180"
- *         addmoreat:
+ *         addMoreAt:
  *           type: string
  *           description: The price point to add more to the position
  *           example: "95"
- *         tipurl:
+ *         tipUrl:
  *           type: string
  *           description: URL with additional information about the tip
  *           example: "https://example.com/analysis/stock-xyz"
@@ -91,38 +71,8 @@ const requireAdmin = require("../middleware/requirreAdmin");
  *           type: string
  *           format: date-time
  *           description: Timestamp when the tip was last updated
- *   responses:
- *     UnauthorizedError:
- *       description: Authentication error
- *       content:
- *         application/json:
- *           schema:
- *             type: object
- *             properties:
- *               error:
- *                 type: string
- *                 example: "Authentication required"
- *     ForbiddenError:
- *       description: Authorization error
- *       content:
- *         application/json:
- *           schema:
- *             type: object
- *             properties:
- *               error:
- *                 type: string
- *                 example: "Admin access required"
- *     NotFoundError:
- *       description: Resource not found
- *       content:
- *         application/json:
- *           schema:
- *             type: object
- *             properties:
- *               error:
- *                 type: string
- *                 example: "Not found"
  */
+
 
 /**
  * @swagger
@@ -778,3 +728,9 @@ router.put("/:id/download-links/:linkId", requireAdmin, tipController.updateDown
 router.delete("/:id/download-links/:linkId", requireAdmin, tipController.deleteDownloadLink);
 
 module.exports = router;
+
+
+
+
+
+
