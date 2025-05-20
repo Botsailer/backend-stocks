@@ -1,74 +1,29 @@
 const router = require('express').Router();
 const passport = require('passport');
-const { requireRole } = require('../middleware/requireAdmin');
-const bCtrl = require('../controllers/bundlecontroller');
+const bundleController = require('../controllers/bundleController');
+const requireAdmin = require('../middleware/requireAdmin');
 
 /**
  * @swagger
  * tags:
  *   name: Bundles
  *   description: Portfolio bundle management
- * components:
- *   schemas:
- *     Bundle:
- *       type: object
- *       required:
- *         - name
- *         - portfolios
- *         - discountPercentage
- *         - subscription
- *       properties:
- *         name:
- *           type: string
- *           example: "Tech Mega Bundle"
- *         description:
- *           type: string
- *           example: "Combination of top tech portfolios"
- *         portfolios:
- *           type: array
- *           items:
- *             type: string
- *             format: objectid
- *             example: "65a2b3c4d5e6f7g8h9i0j1k"
- *         discountPercentage:
- *           type: number
- *           minimum: 0
- *           maximum: 100
- *           example: 20
- *         subscription:
- *           type: object
- *           required:
- *             - minInvestment
- *             - feeAmount
- *           properties:
- *             minInvestment:
- *               type: number
- *               example: 5000
- *             feeAmount:
- *               type: number
- *               example: 999.99
- *             feeCurrency:
- *               type: string
- *               default: "INR"
- *             feeInterval:
- *               type: string
- *               enum: ["one-time", "monthly", "yearly"]
- *               default: "one-time"
- *         discountedPrice:
- *           type: number
- *           readOnly: true
- *           example: 799.99
+ * 
+ * securitySchemes:
+ *   bearerAuth:
+ *     type: http
+ *     scheme: bearer
+ *     bearerFormat: JWT
  */
-
-router.use(passport.authenticate('jwt', { session: false }));
-router.use(requireRole('admin'));
 
 /**
  * @swagger
- * /bundles:
+ * /api/bundles:
  *   post:
  *     summary: Create a new portfolio bundle
  *     tags: [Bundles]
+ *     security:
+ *       - bearerAuth: []
  *     requestBody:
  *       required: true
  *       content:
@@ -76,14 +31,10 @@ router.use(requireRole('admin'));
  *           schema:
  *             $ref: '#/components/schemas/Bundle'
  *           example:
- *             name: "Starter Bundle"
- *             description: "Beginner-friendly portfolios"
- *             portfolios: ["65a2b3c4d5e6f7g8h9i0j1k", "75b4c5d6e7f8g9h0i1j2k3l"]
- *             discountPercentage: 15
- *             subscription:
- *               minInvestment: 3000
- *               feeAmount: 499.99
- *               feeInterval: "monthly"
+ *             name: "Starter Pack"
+ *             description: "Best portfolios for new investors"
+ *             portfolios: ["615a2d4b87d9c34f7d4f8a12", "615a2d4b87d9c34f7d4f8a13"]
+ *             discountPercentage: 20
  *     responses:
  *       201:
  *         description: Bundle created successfully
@@ -92,14 +43,16 @@ router.use(requireRole('admin'));
  *             schema:
  *               $ref: '#/components/schemas/Bundle'
  */
-router.post('/', bCtrl.createBundle);
+router.post('/', passport.authenticate('jwt', { session: false }), requireAdmin, bundleController.createBundle);
 
 /**
  * @swagger
- * /bundles/{id}:
+ * /api/bundles/{id}:
  *   put:
  *     summary: Update a bundle
  *     tags: [Bundles]
+ *     security:
+ *       - bearerAuth: []
  *     parameters:
  *       - in: path
  *         name: id
@@ -112,25 +65,26 @@ router.post('/', bCtrl.createBundle);
  *         application/json:
  *           schema:
  *             $ref: '#/components/schemas/Bundle'
+ *           example:
+ *             name: "Updated Starter Pack"
+ *             discountPercentage: 25
  *     responses:
  *       200:
- *         description: Updated bundle
- *         content:
- *           application/json:
- *             schema:
- *               $ref: '#/components/schemas/Bundle'
+ *         description: Bundle updated successfully
+ *       404:
+ *         description: Bundle not found
  */
-router.put('/:id', bCtrl.updateBundle);
+router.put('/:id', passport.authenticate('jwt', { session: false }), requireAdmin, bundleController.updateBundle);
 
 /**
  * @swagger
- * /bundles:
+ * /api/bundles:
  *   get:
  *     summary: Get all bundles
  *     tags: [Bundles]
  *     responses:
  *       200:
- *         description: List of bundles
+ *         description: List of all bundles
  *         content:
  *           application/json:
  *             schema:
@@ -138,6 +92,52 @@ router.put('/:id', bCtrl.updateBundle);
  *               items:
  *                 $ref: '#/components/schemas/Bundle'
  */
-router.get('/', bCtrl.getAllBundles);
+router.get('/', bundleController.getAllBundles);
+
+/**
+ * @swagger
+ * /api/bundles/{id}:
+ *   get:
+ *     summary: Get bundle by ID
+ *     tags: [Bundles]
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema:
+ *           type: string
+ *     responses:
+ *       200:
+ *         description: Bundle details
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/Bundle'
+ *       404:
+ *         description: Bundle not found
+ */
+router.get('/:id', bundleController.getBundleById);
+
+/**
+ * @swagger
+ * /api/bundles/{id}:
+ *   delete:
+ *     summary: Delete a bundle
+ *     tags: [Bundles]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema:
+ *           type: string
+ *     responses:
+ *       200:
+ *         description: Bundle deleted successfully
+ *       404:
+ *         description: Bundle not found
+ */
+router.delete('/:id', passport.authenticate('jwt', { session: false }), requireAdmin, bundleController.deleteBundle);
 
 module.exports = router;
