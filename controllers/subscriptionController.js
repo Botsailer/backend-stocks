@@ -1,158 +1,264 @@
 const Razorpay = require('razorpay');
 const crypto = require('crypto');
-const Subscription = require('../models/subscription');
-const PaymentHistory = require('../models/paymenthistory');
-const Portfolio = require('../models/modelPortFolio');
+const Subscription = require('../models/Subscription');
+const PaymentHistory = require('../models/PaymentHistory');
+const Portfolio = require('../models/Portfolio');
+const Bundle = require('../models/Bundle');
 const { getPaymentConfig } = require('../utils/configSettings');
 
-// Instead of initializing with empty values, declare a variable to hold the instance
-let razor = null;
+let razorpayInstance = null;
 
-// Function to initialize/update Razorpay instance with current config
-async function initRazorpay() {
-  const config = await getPaymentConfig();
-  
-  // Make sure we have valid config values before creating instance
-  if (!config.key_id || !config.key_secret) {
-    throw new Error('Payment gateway configuration missing: key_id and key_secret are required');
-  }
-  
-  razor = new Razorpay({
-    key_id: config.key_id,
-    key_secret: config.key_secret
-  });
-  
-  return razor;
-}
-exports.createOrder = async (req, res) => {
+async function initializeRazorpay() {
   try {
-    const userId = req.user.id;
-    const { portfolioId } = req.body;
-
-    if (!portfolioId) return res.status(400).json({ error: 'portfolioId is required' });
-
-    const portfolio = await Portfolio.findById(portfolioId);
-    if (!portfolio) return res.status(404).json({ error: 'Portfolio not found' });
-
-    // Handle free subscriptions directly
-    if (!portfolio.subscriptionFee || portfolio.subscriptionFee === 0) {
-      let sub = await Subscription.findOne({ user: userId, portfolio: portfolioId });
-      if (!sub) {
-        sub = await Subscription.create({ user: userId, portfolio: portfolioId });
-      }
-      
-      // Directly activate the subscription
-      await sub.recordPayment(new Date());
-      
-      return res.json({ 
-        success: true, 
-        message: 'Free subscription activated successfully',
-        subscription: sub
-      });
-    }
-
-    // Initialize Razorpay if not already initialized (for paid subscriptions)
-    if (!razor) {
-      try {
-        await initRazorpay();
-      } catch (configError) {
-        console.error('Payment gateway configuration error:', configError.message);
-        return res.status(503).json({ 
-          error: 'Payment service temporarily unavailable',
-          details: 'Our payment system is currently experiencing issues. Please try again later or contact support.'
-        });
-      }
-    }
-    
-    // Ensure amount is a valid integer - round and convert to paise
-    const amount = Math.round(portfolio.subscriptionFee * 100);
-    
-    const order = await razor.orders.create({
-      amount,
-      currency: 'INR',
-     receipt: `s_${userId.toString().slice(-8)}_${portfolioId.toString().slice(-8)}_${Date.now().toString().slice(-10)}`,
-  });
-
-    let sub = await Subscription.findOne({ user: userId, portfolio: portfolioId });
-    if (!sub) sub = await Subscription.create({ user: userId, portfolio: portfolioId });
-
-    await PaymentHistory.create({
-      user: userId,
-      portfolio: portfolioId,
-      subscription: sub._id,
-      orderId: order.id,
-      amount,
-    });
-
-    res.json({ orderId: order.id, amount, currency: order.currency });
-  } catch (error) {
-    console.error('Error creating order:', error);
-    
-    // Check for specific Razorpay API errors
-    if (error.statusCode === 401) {
-      return res.status(503).json({ 
-        error: 'Payment authorization failed',
-        details: 'Our payment system credentials are invalid or expired. Please contact support.'
-      });
-    } else if (error.statusCode === 400) {
-      return res.status(400).json({
-        error: 'Invalid payment parameters',
-        details: 'The payment details provided were invalid. Please try again or contact support.'
-      });
-    }
-    
-    res.status(500).json({ 
-      error: 'Failed to create payment order',
-      details: 'There was an issue processing your payment request. Please try again later.'
-    });
-  }
-};
-// The rest of your code remains the same
-exports.verifyPayment = async (req, res) => {
-  try {
-    const { orderId, paymentId, signature } = req.body;
-    const userId = req.user.id;
-
-    if (!orderId || !paymentId || !signature) {
-      return res.status(400).json({ error: 'orderId, paymentId and signature are required' });
-    }
-
-    // Get the latest config for verification
     const config = await getPaymentConfig();
     
-    const expected = crypto.createHmac('sha256', config.key_secret)
-      .update(orderId + '|' + paymentId)
-      .digest('hex');
-
-    if (expected !== signature) {
-      return res.status(400).json({ error: 'Invalid signature' });
+    if (!config.key_id || !config.key_secret) {
+      throw new Error('Razorpay configuration incomplete');
     }
 
-    const history = await PaymentHistory.findOne({ orderId });
-    if (!history) return res.status(404).json({ error: 'Order not found' });
+    razorpayInstance = new Razorpay({
+      key_id: config.key_id,
+      key_secret: config.key_secret
+    });
 
-    history.paymentId = paymentId;
-    history.signature = signature;
-    history.status = 'VERIFIED';
-    await history.save();
-
-    const sub = await Subscription.findById(history.subscription);
-    await sub.recordPayment(new Date());
-
-    res.json({ success: true, message: 'Payment verified and subscription activated' });
+    return razorpayInstance;
   } catch (error) {
-    console.error('Error verifying payment:', error);
-    res.status(500).json({ error: 'Failed to verify payment' });
+    console.error('Razorpay initialization failed:', error.message);
+    throw error;
+  }
+}
+
+const subscriptionController = {
+  createOrder: async (req, res) => {
+    try {
+      const { productType, productId } = req.body;
+      const userId = req.user.id;
+
+      // Validate input
+      if (!productType || !productId) {
+        return res.status(400).json({
+          error: 'Validation failed',
+          details: 'Both productType and productId are required'
+        });
+      }
+
+      // Resolve product model
+      const productModels = {
+        Portfolio: Portfolio,
+        Bundle: Bundle
+      };
+
+      if (!productModels[productType]) {
+        return res.status(400).json({
+          error: 'Invalid product type',
+          details: 'Allowed values: Portfolio, Bundle'
+        });
+      }
+
+      // Fetch product details
+      const product = await productModels[productType].findById(productId);
+      if (!product) {
+        return res.status(404).json({
+          error: 'Product not found',
+          details: `${productType} with ID ${productId} not found`
+        });
+      }
+
+      // Handle free subscriptions
+      const subscriptionAmount = productType === 'Bundle' ?
+        product.subscription.amount :
+        product.subscriptionFee;
+
+      if (!subscriptionAmount || subscriptionAmount === 0) {
+        let subscription = await Subscription.findOne({
+          user: userId,
+          productType,
+          productId
+        });
+
+        if (!subscription) {
+          subscription = await Subscription.create({
+            user: userId,
+            productType,
+            productId
+          });
+        }
+
+        await subscription.recordPayment(new Date());
+        return res.status(200).json({
+          success: true,
+          message: 'Free subscription activated',
+          subscription
+        });
+      }
+
+      // Initialize Razorpay if needed
+      if (!razorpayInstance) {
+        try {
+          await initializeRazorpay();
+        } catch (error) {
+          return res.status(503).json({
+            error: 'Payment service unavailable',
+            details: 'Payment gateway configuration error'
+          });
+        }
+      }
+
+      // Create Razorpay order
+      const amountInPaise = Math.round(subscriptionAmount * 100);
+      const order = await razorpayInstance.orders.create({
+        amount: amountInPaise,
+        currency: 'INR',
+        receipt: `sub_${userId.toString().slice(-8)}_${productId.toString().slice(-8)}_${Date.now().toString().slice(-10)}`
+      });
+
+      // Create/update subscription record
+      let subscription = await Subscription.findOne({
+        user: userId,
+        productType,
+        productId
+      });
+
+      if (!subscription) {
+        subscription = await Subscription.create({
+          user: userId,
+          productType,
+          productId
+        });
+      }
+
+      // Record payment history
+      await PaymentHistory.create({
+        user: userId,
+        productType,
+        productId,
+        subscription: subscription._id,
+        orderId: order.id,
+        amount: order.amount,
+        currency: order.currency,
+        status: 'CREATED'
+      });
+
+      res.status(201).json({
+        orderId: order.id,
+        amount: order.amount,
+        currency: order.currency
+      });
+
+    } catch (error) {
+      console.error('Order creation error:', error);
+
+      const response = {
+        error: 'Payment processing failed',
+        details: 'Failed to create payment order'
+      };
+
+      if (error.statusCode === 401) {
+        response.details = 'Invalid payment gateway credentials';
+        res.status(503);
+      } else if (error.statusCode === 400) {
+        response.details = 'Invalid payment parameters';
+        res.status(400);
+      } else {
+        res.status(500);
+      }
+
+      res.json(response);
+    }
+  },
+
+  verifyPayment: async (req, res) => {
+    try {
+      const { orderId, paymentId, signature } = req.body;
+      const userId = req.user.id;
+
+      // Validate input
+      if (!orderId || !paymentId || !signature) {
+        return res.status(400).json({
+          error: 'Validation failed',
+          details: 'orderId, paymentId, and signature are required'
+        });
+      }
+
+      // Verify payment signature
+      const config = await getPaymentConfig();
+      const expectedSignature = crypto
+        .createHmac('sha256', config.key_secret)
+        .update(`${orderId}|${paymentId}`)
+        .digest('hex');
+
+      if (expectedSignature !== signature) {
+        return res.status(400).json({
+          error: 'Invalid signature',
+          details: 'Payment verification failed'
+        });
+      }
+
+      // Update payment history
+      const paymentRecord = await PaymentHistory.findOneAndUpdate(
+        { orderId },
+        {
+          paymentId,
+          signature,
+          status: 'VERIFIED',
+          $unset: { error: 1 }
+        },
+        { new: true }
+      );
+
+      if (!paymentRecord) {
+        return res.status(404).json({
+          error: 'Order not found',
+          details: 'Payment record does not exist'
+        });
+      }
+
+      // Update subscription
+      const subscription = await Subscription.findById(paymentRecord.subscription);
+      if (!subscription) {
+        return res.status(404).json({
+          error: 'Subscription not found',
+          details: 'Associated subscription does not exist'
+        });
+      }
+
+      await subscription.recordPayment(new Date());
+
+      res.status(200).json({
+        success: true,
+        message: 'Payment verified and subscription activated',
+        subscription
+      });
+
+    } catch (error) {
+      console.error('Payment verification error:', error);
+      res.status(500).json({
+        error: 'Payment verification failed',
+        details: 'Internal server error during verification'
+      });
+    }
+  },
+
+  getHistory: async (req, res) => {
+    try {
+      const userId = req.user.id;
+      const paymentHistory = await PaymentHistory.find({ user: userId })
+        .sort('-createdAt')
+        .populate({
+          path: 'subscription',
+          select: 'productType productId isActive'
+        });
+
+      res.status(200).json(paymentHistory);
+
+    } catch (error) {
+      console.error('History fetch error:', error);
+      res.status(500).json({
+        error: 'Failed to retrieve payment history',
+        details: 'Database operation failed'
+      });
+    }
   }
 };
 
-exports.getHistory = async (req, res) => {
-  try {
-    const userId = req.user.id;
-    const records = await PaymentHistory.find({ user: userId }).sort('-createdAt');
-    res.json(records);
-  } catch (error) {
-    console.error('Error fetching payment history:', error);
-    res.status(500).json({ error: 'Failed to fetch payment history' });
-  }
-};
+module.exports = subscriptionController;
