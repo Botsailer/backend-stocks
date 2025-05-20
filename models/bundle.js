@@ -1,56 +1,120 @@
 const mongoose = require('mongoose');
+const { Schema } = mongoose;
 
-const bundleSchema = new mongoose.Schema({
+/**
+ * @swagger
+ * components:
+ *   schemas:
+ *     BundleSubscription:
+ *       type: object
+ *       required:
+ *         - amount
+ *         - currency
+ *       properties:
+ *         amount:
+ *           type: number
+ *           description: Total subscription amount after discount
+ *         currency:
+ *           type: string
+ *           default: "INR"
+ *         interval:
+ *           type: string
+ *           enum: [one-time, monthly, yearly]
+ *           default: "monthly"
+ * 
+ *     Bundle:
+ *       type: object
+ *       required:
+ *         - name
+ *         - portfolios
+ *         - discountPercentage
+ *       properties:
+ *         name:
+ *           type: string
+ *           example: "Starter Pack"
+ *         description:
+ *           type: string
+ *           example: "Best portfolios for new investors"
+ *         portfolios:
+ *           type: array
+ *           items:
+ *             type: string
+ *             format: objectid
+ *           description: Array of Portfolio IDs
+ *         discountPercentage:
+ *           type: number
+ *           minimum: 0
+ *           maximum: 100
+ *           example: 15
+ *         subscription:
+ *           $ref: '#/components/schemas/BundleSubscription'
+ *         createdAt:
+ *           type: string
+ *           format: date-time
+ *           readOnly: true
+ *         updatedAt:
+ *           type: string
+ *           format: date-time
+ *           readOnly: true
+ */
+
+const BundleSchema = new Schema({
   name: {
     type: String,
     required: true,
+    unique: true,
     trim: true
   },
-  description: {
-    type: String,
-    default: ''
-  },
+  description: String,
   portfolios: [{
-    type: mongoose.Schema.Types.ObjectId,
+    type: Schema.Types.ObjectId,
     ref: 'Portfolio',
-    required: true
+    required: true,
+    validate: {
+      validator: async function(portfolios) {
+        const count = await mongoose.model('Portfolio').countDocuments({ _id: { $in: portfolios } });
+        return count === portfolios.length;
+      },
+      message: 'One or more portfolios are invalid'
+    }
   }],
   discountPercentage: {
     type: Number,
     required: true,
     min: 0,
-    max: 100,
-    default: 0
+    max: 100
   },
   subscription: {
-    minInvestment: {
+    amount: {
       type: Number,
-      required: true
+      required: true,
+      min: 0
     },
-    feeAmount: {
-      type: Number,
-      required: true
-    },
-    feeCurrency: {
+    currency: {
       type: String,
       default: 'INR'
     },
-    feeInterval: {
+    interval: {
       type: String,
       enum: ['one-time', 'monthly', 'yearly'],
-      default: 'one-time'
+      default: 'monthly'
     }
   }
-}, { 
-  timestamps: true,
-  toJSON: { virtuals: true },
-  toObject: { virtuals: true } 
+}, { timestamps: true });
+
+// Calculate subscription amount before saving
+BundleSchema.pre('save', async function(next) {
+  if (this.isModified('portfolios') || this.isModified('discountPercentage')) {
+    const portfolios = await mongoose.model('Portfolio').find({
+      _id: { $in: this.portfolios }
+    });
+    
+    const total = portfolios.reduce((sum, portfolio) => 
+      sum + (portfolio.subscriptionFee || 0), 0);
+    
+    this.subscription.amount = total * (1 - this.discountPercentage / 100);
+  }
+  next();
 });
 
-// Virtual for discounted price
-bundleSchema.virtual('discountedPrice').get(function() {
-  const originalPrice = this.subscription.feeAmount;
-  return originalPrice - (originalPrice * this.discountPercentage / 100);
-});
-
-module.exports = mongoose.model('Bundle', bundleSchema);
+module.exports = mongoose.model('Bundle', BundleSchema);
