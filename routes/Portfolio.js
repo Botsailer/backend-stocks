@@ -86,6 +86,27 @@ const requireAdmin = require('../middleware/requirreAdmin');
  *         PortfolioCategory:
  *           type: string
  *           example: "Premium"
+ *         timeHorizon:
+ *           type: string
+ *           example: "5 years"
+ *         rebalancing:
+ *           type: string
+ *           example: "Quarterly"
+ *         index:
+ *           type: string
+ *           example: "Nifty 50"
+ *         details:
+ *           type: string
+ *           example: "Focused on high-growth technology stocks"
+ *         monthlyGains:
+ *           type: string
+ *           example: "2%"
+ *         CAGRSinceInception:
+ *           type: string
+ *           example: "12%"
+ *         oneYearGains:
+ *           type: string
+ *           example: "15%"
  *         holdings:
  *           type: array
  *           items:
@@ -101,6 +122,10 @@ const requireAdmin = require('../middleware/requirreAdmin');
  *       description: Not an admin
  */
 
+// ================================
+// @route   GET /api/portfolios
+// @desc    Get all portfolios
+// ================================
 /**
  * @swagger
  * /api/portfolios:
@@ -121,6 +146,10 @@ const requireAdmin = require('../middleware/requirreAdmin');
  */
 router.get('/portfolios', requireAdmin, portfolioController.getAllPortfolios);
 
+// ================================
+// @route   GET /api/portfolios/:id
+// @desc    Get a single portfolio by ID
+// ================================
 /**
  * @swagger
  * /api/portfolios/{id}:
@@ -147,11 +176,15 @@ router.get('/portfolios', requireAdmin, portfolioController.getAllPortfolios);
  */
 router.get('/portfolios/:id', requireAdmin, portfolioController.getPortfolioById);
 
+// ================================
+// @route   POST /api/portfolios
+// @desc    Create a new portfolio
+// ================================
 /**
  * @swagger
  * /api/portfolios:
  *   post:
- *     summary: Create new portfolio
+ *     summary: Create a new portfolio
  *     tags: [Portfolios]
  *     security:
  *       - bearerAuth: []
@@ -168,6 +201,13 @@ router.get('/portfolios/:id', requireAdmin, portfolioController.getPortfolioById
  *             minInvestment: 5000
  *             durationMonths: 12
  *             PortfolioCategory: "Premium"
+ *             timeHorizon: "3 years"
+ *             rebalancing: "Monthly"
+ *             index: "NASDAQ 100"
+ *             details: "AI & cloud based companies"
+ *             monthlyGains: "1.2%"
+ *             CAGRSinceInception: "11.3%"
+ *             oneYearGains: "14.7%"
  *             holdings:
  *               - symbol: "TSLA"
  *                 weight: 40
@@ -181,11 +221,15 @@ router.get('/portfolios/:id', requireAdmin, portfolioController.getPortfolioById
  */
 router.post('/portfolios', requireAdmin, portfolioController.createPortfolio);
 
+// ================================
+// @route   PUT /api/portfolios/:id
+// @desc    Update portfolio
+// ================================
 /**
  * @swagger
  * /api/portfolios/{id}:
  *   put:
- *     summary: Update portfolio
+ *     summary: Update portfolio by ID
  *     tags: [Portfolios]
  *     security:
  *       - bearerAuth: []
@@ -207,17 +251,21 @@ router.post('/portfolios', requireAdmin, portfolioController.createPortfolio);
  *               - link: "https://new.example.com/updated-docs.pdf"
  *     responses:
  *       200:
- *         description: Updated portfolio
+ *         description: Portfolio updated successfully
  *       400:
  *         description: Validation error
  */
 router.put('/portfolios/:id', requireAdmin, portfolioController.updatePortfolio);
 
+// ================================
+// @route   DELETE /api/portfolios/:id
+// @desc    Delete portfolio and related price logs
+// ================================
 /**
  * @swagger
  * /api/portfolios/{id}:
  *   delete:
- *     summary: Delete portfolio
+ *     summary: Delete portfolio by ID
  *     tags: [Portfolios]
  *     security:
  *       - bearerAuth: []
@@ -229,7 +277,7 @@ router.put('/portfolios/:id', requireAdmin, portfolioController.updatePortfolio)
  *           type: string
  *     responses:
  *       200:
- *         description: Portfolio deleted
+ *         description: Portfolio and associated logs deleted
  *       404:
  *         description: Portfolio not found
  */
