@@ -1,9 +1,9 @@
 const Razorpay = require('razorpay');
 const crypto = require('crypto');
-const Subscription = require('../models/Subscription');
-const PaymentHistory = require('../models/PaymentHistory');
-const Portfolio = require('../models/Portfolio');
-const Bundle = require('../models/Bundle');
+const Subscription = require('../models/subscription');
+const PaymentHistory = require('../models/paymenthistory');
+const Portfolio = require('../models/modelPortFolio');
+const Bundle = require('../models/bundle');
 const { getPaymentConfig } = require('../utils/configSettings');
 
 let razorpayInstance = null;
