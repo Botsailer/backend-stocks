@@ -1,61 +1,126 @@
-
-/**
- * models/Subscription.js
- * ---
- * Tracks the subscription status for a user and a specific portfolio.
- */
 const mongoose = require('mongoose');
 const { Schema } = mongoose;
 
+/**
+ * @swagger
+ * components:
+ *   schemas:
+ *     Subscription:
+ *       type: object
+ *       required:
+ *         - user
+ *         - productType
+ *         - productId
+ *       properties:
+ *         user:
+ *           type: string
+ *           format: objectid
+ *           description: Reference to subscribing user
+ *         productType:
+ *           type: string
+ *           enum: [Portfolio, Bundle]
+ *           example: "Bundle"
+ *           description: Type of subscribed financial product
+ *         productId:
+ *           type: string
+ *           format: objectid
+ *           example: "615a2d4b87d9c34f7d4f8a12"
+ *           description: Reference to Portfolio/Bundle document
+ *         lastPaidAt:
+ *           type: string
+ *           format: date-time
+ *           description: Timestamp of last successful payment
+ *         missedCycles:
+ *           type: integer
+ *           minimum: 0
+ *           maximum: 3
+ *           default: 0
+ *           description: Consecutive missed payment cycles
+ *         isActive:
+ *           type: boolean
+ *           default: false
+ *           description: Subscription active status
+ *         createdAt:
+ *           type: string
+ *           format: date-time
+ *           readOnly: true
+ *         updatedAt:
+ *           type: string
+ *           format: date-time
+ *           readOnly: true
+ */
 const SubscriptionSchema = new Schema({
-    user: {
-        type: Schema.Types.ObjectId,
-        ref: 'User',
-        required: true,
-        description: 'ObjectId of the subscribing User',
-    },
-    portfolio: {
-        type: Schema.Types.ObjectId,
-        ref: 'Portfolio',
-        required: true,
-        description: 'ObjectId of the subscribed Portfolio',
-    },
-    lastPaidAt: {
-        type: Date,
-        default: null,
-        description: 'Timestamp of last successful payment',
-    },
-    missedCycles: {
-        type: Number,
-        default: 0,
-        description: 'Number of missed monthly payment cycles (max 3)',
-    },
-    isActive: {
-        type: Boolean,
-        default: false,
-        description: 'Indicates whether the subscription is currently active',
+  user: {
+    type: Schema.Types.ObjectId,
+    ref: 'User',
+    required: [true, 'User reference is required']
+  },
+  productType: {
+    type: String,
+    required: [true, 'Product type is required'],
+    enum: {
+      values: ['Portfolio', 'Bundle'],
+      message: 'Invalid product type. Allowed values: Portfolio, Bundle'
     }
-}, { timestamps: true });
+  },
+  productId: {
+    type: Schema.Types.ObjectId,
+    required: [true, 'Product reference is required'],
+    refPath: 'productType'
+  },
+  lastPaidAt: {
+    type: Date,
+    default: null
+  },
+  missedCycles: {
+    type: Number,
+    default: 0,
+    min: [0, 'Missed cycles cannot be negative'],
+    max: [3, 'Maximum 3 missed cycles allowed']
+  },
+  isActive: {
+    type: Boolean,
+    default: false
+  }
+}, {
+  timestamps: true,
+  toJSON: {
+    virtuals: true,
+    transform: (doc, ret) => {
+      ret.id = ret._id;
+      delete ret._id;
+      delete ret.__v;
+      return ret;
+    }
+  }
+});
+
+// Prevent duplicate subscriptions
+SubscriptionSchema.index(
+  { user: 1, productType: 1, productId: 1 },
+  { unique: true, name: 'unique_subscription' }
+);
 
 /**
- * Updates subscription after successful payment.
- * @param {Date} paymentDate - The date of the successful payment.
- * @returns {Promise<Subscription>}
+ * Handles payment recording and cycle management
  */
-SubscriptionSchema.methods.recordPayment = function (paymentDate = new Date()) {
-    if (this.lastPaidAt) {
-        const nextDue = new Date(this.lastPaidAt);
-        nextDue.setMonth(nextDue.getMonth() + 1);
-        if (paymentDate <= nextDue) {
-            this.missedCycles = 0;
-        } else {
-            this.missedCycles = Math.min(this.missedCycles + 1, 3);
-        }
+SubscriptionSchema.methods.recordPayment = function(paymentDate = new Date()) {
+  if (this.lastPaidAt) {
+    const nextDue = new Date(this.lastPaidAt);
+    nextDue.setMonth(nextDue.getMonth() + 1);
+    
+    if (paymentDate <= nextDue) {
+      this.missedCycles = 0;
+    } else {
+      const monthsDiff = (paymentDate.getFullYear() - nextDue.getFullYear()) * 12 +
+        (paymentDate.getMonth() - nextDue.getMonth());
+      this.missedCycles = Math.min(monthsDiff, 3);
     }
-    this.lastPaidAt = paymentDate;
-    this.isActive = true;
-    return this.save();
+  }
+
+  this.lastPaidAt = paymentDate;
+  this.isActive = true;
+  return this.save();
 };
 
 module.exports = mongoose.model('Subscription', SubscriptionSchema);
-
