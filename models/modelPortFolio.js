@@ -72,6 +72,35 @@ const PortfolioSchema = new Schema({
     default: 0,
     min: 0
   },
+  timeHorizon:{
+    type:String,
+    required: false
+    
+  },
+  rebalancing:{
+    type:String,
+    required:false
+  },
+  index:{
+    type:String,
+    required:false
+  },
+  details:{
+    type:String,
+    required:false
+  },
+  monthlyGains:{
+    type:String,
+    required:false
+  },
+  CAGRSinceInception:{
+    type:String,
+    required:false
+  },
+  oneYearGains:{
+    type:String,
+    required:false
+  },
   subscriptionFee: {
     type: Number,
     required: true,
