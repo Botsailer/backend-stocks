@@ -1,7 +1,7 @@
 const router = require('express').Router();
 const passport = require('passport');
 const bundleController = require('../controllers/bundlecontroller');
-const requireAdmin = require('../middleware/requireAdmin');
+const requireAdmin = require('../middleware/requirreAdmin');
 
 /**
  * @swagger
