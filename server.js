@@ -42,6 +42,7 @@ dbAdapter.connect()
     app.use('/api/stock-symbols', require('./routes/stocksymbol'));
 
     app.use('/api/tips', require('./routes/tips')); 
+app.use('/api/bundles', require('./routes/bundleRouter'));
     app.use('/api/admin/configs', require('./routes/configRoute'));
     app.listen(config.server.port, () =>
       console.log(`Auth service running on port ${config.server.port}`),
