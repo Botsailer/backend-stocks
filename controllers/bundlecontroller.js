@@ -1,4 +1,4 @@
-const Bundle = require('../models/Bundle');
+const Bundle = require('../models/bundle');
 const Portfolio = require('../models/modelPortFolio');
 
 const asyncHandler = fn => (req, res, next) => 
