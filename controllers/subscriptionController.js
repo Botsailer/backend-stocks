@@ -1,264 +1,254 @@
 const Razorpay = require('razorpay');
 const crypto = require('crypto');
 const Subscription = require('../models/subscription');
-const PaymentHistory = require('../models/paymenthistory');
 const Portfolio = require('../models/modelPortFolio');
-const Bundle = require('../models/bundle');
-const { getPaymentConfig } = require('../utils/configSettings');
+const Cart = require('../models/carts');
+const PaymentHistory = require('../models/paymenthistory');
+const bundle = require('../models/bundle');
+const modelPortFolio = require('../models/modelPortFolio');
 
-let razorpayInstance = null;
 
-async function initializeRazorpay() {
-  try {
-    const config = await getPaymentConfig();
-    
-    if (!config.key_id || !config.key_secret) {
-      throw new Error('Razorpay configuration incomplete');
-    }
-
-    razorpayInstance = new Razorpay({
-      key_id: config.key_id,
-      key_secret: config.key_secret
-    });
-
-    return razorpayInstance;
-  } catch (error) {
-    console.error('Razorpay initialization failed:', error.message);
-    throw error;
+async function getRazorpayInstance() {
+  const paymentConfig = await getPaymentConfig();
+  if (!paymentConfig.key_id || !paymentConfig.key_secret) {
+    throw new Error('Razorpay key_id or key_secret not configured');
   }
+  return new Razorpay(paymentConfig);
 }
 
-const subscriptionController = {
-  createOrder: async (req, res) => {
-    try {
-      const { productType, productId } = req.body;
-      const userId = req.user.id;
+// Helper: Calculate total amount for cart
+async function calculateCartAmount(cart) {
+  let total = 0;
+  for (const item of cart.items) {
+    const portfolio = await Portfolio.findById(item.portfolio);
+    if (!portfolio) throw new Error('Portfolio not found');
+    total += (portfolio.subscriptionFee || 0) * item.quantity;
+  }
+  return total;
+}
 
-      // Validate input
-      if (!productType || !productId) {
-        return res.status(400).json({
-          error: 'Validation failed',
-          details: 'Both productType and productId are required'
-        });
-      }
+// Create payment order for a single product
+exports.createOrder = async (req, res) => {
+  try {
+    const razorpay = await getRazorpayInstance();
+    const { productType, productId } = req.body;
+    let product;
+    if (productType === 'Portfolio') {
+      product = await modelPortFolio.findById(productId);
+    } else if(productType === "Bundle") {
+      product = await bundle.findById(productId)
 
-      // Resolve product model
-      const productModels = {
-        Portfolio: Portfolio,
-        Bundle: Bundle
-      };
+    }
+    if (!product) return res.status(404).json({ error: 'Product not found' });
 
-      if (!productModels[productType]) {
-        return res.status(400).json({
-          error: 'Invalid product type',
-          details: 'Allowed values: Portfolio, Bundle'
-        });
-      }
+    const amount = product.subscriptionFee;
+    if (!amount) return res.status(400).json({ error: 'Invalid subscription fee' });
 
-      // Fetch product details
-      const product = await productModels[productType].findById(productId);
-      if (!product) {
-        return res.status(404).json({
-          error: 'Product not found',
-          details: `${productType} with ID ${productId} not found`
-        });
-      }
-
-      // Handle free subscriptions
-      const subscriptionAmount = productType === 'Bundle' ?
-        product.subscription.amount :
-        product.subscriptionFee;
-
-      if (!subscriptionAmount || subscriptionAmount === 0) {
-        let subscription = await Subscription.findOne({
-          user: userId,
-          productType,
-          productId
-        });
-
-        if (!subscription) {
-          subscription = await Subscription.create({
-            user: userId,
-            productType,
-            productId
-          });
-        }
-
-        await subscription.recordPayment(new Date());
-        return res.status(200).json({
-          success: true,
-          message: 'Free subscription activated',
-          subscription
-        });
-      }
-
-      // Initialize Razorpay if needed
-      if (!razorpayInstance) {
-        try {
-          await initializeRazorpay();
-        } catch (error) {
-          return res.status(503).json({
-            error: 'Payment service unavailable',
-            details: 'Payment gateway configuration error'
-          });
-        }
-      }
-
-      // Create Razorpay order
-      const amountInPaise = Math.round(subscriptionAmount * 100);
-      const order = await razorpayInstance.orders.create({
-        amount: amountInPaise,
-        currency: 'INR',
-        receipt: `sub_${userId.toString().slice(-8)}_${productId.toString().slice(-8)}_${Date.now().toString().slice(-10)}`
-      });
-
-      // Create/update subscription record
-      let subscription = await Subscription.findOne({
-        user: userId,
+    const order = await razorpay.orders.create({
+      amount: amount * 100, // INR to paise
+      currency: 'INR',
+      receipt: `order_${Date.now()}_${req.user._id}`,
+      notes: {
+        userId: req.user._id.toString(),
         productType,
         productId
-      });
+      }
+    });
 
-      if (!subscription) {
-        subscription = await Subscription.create({
-          user: userId,
-          productType,
-          productId
-        });
+    res.status(201).json({
+      orderId: order.id,
+      amount: order.amount,
+      currency: order.currency
+    });
+  } catch (err) {
+    res.status(503).json({ error: err.message });
+  }
+};
+
+// Checkout cart and create payment order for all items
+exports.checkoutCart = async (req, res) => {
+  try {
+    const cart = await Cart.findOne({ user: req.user._id });
+    if (!cart || cart.items.length === 0) {
+      return res.status(400).json({ error: 'Cart is empty' });
+    }
+    const amount = await calculateCartAmount(cart);
+    if (amount <= 0) return res.status(400).json({ error: 'Invalid cart amount' });
+
+    const order = await razorpay.orders.create({
+      amount: amount * 100,
+      currency: 'INR',
+      receipt: `cart_${Date.now()}_${req.user._id}`,
+      notes: {
+        userId: req.user._id.toString(),
+        cartCheckout: true
+      }
+    });
+
+    res.status(201).json({
+      orderId: order.id,
+      amount: order.amount,
+      currency: order.currency
+    });
+  } catch (err) {
+    res.status(503).json({ error: err.message });
+  }
+};
+
+// Verify payment (client-side)
+exports.verifyPayment = async (req, res) => {
+  try {
+    const razorpay = await getRazorpayInstance(); // <-- ADD THIS LINE
+    const { orderId, paymentId, signature } = req.body;
+    const generatedSignature = crypto
+      .createHmac('sha256', (await getRazorpayInstance()).key_secret) // Use the correct secret
+      .update(orderId + '|' + paymentId)
+      .digest('hex');
+
+    if (generatedSignature !== signature) {
+      return res.status(400).json({ error: 'Invalid signature' });
+    }
+
+    // Find order details from Razorpay
+    const order = await razorpay.orders.fetch(orderId);
+    if (!order) return res.status(404).json({ error: 'Order not found' });
+
+    // If cart checkout, subscribe to all items in cart
+    if (order.notes && order.notes.cartCheckout) {
+      const cart = await Cart.findOne({ user: req.user._id });
+      if (!cart) return res.status(404).json({ error: 'Cart not found' });
+
+      for (const item of cart.items) {
+        await Subscription.findOneAndUpdate(
+          {
+            user: req.user._id,
+            productType: 'Portfolio',
+            productId: item.portfolio
+          },
+          {
+            $set: { isActive: true, lastPaidAt: new Date(), missedCycles: 0 }
+          },
+          { upsert: true, new: true }
+        );
+      }
+      // Optionally clear cart after successful payment
+      cart.items = [];
+      await cart.save();
+    } else {
+      // Single product subscription
+      await Subscription.findOneAndUpdate(
+        {
+          user: req.user._id,
+          productType: order.notes.productType,
+          productId: order.notes.productId
+        },
+        {
+          $set: { isActive: true, lastPaidAt: new Date(), missedCycles: 0 }
+        },
+        { upsert: true, new: true }
+      );
+    }
+
+    // Record payment history
+    await PaymentHistory.create({
+      user: req.user._id,
+      orderId,
+      paymentId,
+      amount: order.amount,
+      currency: order.currency,
+      status: 'captured'
+    });
+
+    res.json({ success: true, message: 'Payment verified and subscription activated' });
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+};
+
+// Razorpay webhook for reliable payment verification
+exports.razorpayWebhook = async (req, res) => {
+  try {
+    const razorpay = await getRazorpayInstance(); // <-- ADD THIS LINE
+    // Validate webhook signature
+    const webhookSecret = (await getRazorpayInstance()).key_secret; // Or use your config getter
+    const signature = req.headers['x-razorpay-signature'];
+    const body = req.body;
+
+    const expectedSignature = crypto
+      .createHmac('sha256', webhookSecret)
+      .update(req.rawBody)
+      .digest('hex');
+
+    if (signature !== expectedSignature) {
+      return res.status(400).json({ error: 'Invalid webhook signature' });
+    }
+
+    // Handle payment captured event
+    if (body.event === 'payment.captured') {
+      const payment = body.payload.payment.entity;
+      const orderId = payment.order_id;
+      const order = await razorpay.orders.fetch(orderId);
+
+      // If cart checkout, subscribe to all items in cart
+      if (order.notes && order.notes.cartCheckout) {
+        const userId = order.notes.userId;
+        const cart = await Cart.findOne({ user: userId });
+        if (cart) {
+          for (const item of cart.items) {
+            await Subscription.findOneAndUpdate(
+              {
+                user: userId,
+                productType: 'Portfolio',
+                productId: item.portfolio
+              },
+              {
+                $set: { isActive: true, lastPaidAt: new Date(), missedCycles: 0 }
+              },
+              { upsert: true, new: true }
+            );
+          }
+          cart.items = [];
+          await cart.save();
+        }
+      } else {
+        // Single product subscription
+        await Subscription.findOneAndUpdate(
+          {
+            user: order.notes.userId,
+            productType: order.notes.productType,
+            productId: order.notes.productId
+          },
+          {
+            $set: { isActive: true, lastPaidAt: new Date(), missedCycles: 0 }
+          },
+          { upsert: true, new: true }
+        );
       }
 
       // Record payment history
       await PaymentHistory.create({
-        user: userId,
-        productType,
-        productId,
-        subscription: subscription._id,
-        orderId: order.id,
-        amount: order.amount,
-        currency: order.currency,
-        status: 'CREATED'
-      });
-
-      res.status(201).json({
-        orderId: order.id,
-        amount: order.amount,
-        currency: order.currency
-      });
-
-    } catch (error) {
-      console.error('Order creation error:', error);
-
-      const response = {
-        error: 'Payment processing failed',
-        details: 'Failed to create payment order'
-      };
-
-      if (error.statusCode === 401) {
-        response.details = 'Invalid payment gateway credentials';
-        res.status(503);
-      } else if (error.statusCode === 400) {
-        response.details = 'Invalid payment parameters';
-        res.status(400);
-      } else {
-        res.status(500);
-      }
-
-      res.json(response);
-    }
-  },
-
-  verifyPayment: async (req, res) => {
-    try {
-      const { orderId, paymentId, signature } = req.body;
-      const userId = req.user.id;
-
-      // Validate input
-      if (!orderId || !paymentId || !signature) {
-        return res.status(400).json({
-          error: 'Validation failed',
-          details: 'orderId, paymentId, and signature are required'
-        });
-      }
-
-      // Verify payment signature
-      const config = await getPaymentConfig();
-      const expectedSignature = crypto
-        .createHmac('sha256', config.key_secret)
-        .update(`${orderId}|${paymentId}`)
-        .digest('hex');
-
-      if (expectedSignature !== signature) {
-        return res.status(400).json({
-          error: 'Invalid signature',
-          details: 'Payment verification failed'
-        });
-      }
-
-      // Update payment history
-      const paymentRecord = await PaymentHistory.findOneAndUpdate(
-        { orderId },
-        {
-          paymentId,
-          signature,
-          status: 'VERIFIED',
-          $unset: { error: 1 }
-        },
-        { new: true }
-      );
-
-      if (!paymentRecord) {
-        return res.status(404).json({
-          error: 'Order not found',
-          details: 'Payment record does not exist'
-        });
-      }
-
-      // Update subscription
-      const subscription = await Subscription.findById(paymentRecord.subscription);
-      if (!subscription) {
-        return res.status(404).json({
-          error: 'Subscription not found',
-          details: 'Associated subscription does not exist'
-        });
-      }
-
-      await subscription.recordPayment(new Date());
-
-      res.status(200).json({
-        success: true,
-        message: 'Payment verified and subscription activated',
-        subscription
-      });
-
-    } catch (error) {
-      console.error('Payment verification error:', error);
-      res.status(500).json({
-        error: 'Payment verification failed',
-        details: 'Internal server error during verification'
+        user: order.notes.userId,
+        orderId,
+        paymentId: payment.id,
+        amount: payment.amount,
+        currency: payment.currency,
+        status: payment.status
       });
     }
-  },
 
-  getHistory: async (req, res) => {
-    try {
-      const userId = req.user.id;
-      const paymentHistory = await PaymentHistory.find({ user: userId })
-        .sort('-createdAt')
-        .populate({
-          path: 'subscription',
-          select: 'productType productId isActive'
-        });
-
-      res.status(200).json(paymentHistory);
-
-    } catch (error) {
-      console.error('History fetch error:', error);
-      res.status(500).json({
-        error: 'Failed to retrieve payment history',
-        details: 'Database operation failed'
-      });
-    }
+    res.status(200).json({ status: 'ok' });
+  } catch (err) {
+    res.status(400).json({ error: err.message });
   }
 };
 
-module.exports = subscriptionController;
+// Get payment history
+exports.getHistory = async (req, res) => {
+  try {
+    const payments = await PaymentHistory.find({ user: req.user._id })
+      .sort('-createdAt');
+    res.json(payments);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+};
