@@ -70,13 +70,6 @@ const BundleSchema = new Schema({
     type: Schema.Types.ObjectId,
     ref: 'Portfolio',
     required: true,
-    validate: {
-      validator: async function(portfolios) {
-        const count = await mongoose.model('Portfolio').countDocuments({ _id: { $in: portfolios } });
-        return count === portfolios.length;
-      },
-      message: 'One or more portfolios are invalid'
-    }
   }],
   discountPercentage: {
     type: Number,
