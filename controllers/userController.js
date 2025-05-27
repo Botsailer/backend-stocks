@@ -61,8 +61,8 @@ exports.getPortfolioById = async (req, res) => {
 exports.getUserSubscriptions = async (req, res) => {
   try {
     const subscriptions = await Subscription.find({ user: req.user._id })
-      .populate('portfolio', 'name description subscriptionFee minInvestment durationMonths')
-      .sort('-createdAt');
+ .populate('productId', 'name description subscriptionFee minInvestment durationMonths')
+    .sort('-createdAt');
     
     res.json(subscriptions);
   } catch (err) {
