@@ -10,21 +10,18 @@ const Portfolio = require('../models/modelPortFolio');
  */
 function mapTipToCamelCase(tip) {
   if (!tip) return null;
-
-
-  
   return {
     id: tip._id,
     portfolio: tip.portfolio,
     title: tip.title,
     content: tip.content,
+    description: tip.description,
     status: tip.status,
     buyRange: tip.buyRange,
     targetPrice: tip.targetPrice,
     addMoreAt: tip.addMoreAt,
     tipUrl: tip.tipUrl,
     horizon: tip.horizon,
-    type: tip.type,
     downloadLinks: tip.downloadLinks,
     createdAt: tip.createdAt,
     updatedAt: tip.updatedAt,
@@ -64,6 +61,7 @@ exports.createTip = async (req, res) => {
     const {
       title,
       content,
+      description,
       status,
       buyRange,
       targetPrice,
@@ -74,17 +72,24 @@ exports.createTip = async (req, res) => {
     } = req.body;
     const portfolio = await Portfolio.findById(req.params.portfolioId);
     if (!portfolio) return res.status(400).json({ error: 'Invalid portfolio' });
+    if (!title || !Array.isArray(content) || !description) {
+      return res.status(400).json({ error: 'Title, content (array), and description are required' });
+    }
+    if (content.some(item => !item.key || !item.value)) {
+      return res.status(400).json({ error: 'Each content item must have key and value' });
+    }
     const tip = new Tip({
       portfolio: portfolio._id,
       title,
       content,
+      description,
       status: status || 'Active',
       buyRange,
       targetPrice,
       addMoreAt,
       tipUrl,
       horizon: horizon || 'Long Term',
-      downloadLinks: downloadLinks || []
+      downloadLinks: Array.isArray(downloadLinks) ? downloadLinks : []
     });
     const saved = await tip.save();
     res.status(201).json(mapTipToCamelCase(saved));
@@ -113,6 +118,7 @@ exports.createTipWithoutPortfolio = async (req, res) => {
     const {
       title,
       content,
+      description,
       status,
       buyRange,
       targetPrice,
@@ -121,16 +127,23 @@ exports.createTipWithoutPortfolio = async (req, res) => {
       horizon,
       downloadLinks
     } = req.body;
+    if (!title || !Array.isArray(content) || !description) {
+      return res.status(400).json({ error: 'Title, content (array), and description are required' });
+    }
+    if (content.some(item => !item.key || !item.value)) {
+      return res.status(400).json({ error: 'Each content item must have key and value' });
+    }
     const tip = new Tip({
       title,
       content,
+      description,
       status: status || 'Active',
       buyRange,
       targetPrice,
       addMoreAt,
       tipUrl,
       horizon: horizon || 'Long Term',
-      downloadLinks: downloadLinks || []
+      downloadLinks: Array.isArray(downloadLinks) ? downloadLinks : []
     });
     const saved = await tip.save();
     res.status(201).json(mapTipToCamelCase(saved));
@@ -147,6 +160,7 @@ exports.updateTip = async (req, res) => {
     const {
       title,
       content,
+      description,
       status,
       buyRange,
       targetPrice,
@@ -156,15 +170,24 @@ exports.updateTip = async (req, res) => {
       downloadLinks
     } = req.body;
     const updates = {};
-    if (title) updates.title = title;
-    if (content) updates.content = content;
-    if (status) updates.status = status;
-    if (buyRange) updates.buyRange = buyRange;
-    if (targetPrice) updates.targetPrice = targetPrice;
-    if (addMoreAt) updates.addMoreAt = addMoreAt;
-    if (tipUrl) updates.tipUrl = tipUrl;
-    if (horizon) updates.horizon = horizon;
-    if (downloadLinks) updates.downloadLinks = downloadLinks;
+    if (title !== undefined) updates.title = title;
+    if (content !== undefined) {
+      if (!Array.isArray(content)) {
+        return res.status(400).json({ error: 'Content must be an array' });
+      }
+      if (content.some(item => !item.key || !item.value)) {
+        return res.status(400).json({ error: 'Each content item must have key and value' });
+      }
+      updates.content = content;
+    }
+    if (description !== undefined) updates.description = description;
+    if (status !== undefined) updates.status = status;
+    if (buyRange !== undefined) updates.buyRange = buyRange;
+    if (targetPrice !== undefined) updates.targetPrice = targetPrice;
+    if (addMoreAt !== undefined) updates.addMoreAt = addMoreAt;
+    if (tipUrl !== undefined) updates.tipUrl = tipUrl;
+    if (horizon !== undefined) updates.horizon = horizon;
+    if (downloadLinks !== undefined) updates.downloadLinks = downloadLinks;
     const tip = await Tip.findByIdAndUpdate(
       req.params.id,
       updates,
@@ -197,7 +220,7 @@ exports.getDownloadLinks = async (req, res) => {
   try {
     const tip = await Tip.findById(req.params.id);
     if (!tip) return res.status(404).json({ error: 'Tip not found' });
-    res.json(tip.downloadLinks || []);
+    res.json(Array.isArray(tip.downloadLinks) ? tip.downloadLinks : []);
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -214,7 +237,7 @@ exports.addDownloadLink = async (req, res) => {
     }
     const tip = await Tip.findById(req.params.id);
     if (!tip) return res.status(404).json({ error: 'Tip not found' });
-    tip.downloadLinks = tip.downloadLinks || [];
+    if (!Array.isArray(tip.downloadLinks)) tip.downloadLinks = [];
     tip.downloadLinks.push({ name, url });
     const updated = await tip.save();
     res.status(201).json(updated.downloadLinks[updated.downloadLinks.length - 1]);
@@ -234,6 +257,7 @@ exports.updateDownloadLink = async (req, res) => {
     }
     const tip = await Tip.findById(req.params.id);
     if (!tip) return res.status(404).json({ error: 'Tip not found' });
+    if (!Array.isArray(tip.downloadLinks)) tip.downloadLinks = [];
     const linkIndex = tip.downloadLinks.findIndex(link => link._id.toString() === req.params.linkId);
     if (linkIndex === -1) {
       return res.status(404).json({ error: 'Download link not found' });
@@ -254,6 +278,7 @@ exports.deleteDownloadLink = async (req, res) => {
   try {
     const tip = await Tip.findById(req.params.id);
     if (!tip) return res.status(404).json({ error: 'Tip not found' });
+    if (!Array.isArray(tip.downloadLinks)) tip.downloadLinks = [];
     const initialLength = tip.downloadLinks.length;
     tip.downloadLinks = tip.downloadLinks.filter(
       link => link._id.toString() !== req.params.linkId

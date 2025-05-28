@@ -7,30 +7,59 @@ const requireAdmin = require("../middleware/requirreAdmin");
  * @swagger
  * components:
  *   schemas:
+ *     DownloadLink:
+ *       type: object
+ *       required:
+ *         - name
+ *         - url
+ *       properties:
+ *         _id:
+ *           type: string
+ *           description: Unique identifier for the download link
+ *           example: "665f2e8b6c1d2b001f2c5a1b"
+ *         name:
+ *           type: string
+ *           description: Name of the document
+ *           example: "Research PDF"
+ *         url:
+ *           type: string
+ *           description: URL to the downloadable resource
+ *           example: "https://example.com/research.pdf"
  *     Tip:
  *       type: object
  *       required:
  *         - title
- *       description: |
- *         **Field names are case-insensitive when sending data (e.g. "buyRange", "BUYRANGE", "buyrange" all work), but spelling must be correct.**
- *         **All responses will always use the exact camelCase field names as shown below.**
+ *         - content
+ *         - description
  *       properties:
  *         _id:
  *           type: string
  *           description: Unique identifier of the tip
- *           example: 60f72b8a2e4e3c0015c4d1a2
+ *           example: "60f72b8a2e4e3c0015c4d1a2"
  *         portfolio:
  *           type: string
  *           description: ObjectId of the portfolio this tip belongs to (optional)
- *           example: 60f72a9b1d2f3b0014b3c0f1
+ *           example: "60f72a9b1d2f3b0014b3c0f1"
  *         title:
  *           type: string
  *           description: Short title of the tip
  *           example: "Rebalance quarterly"
  *         content:
+ *           type: array
+ *           description: Array of key-value pairs for tip content
+ *           items:
+ *             type: object
+ *             properties:
+ *               key:
+ *                 type: string
+ *                 example: "Strategy"
+ *               value:
+ *                 type: string
+ *                 example: "Review your asset allocations every quarter."
+ *         description:
  *           type: string
- *           description: Detailed content of the tip
- *           example: "Review your asset allocations every quarter to maintain risk profile."
+ *           description: Description of the tip
+ *           example: "Quarterly rebalancing keeps your risk profile in check."
  *         status:
  *           type: string
  *           enum: [Active, Closed]
@@ -73,14 +102,16 @@ const requireAdmin = require("../middleware/requirreAdmin");
  *           description: Timestamp when the tip was last updated
  */
 
-
 /**
  * @swagger
  * tags:
- *   name: Tips
- *   description: Management of portfolio tips
+ *   - name: Tips
+ *     description: Management of portfolio tips
+ *   - name: Download Links
+ *     description: Management of downloadable resources within tips
  */
 
+// Get all tips for a specific portfolio
 /**
  * @swagger
  * /api/tips/portfolios/{portfolioId}/tips:
@@ -106,18 +137,11 @@ const requireAdmin = require("../middleware/requirreAdmin");
  *               items:
  *                 $ref: '#/components/schemas/Tip'
  *       401:
- *         $ref: '#/components/responses/UnauthorizedError'
+ *         description: Unauthorized
  *       403:
- *         $ref: '#/components/responses/ForbiddenError'
+ *         description: Forbidden
  *       500:
  *         description: Server error
- *         content:
- *           application/json:
- *             schema:
- *               type: object
- *               properties:
- *                 error:
- *                   type: string
  */
 router.get(
   "/portfolios/:portfolioId/tips",
@@ -125,6 +149,7 @@ router.get(
   tipController.getTipsByPortfolio
 );
 
+// Get a single tip by ID
 /**
  * @swagger
  * /api/tips/{id}:
@@ -148,23 +173,17 @@ router.get(
  *             schema:
  *               $ref: '#/components/schemas/Tip'
  *       401:
- *         $ref: '#/components/responses/UnauthorizedError'
+ *         description: Unauthorized
  *       403:
- *         $ref: '#/components/responses/ForbiddenError'
+ *         description: Forbidden
  *       404:
- *         $ref: '#/components/responses/NotFoundError'
+ *         description: Not found
  *       500:
  *         description: Server error
- *         content:
- *           application/json:
- *             schema:
- *               type: object
- *               properties:
- *                 error:
- *                   type: string
  */
 router.get("/:id", requireAdmin, tipController.getTipById);
 
+// Create a new tip for a portfolio
 /**
  * @swagger
  * /api/tips/portfolios/{portfolioId}/tips:
@@ -185,46 +204,7 @@ router.get("/:id", requireAdmin, tipController.getTipById);
  *       content:
  *         application/json:
  *           schema:
- *             type: object
- *             required:
- *               - title
- *             properties:
- *               title:
- *                 type: string
- *                 example: "Buy below $150"
- *               content:
- *                 type: string
- *                 example: "This stock is undervalued at $150 and represents a good buying opportunity."
- *               status:
- *                 type: string
- *                 enum: [Active, Closed]
- *                 default: "Active"
- *               buyrange:
- *                 type: string
- *                 example: "140-155"
- *               targetprice:
- *                 type: string
- *                 example: "200"
- *               addmoreat:
- *                 type: string
- *                 example: "130"
- *               tipurl:
- *                 type: string
- *                 example: "https://example.com/analysis"
- *               horizon:
- *                 type: string
- *                 example: "Long Term"
- *               downloadLinks:
- *                 type: array
- *                 items:
- *                   type: object
- *                   properties:
- *                     name:
- *                       type: string
- *                       example: "Research PDF"
- *                     url:
- *                       type: string
- *                       example: "https://example.com/research.pdf"
+ *             $ref: '#/components/schemas/Tip'
  *     responses:
  *       201:
  *         description: Tip created successfully
@@ -234,17 +214,10 @@ router.get("/:id", requireAdmin, tipController.getTipById);
  *               $ref: '#/components/schemas/Tip'
  *       400:
  *         description: Invalid input
- *         content:
- *           application/json:
- *             schema:
- *               type: object
- *               properties:
- *                 error:
- *                   type: string
  *       401:
- *         $ref: '#/components/responses/UnauthorizedError'
+ *         description: Unauthorized
  *       403:
- *         $ref: '#/components/responses/ForbiddenError'
+ *         description: Forbidden
  */
 router.post(
   "/portfolios/:portfolioId/tips",
@@ -252,6 +225,7 @@ router.post(
   tipController.createTip
 );
 
+// Get all tips across all portfolios
 /**
  * @swagger
  * /api/tips:
@@ -270,21 +244,15 @@ router.post(
  *               items:
  *                 $ref: '#/components/schemas/Tip'
  *       401:
- *         $ref: '#/components/responses/UnauthorizedError'
+ *         description: Unauthorized
  *       403:
- *         $ref: '#/components/responses/ForbiddenError'
+ *         description: Forbidden
  *       500:
  *         description: Server error
- *         content:
- *           application/json:
- *             schema:
- *               type: object
- *               properties:
- *                 error:
- *                   type: string
  */
 router.get("/", requireAdmin, tipController.getalltipswithoutPortfolio);
 
+// Create a general tip (not associated with any portfolio)
 /**
  * @swagger
  * /api/tips:
@@ -298,46 +266,7 @@ router.get("/", requireAdmin, tipController.getalltipswithoutPortfolio);
  *       content:
  *         application/json:
  *           schema:
- *             type: object
- *             required:
- *               - title
- *             properties:
- *               title:
- *                 type: string
- *                 example: "Market Outlook Q2 2025"
- *               content:
- *                 type: string
- *                 example: "Our analysis suggests markets will trend higher in Q2 with technology leading."
- *               status:
- *                 type: string
- *                 enum: [Active, Closed]
- *                 default: "Active"
- *               buyRange:
- *                 type: string
- *                 example: "N/A"
- *               targetPrice:
- *                 type: string
- *                 example: "N/A"
- *               addMoreAt:
- *                 type: string
- *                 example: "N/A"
- *               tipUrl:
- *                 type: string
- *                 example: "https://example.com/market-outlook"
- *               horizon:
- *                 type: string
- *                 example: "Medium Term"
- *               downloadLinks:
- *                 type: array
- *                 items:
- *                   type: object
- *                   properties:
- *                     name:
- *                       type: string
- *                       example: "Full Report"
- *                     url:
- *                       type: string
- *                       example: "https://example.com/full-report.pdf"
+ *             $ref: '#/components/schemas/Tip'
  *     responses:
  *       201:
  *         description: Tip created successfully
@@ -347,20 +276,14 @@ router.get("/", requireAdmin, tipController.getalltipswithoutPortfolio);
  *               $ref: '#/components/schemas/Tip'
  *       400:
  *         description: Invalid input
- *         content:
- *           application/json:
- *             schema:
- *               type: object
- *               properties:
- *                 error:
- *                   type: string
  *       401:
- *         $ref: '#/components/responses/UnauthorizedError'
+ *         description: Unauthorized
  *       403:
- *         $ref: '#/components/responses/ForbiddenError'
+ *         description: Forbidden
  */
 router.post("/", requireAdmin, tipController.createTipWithoutPortfolio);
 
+// Update an existing tip
 /**
  * @swagger
  * /api/tips/{id}:
@@ -377,37 +300,11 @@ router.post("/", requireAdmin, tipController.createTipWithoutPortfolio);
  *         required: true
  *         description: MongoDB ObjectId of the tip to update
  *     requestBody:
+ *       required: true
  *       content:
  *         application/json:
  *           schema:
- *             type: object
- *             properties:
- *               title:
- *                 type: string
- *               content:
- *                 type: string
- *               status:
- *                 type: string
- *                 enum: [Active, Closed]
- *               buyRange:
- *                 type: string
- *               targetPrice:
- *                 type: string
- *               addMoreAt:
- *                 type: string
- *               tipUrl:
- *                 type: string
- *               horizon:
- *                 type: string
- *               downloadLinks:
- *                 type: array
- *                 items:
- *                   type: object
- *                   properties:
- *                     name:
- *                       type: string
- *                     url:
- *                       type: string
+ *             $ref: '#/components/schemas/Tip'
  *     responses:
  *       200:
  *         description: Updated tip
@@ -417,22 +314,16 @@ router.post("/", requireAdmin, tipController.createTipWithoutPortfolio);
  *               $ref: '#/components/schemas/Tip'
  *       400:
  *         description: Invalid input
- *         content:
- *           application/json:
- *             schema:
- *               type: object
- *               properties:
- *                 error:
- *                   type: string
  *       401:
- *         $ref: '#/components/responses/UnauthorizedError'
+ *         description: Unauthorized
  *       403:
- *         $ref: '#/components/responses/ForbiddenError'
+ *         description: Forbidden
  *       404:
- *         $ref: '#/components/responses/NotFoundError'
+ *         description: Not found
  */
 router.put("/:id", requireAdmin, tipController.updateTip);
 
+// Delete a tip
 /**
  * @swagger
  * /api/tips/{id}:
@@ -460,30 +351,17 @@ router.put("/:id", requireAdmin, tipController.updateTip);
  *                   type: string
  *                   example: "Tip deleted"
  *       401:
- *         $ref: '#/components/responses/UnauthorizedError'
+ *         description: Unauthorized
  *       403:
- *         $ref: '#/components/responses/ForbiddenError'
+ *         description: Forbidden
  *       404:
- *         $ref: '#/components/responses/NotFoundError'
+ *         description: Not found
  *       500:
  *         description: Server error
- *         content:
- *           application/json:
- *             schema:
- *               type: object
- *               properties:
- *                 error:
- *                   type: string
  */
 router.delete("/:id", requireAdmin, tipController.deleteTip);
 
-/**
- * @swagger
- * tags:
- *   name: Download Links
- *   description: Management of downloadable resources within tips
- */
-
+// Get all download links for a tip
 /**
  * @swagger
  * /api/tips/{id}/download-links:
@@ -509,31 +387,17 @@ router.delete("/:id", requireAdmin, tipController.deleteTip);
  *               items:
  *                 $ref: '#/components/schemas/DownloadLink'
  *       401:
- *         $ref: '#/components/responses/UnauthorizedError'
+ *         description: Unauthorized
  *       403:
- *         $ref: '#/components/responses/ForbiddenError'
+ *         description: Forbidden
  *       404:
  *         description: Tip not found
- *         content:
- *           application/json:
- *             schema:
- *               type: object
- *               properties:
- *                 error:
- *                   type: string
- *                   example: "Tip not found"
  *       500:
  *         description: Server error
- *         content:
- *           application/json:
- *             schema:
- *               type: object
- *               properties:
- *                 error:
- *                   type: string
  */
 router.get("/:id/download-links", requireAdmin, tipController.getDownloadLinks);
 
+// Add a download link to a tip
 /**
  * @swagger
  * /api/tips/{id}/download-links:
@@ -554,19 +418,7 @@ router.get("/:id/download-links", requireAdmin, tipController.getDownloadLinks);
  *       content:
  *         application/json:
  *           schema:
- *             type: object
- *             required:
- *               - name
- *               - url
- *             properties:
- *               name:
- *                 type: string
- *                 example: "Analyst Report"
- *                 description: Name of the document
- *               url:
- *                 type: string
- *                 example: "https://example.com/reports/analysis.pdf"
- *                 description: URL to the downloadable resource
+ *             $ref: '#/components/schemas/DownloadLink'
  *     responses:
  *       201:
  *         description: Download link added successfully
@@ -576,31 +428,16 @@ router.get("/:id/download-links", requireAdmin, tipController.getDownloadLinks);
  *               $ref: '#/components/schemas/DownloadLink'
  *       400:
  *         description: Invalid input
- *         content:
- *           application/json:
- *             schema:
- *               type: object
- *               properties:
- *                 error:
- *                   type: string
- *                   example: "Name and URL are required for download links"
  *       401:
- *         $ref: '#/components/responses/UnauthorizedError'
+ *         description: Unauthorized
  *       403:
- *         $ref: '#/components/responses/ForbiddenError'
+ *         description: Forbidden
  *       404:
  *         description: Tip not found
- *         content:
- *           application/json:
- *             schema:
- *               type: object
- *               properties:
- *                 error:
- *                   type: string
- *                   example: "Tip not found"
  */
 router.post("/:id/download-links", requireAdmin, tipController.addDownloadLink);
 
+// Update a download link
 /**
  * @swagger
  * /api/tips/{id}/download-links/{linkId}:
@@ -627,14 +464,7 @@ router.post("/:id/download-links", requireAdmin, tipController.addDownloadLink);
  *       content:
  *         application/json:
  *           schema:
- *             type: object
- *             properties:
- *               name:
- *                 type: string
- *                 example: "Updated Report Name"
- *               url:
- *                 type: string
- *                 example: "https://example.com/reports/updated-file.pdf"
+ *             $ref: '#/components/schemas/DownloadLink'
  *     responses:
  *       200:
  *         description: Updated download link
@@ -644,31 +474,16 @@ router.post("/:id/download-links", requireAdmin, tipController.addDownloadLink);
  *               $ref: '#/components/schemas/DownloadLink'
  *       400:
  *         description: Invalid input
- *         content:
- *           application/json:
- *             schema:
- *               type: object
- *               properties:
- *                 error:
- *                   type: string
- *                   example: "At least one field (name or URL) is required"
  *       401:
- *         $ref: '#/components/responses/UnauthorizedError'
+ *         description: Unauthorized
  *       403:
- *         $ref: '#/components/responses/ForbiddenError'
+ *         description: Forbidden
  *       404:
  *         description: Resource not found
- *         content:
- *           application/json:
- *             schema:
- *               type: object
- *               properties:
- *                 error:
- *                   type: string
- *                   example: "Resource not found"
  */
 router.put("/:id/download-links/:linkId", requireAdmin, tipController.updateDownloadLink);
 
+// Delete a download link
 /**
  * @swagger
  * /api/tips/{id}/download-links/{linkId}:
@@ -702,35 +517,14 @@ router.put("/:id/download-links/:linkId", requireAdmin, tipController.updateDown
  *                   type: string
  *                   example: "Download link deleted"
  *       401:
- *         $ref: '#/components/responses/UnauthorizedError'
+ *         description: Unauthorized
  *       403:
- *         $ref: '#/components/responses/ForbiddenError'
+ *         description: Forbidden
  *       404:
  *         description: Resource not found
- *         content:
- *           application/json:
- *             schema:
- *               type: object
- *               properties:
- *                 error:
- *                   type: string
- *                   example: "Resource not found"
  *       500:
  *         description: Server error
- *         content:
- *           application/json:
- *             schema:
- *               type: object
- *               properties:
- *                 error:
- *                   type: string
  */
 router.delete("/:id/download-links/:linkId", requireAdmin, tipController.deleteDownloadLink);
 
 module.exports = router;
-
-
-
-
-
-
