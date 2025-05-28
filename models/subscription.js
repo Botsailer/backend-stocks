@@ -68,6 +68,11 @@ const SubscriptionSchema = new Schema({
     required: [true, 'Product reference is required'],
     refPath: 'productType'
   },
+  portfolio: {
+  type: mongoose.Schema.Types.ObjectId,
+  ref: 'Portfolio', // or 'modelPortFolio' if that's your model name
+  required: true
+},
   lastPaidAt: {
     type: Date,
     default: null

@@ -24,9 +24,25 @@ const TipSchema = new Schema(
       required: true,
       trim: true,
     },
-    content: {
+    //content can be an array of objects with key-value pairs
+    content: [
+      {
+        key: {
+          type: String,
+          required: true,
+          trim: true,
+        },
+        value: {
+          type: String,
+          required: true,
+          trim: true,
+        },
+      },
+    ],
+    description: {
       type: String,
-      default: "",
+      required: true,
+      trim: true,
     },
     status: {
       type: String,

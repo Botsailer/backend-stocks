@@ -15,14 +15,42 @@ const requireAdmin = require('../middleware/requirreAdmin');
  *       scheme: bearer
  *       bearerFormat: JWT
  *   schemas:
+ *     DescriptionItem:
+ *       type: object
+ *       required:
+ *         - key
+ *         - value
+ *       properties:
+ *         key:
+ *           type: string
+ *           example: "Investment Strategy"
+ *         value:
+ *           type: string
+ *           example: "Long-term growth focused"
  *     DownloadLink:
+ *       type: object
+ *       required:
+ *         - linkType
+ *         - linkUrl
+ *       properties:
+ *         linkType:
+ *           type: string
+ *           example: "pdf"
+ *         linkUrl:
+ *           type: string
+ *           example: "https://example.com/prospectus.pdf"
+ *         createdAt:
+ *           type: string
+ *           format: date-time
+ *           readOnly: true
+ *     YouTubeLink:
  *       type: object
  *       required:
  *         - link
  *       properties:
  *         link:
  *           type: string
- *           example: "https://example.com/prospectus.pdf"
+ *           example: "https://youtube.com/watch?v=abc123"
  *         createdAt:
  *           type: string
  *           format: date-time
@@ -31,9 +59,9 @@ const requireAdmin = require('../middleware/requirreAdmin');
  *       type: object
  *       required:
  *         - symbol
- *         - weight
  *         - sector
- *         - price
+ *         - buyPrice
+ *         - quantity
  *       properties:
  *         symbol:
  *           type: string
@@ -42,6 +70,7 @@ const requireAdmin = require('../middleware/requirreAdmin');
  *           type: number
  *           format: float
  *           example: 25.5
+ *           readOnly: true
  *         sector:
  *           type: string
  *           example: "Technology"
@@ -49,10 +78,14 @@ const requireAdmin = require('../middleware/requirreAdmin');
  *           type: string
  *           enum: [Hold, Fresh-Buy, partial-sell, addon-buy, Sell]
  *           example: "Hold"
- *         price:
+ *         buyPrice:
  *           type: number
  *           format: float
  *           example: 150.25
+ *         quantity:
+ *           type: number
+ *           format: float
+ *           example: 10.5
  *     Portfolio:
  *       type: object
  *       required:
@@ -60,22 +93,34 @@ const requireAdmin = require('../middleware/requirreAdmin');
  *         - subscriptionFee
  *         - minInvestment
  *         - durationMonths
+ *         - cashBalance
+ *         - currentValue
  *       properties:
  *         name:
  *           type: string
  *           example: "Growth Fund"
  *         description:
- *           type: string
- *           example: "Aggressive tech-focused fund"
- *         cashRemaining:
+ *           type: array
+ *           items:
+ *             $ref: '#/components/schemas/DescriptionItem'
+ *           example:
+ *             - key: "Objective"
+ *               value: "Capital appreciation"
+ *             - key: "Risk Level"
+ *               value: "High"
+ *         cashBalance:
  *           type: number
  *           example: 1200.50
+ *         currentValue:
+ *           type: number
+ *           example: 10500.75
  *         subscriptionFee:
  *           type: number
  *           example: 99.99
  *         minInvestment:
  *           type: number
  *           example: 1000
+ *           readOnly: true
  *         durationMonths:
  *           type: integer
  *           example: 12
@@ -107,6 +152,9 @@ const requireAdmin = require('../middleware/requirreAdmin');
  *         oneYearGains:
  *           type: string
  *           example: "15%"
+ *         compareWith:
+ *           type: string
+ *           example: "NIFTY 50"
  *         holdings:
  *           type: array
  *           items:
@@ -115,17 +163,31 @@ const requireAdmin = require('../middleware/requirreAdmin');
  *           type: array
  *           items:
  *             $ref: '#/components/schemas/DownloadLink'
+ *         youTubeLinks:
+ *           type: array
+ *           items:
+ *             $ref: '#/components/schemas/YouTubeLink'
+ *         holdingsValue:
+ *           type: number
+ *           example: 9300.25
+ *           readOnly: true
  *   responses:
  *     Unauthorized:
  *       description: Missing or invalid token
  *     Forbidden:
  *       description: Not an admin
+ *     AllocationExceeded:
+ *       description: Total stock allocation exceeds minimum investment
+ *     NotFound:
+ *       description: Resource not found
+ *     BadRequest:
+ *       description: Validation error or invalid input
  */
 
 // ================================
-// @route   GET /api/portfolios
-// @desc    Get all portfolios
+// Portfolio CRUD Operations
 // ================================
+
 /**
  * @swagger
  * /api/portfolios:
@@ -143,13 +205,13 @@ const requireAdmin = require('../middleware/requirreAdmin');
  *               type: array
  *               items:
  *                 $ref: '#/components/schemas/Portfolio'
+ *       401:
+ *         $ref: '#/components/responses/Unauthorized'
+ *       403:
+ *         $ref: '#/components/responses/Forbidden'
  */
 router.get('/portfolios', requireAdmin, portfolioController.getAllPortfolios);
 
-// ================================
-// @route   GET /api/portfolios/:id
-// @desc    Get a single portfolio by ID
-// ================================
 /**
  * @swagger
  * /api/portfolios/{id}:
@@ -164,6 +226,7 @@ router.get('/portfolios', requireAdmin, portfolioController.getAllPortfolios);
  *         required: true
  *         schema:
  *           type: string
+ *         description: Portfolio ID
  *     responses:
  *       200:
  *         description: Portfolio data
@@ -171,15 +234,15 @@ router.get('/portfolios', requireAdmin, portfolioController.getAllPortfolios);
  *           application/json:
  *             schema:
  *               $ref: '#/components/schemas/Portfolio'
+ *       401:
+ *         $ref: '#/components/responses/Unauthorized'
+ *       403:
+ *         $ref: '#/components/responses/Forbidden'
  *       404:
- *         description: Portfolio not found
+ *         $ref: '#/components/responses/NotFound'
  */
 router.get('/portfolios/:id', requireAdmin, portfolioController.getPortfolioById);
 
-// ================================
-// @route   POST /api/portfolios
-// @desc    Create a new portfolio
-// ================================
 /**
  * @swagger
  * /api/portfolios:
@@ -196,35 +259,41 @@ router.get('/portfolios/:id', requireAdmin, portfolioController.getPortfolioById
  *             $ref: '#/components/schemas/Portfolio'
  *           example:
  *             name: "Tech Growth"
- *             description: "Tech focused portfolio"
+ *             description: 
+ *               - key: "Strategy"
+ *                 value: "Tech focused"
+ *               - key: "Risk"
+ *                 value: "High"
  *             subscriptionFee: 149.99
  *             minInvestment: 5000
  *             durationMonths: 12
  *             PortfolioCategory: "Premium"
- *             timeHorizon: "3 years"
- *             rebalancing: "Monthly"
- *             index: "NASDAQ 100"
- *             details: "AI & cloud based companies"
- *             monthlyGains: "1.2%"
- *             CAGRSinceInception: "11.3%"
- *             oneYearGains: "14.7%"
  *             holdings:
  *               - symbol: "TSLA"
- *                 weight: 40
  *                 sector: "Automotive"
- *                 price: 250.50
+ *                 buyPrice: 250.50
+ *                 quantity: 20
  *             downloadLinks:
- *               - link: "https://example.com/tech-growth.pdf"
+ *               - linkType: "pdf"
+ *                 linkUrl: "https://example.com/prospectus.pdf"
+ *             youTubeLinks:
+ *               - link: "https://youtube.com/watch?v=xyz456"
  *     responses:
  *       201:
  *         description: Created portfolio
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/Portfolio'
+ *       400:
+ *         $ref: '#/components/responses/BadRequest'
+ *       401:
+ *         $ref: '#/components/responses/Unauthorized'
+ *       403:
+ *         $ref: '#/components/responses/Forbidden'
  */
 router.post('/portfolios', requireAdmin, portfolioController.createPortfolio);
 
-// ================================
-// @route   PUT /api/portfolios/:id
-// @desc    Update portfolio
-// ================================
 /**
  * @swagger
  * /api/portfolios/{id}:
@@ -239,6 +308,7 @@ router.post('/portfolios', requireAdmin, portfolioController.createPortfolio);
  *         required: true
  *         schema:
  *           type: string
+ *         description: Portfolio ID
  *     requestBody:
  *       required: true
  *       content:
@@ -247,20 +317,35 @@ router.post('/portfolios', requireAdmin, portfolioController.createPortfolio);
  *             $ref: '#/components/schemas/Portfolio'
  *           example:
  *             name: "Updated Tech Growth"
+ *             description: 
+ *               - key: "Strategy"
+ *                 value: "Updated tech focus"
+ *             holdings:
+ *               - symbol: "TSLA"
+ *                 sector: "Automotive"
+ *                 buyPrice: 260.75
+ *                 quantity: 22
  *             downloadLinks:
- *               - link: "https://new.example.com/updated-docs.pdf"
+ *               - linkType: "excel"
+ *                 linkUrl: "https://example.com/data.xlsx"
  *     responses:
  *       200:
- *         description: Portfolio updated successfully
+ *         description: Portfolio updated
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/Portfolio'
  *       400:
- *         description: Validation error
+ *         $ref: '#/components/responses/BadRequest'
+ *       401:
+ *         $ref: '#/components/responses/Unauthorized'
+ *       403:
+ *         $ref: '#/components/responses/Forbidden'
+ *       404:
+ *         $ref: '#/components/responses/NotFound'
  */
 router.put('/portfolios/:id', requireAdmin, portfolioController.updatePortfolio);
 
-// ================================
-// @route   DELETE /api/portfolios/:id
-// @desc    Delete portfolio and related price logs
-// ================================
 /**
  * @swagger
  * /api/portfolios/{id}:
@@ -275,12 +360,190 @@ router.put('/portfolios/:id', requireAdmin, portfolioController.updatePortfolio)
  *         required: true
  *         schema:
  *           type: string
+ *         description: Portfolio ID
  *     responses:
  *       200:
- *         description: Portfolio and associated logs deleted
+ *         description: Portfolio deleted
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 message:
+ *                   type: string
+ *                   example: "Portfolio deleted successfully"
+ *       401:
+ *         $ref: '#/components/responses/Unauthorized'
+ *       403:
+ *         $ref: '#/components/responses/Forbidden'
  *       404:
- *         description: Portfolio not found
+ *         $ref: '#/components/responses/NotFound'
  */
 router.delete('/portfolios/:id', requireAdmin, portfolioController.deletePortfolio);
+
+// ================================
+// YouTube Links CRUD Operations
+// ================================
+
+/**
+ * @swagger
+ * /api/portfolios/{id}/youtube:
+ *   post:
+ *     summary: Add YouTube link to portfolio
+ *     tags: [Portfolios]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema:
+ *           type: string
+ *         description: Portfolio ID
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             $ref: '#/components/schemas/YouTubeLink'
+ *           example:
+ *             link: "https://youtube.com/watch?v=newvideo123"
+ *     responses:
+ *       201:
+ *         description: YouTube link added
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/Portfolio'
+ *       400:
+ *         $ref: '#/components/responses/BadRequest'
+ *       401:
+ *         $ref: '#/components/responses/Unauthorized'
+ *       403:
+ *         $ref: '#/components/responses/Forbidden'
+ *       404:
+ *         $ref: '#/components/responses/NotFound'
+ */
+router.post('/portfolios/:id/youtube', requireAdmin, portfolioController.addYouTubeLink);
+
+/**
+ * @swagger
+ * /api/portfolios/{id}/youtube/{linkId}:
+ *   delete:
+ *     summary: Remove YouTube link from portfolio
+ *     tags: [Portfolios]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema:
+ *           type: string
+ *         description: Portfolio ID
+ *       - in: path
+ *         name: linkId
+ *         required: true
+ *         schema:
+ *           type: string
+ *         description: YouTube link ID
+ *     responses:
+ *       200:
+ *         description: YouTube link removed
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/Portfolio'
+ *       401:
+ *         $ref: '#/components/responses/Unauthorized'
+ *       403:
+ *         $ref: '#/components/responses/Forbidden'
+ *       404:
+ *         description: Portfolio or link not found
+ */
+router.delete('/portfolios/:id/youtube/:linkId', requireAdmin, portfolioController.removeYouTubeLink);
+
+// ================================
+// Download Links CRUD Operations
+// ================================
+
+/**
+ * @swagger
+ * /api/portfolios/{id}/downloads:
+ *   post:
+ *     summary: Add download link to portfolio
+ *     tags: [Portfolios]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema:
+ *           type: string
+ *         description: Portfolio ID
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             $ref: '#/components/schemas/DownloadLink'
+ *           example:
+ *             linkType: "pdf"
+ *             linkUrl: "https://example.com/new-document.pdf"
+ *     responses:
+ *       201:
+ *         description: Download link added
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/Portfolio'
+ *       400:
+ *         $ref: '#/components/responses/BadRequest'
+ *       401:
+ *         $ref: '#/components/responses/Unauthorized'
+ *       403:
+ *         $ref: '#/components/responses/Forbidden'
+ *       404:
+ *         $ref: '#/components/responses/NotFound'
+ */
+router.post('/portfolios/:id/downloads', requireAdmin, portfolioController.addDownloadLink);
+
+/**
+ * @swagger
+ * /api/portfolios/{id}/downloads/{linkId}:
+ *   delete:
+ *     summary: Remove download link from portfolio
+ *     tags: [Portfolios]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema:
+ *           type: string
+ *         description: Portfolio ID
+ *       - in: path
+ *         name: linkId
+ *         required: true
+ *         schema:
+ *           type: string
+ *         description: Download link ID
+ *     responses:
+ *       200:
+ *         description: Download link removed
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/Portfolio'
+ *       401:
+ *         $ref: '#/components/responses/Unauthorized'
+ *       403:
+ *         $ref: '#/components/responses/Forbidden'
+ *       404:
+ *         description: Portfolio or link not found
+ */
+router.delete('/portfolios/:id/downloads/:linkId', requireAdmin, portfolioController.removeDownloadLink);
 
 module.exports = router;

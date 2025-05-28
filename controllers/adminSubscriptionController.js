@@ -7,7 +7,8 @@
  */
 const Subscription = require('../models/subscription');
 
-exports.listSubscriptions = async (req, res) => {
+exports.
+listSubscriptions = async (req, res) => {
   try {
     // Remove the problematic paymentHistory populate
     const subs = await Subscription.find()
