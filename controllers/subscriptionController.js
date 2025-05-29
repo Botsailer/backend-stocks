@@ -16,17 +16,23 @@ async function getRazorpayInstance() {
   return new Razorpay(paymentConfig);
 }
 
-// Helper: Calculate total amount for cart
 async function calculateCartAmount(cart) {
   let total = 0;
   for (const item of cart.items) {
     const portfolio = await Portfolio.findById(item.portfolio);
     if (!portfolio) throw new Error('Portfolio not found');
-    total += (portfolio.subscriptionFee || 0) * item.quantity;
+    
+    // Find the selected plan price
+    const plan = portfolio.subscriptionFee.find(
+      fee => fee.type === item.planType
+    );
+    
+    if (!plan) throw new Error('Subscription plan not found');
+    
+    total += plan.price * item.quantity;
   }
   return total;
 }
-
 // Create payment order for a single product
 exports.createOrder = async (req, res) => {
   try {

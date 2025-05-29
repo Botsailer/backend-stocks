@@ -45,9 +45,25 @@ exports.createPortfolio = asyncHandler(async (req, res) => {
     return res.status(400).json({ error: 'Missing required fields' });
   }
 
+  // Validate subscription fee structure
+  if (!Array.isArray(subscriptionFee) || subscriptionFee.length === 0 ||
+      subscriptionFee.some(fee => !fee.type || fee.price == null)) {
+    return res.status(400).json({ error: 'Invalid subscription fee structure' });
+  }
+
   // Validate description items
   if (description.some(item => !item.key || !item.value)) {
     return res.status(400).json({ error: 'Description items must have key and value' });
+  }
+
+  // Validate holdings
+  if (holdings.some(holding => 
+    !holding.minimumInvestmentValueStock || 
+    holding.minimumInvestmentValueStock < 1
+  )) {
+    return res.status(400).json({ 
+      error: 'All holdings must have minimumInvestmentValueStock >= 1' 
+    });
   }
 
   // Validate holdings cost doesn't exceed minInvestment
@@ -101,16 +117,35 @@ exports.updatePortfolio = asyncHandler(async (req, res) => {
     return res.status(400).json({ error: 'Minimum investment cannot be changed after creation' });
   }
 
+  // Validate subscription fee if provided
+  if (req.body.subscriptionFee) {
+    if (!Array.isArray(req.body.subscriptionFee) || req.body.subscriptionFee.length === 0 ||
+        req.body.subscriptionFee.some(fee => !fee.type || fee.price == null)) {
+      return res.status(400).json({ error: 'Invalid subscription fee structure' });
+    }
+  }
+
   // Validate description items
   if (req.body.description && req.body.description.some(item => !item.key || !item.value)) {
     return res.status(400).json({ error: 'Description items must have key and value' });
   }
 
+  // Validate holdings
+  if (req.body.holdings && req.body.holdings.some(holding => 
+    !holding.minimumInvestmentValueStock || 
+    holding.minimumInvestmentValueStock < 1
+  )) {
+    return res.status(400).json({ 
+      error: 'All holdings must have minimumInvestmentValueStock >= 1' 
+    });
+  }
+
   // Update only allowed fields
   const allowedUpdates = [
-    'name', 'description', 'expiryDate', 'holdings', 'PortfolioCategory', 'downloadLinks',
-    'youTubeLinks', 'timeHorizon', 'rebalancing', 'index', 'details', 'monthlyGains',
-    'CAGRSinceInception', 'oneYearGains', 'compareWith', 'cashBalance', 'currentValue'
+    'name', 'description', 'subscriptionFee', 'expiryDate', 'holdings', 
+    'PortfolioCategory', 'downloadLinks', 'youTubeLinks', 'timeHorizon', 
+    'rebalancing', 'index', 'details', 'monthlyGains', 'CAGRSinceInception', 
+    'oneYearGains', 'compareWith', 'cashBalance', 'currentValue'
   ];
   
   allowedUpdates.forEach(field => {
@@ -171,7 +206,7 @@ exports.removeYouTubeLink = asyncHandler(async (req, res) => {
   res.status(200).json(portfolio);
 });
 
-// Updated to support linkType
+// Updated to support linkType and linkDiscription
 exports.addDownloadLink = asyncHandler(async (req, res) => {
   const portfolio = await Portfolio.findById(req.params.id);
   if (!portfolio) return res.status(404).json({ error: 'Portfolio not found' });
@@ -183,7 +218,8 @@ exports.addDownloadLink = asyncHandler(async (req, res) => {
 
   portfolio.downloadLinks.push({
     linkType: req.body.linkType,
-    linkUrl: req.body.linkUrl
+    linkUrl: req.body.linkUrl,
+    linkDiscription: req.body.linkDiscription || ''
   });
   
   await portfolio.save();

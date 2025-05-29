@@ -1,7 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const portfolioController = require('../controllers/portfolioController');
-const requireAdmin = require('../middleware/requirreAdmin');
+const requireAdmin = require('../middleware/requireAdmin');
 
 /**
  * @swagger
@@ -15,6 +15,20 @@ const requireAdmin = require('../middleware/requirreAdmin');
  *       scheme: bearer
  *       bearerFormat: JWT
  *   schemas:
+ *     SubscriptionFee:
+ *       type: object
+ *       required:
+ *         - type
+ *         - price
+ *       properties:
+ *         type:
+ *           type: string
+ *           enum: [monthly, quarterly, yearly]
+ *           example: "yearly"
+ *         price:
+ *           type: number
+ *           format: float
+ *           example: 149.99
  *     DescriptionItem:
  *       type: object
  *       required:
@@ -39,6 +53,9 @@ const requireAdmin = require('../middleware/requirreAdmin');
  *         linkUrl:
  *           type: string
  *           example: "https://example.com/prospectus.pdf"
+ *         linkDiscription:
+ *           type: string
+ *           example: "Portfolio prospectus"
  *         createdAt:
  *           type: string
  *           format: date-time
@@ -62,6 +79,7 @@ const requireAdmin = require('../middleware/requirreAdmin');
  *         - sector
  *         - buyPrice
  *         - quantity
+ *         - minimumInvestmentValueStock
  *       properties:
  *         symbol:
  *           type: string
@@ -74,6 +92,10 @@ const requireAdmin = require('../middleware/requirreAdmin');
  *         sector:
  *           type: string
  *           example: "Technology"
+ *         stockCapType:
+ *           type: string
+ *           enum: [small cap, mid cap, large cap, micro cap, mega cap]
+ *           example: "large cap"
  *         status:
  *           type: string
  *           enum: [Hold, Fresh-Buy, partial-sell, addon-buy, Sell]
@@ -86,6 +108,9 @@ const requireAdmin = require('../middleware/requirreAdmin');
  *           type: number
  *           format: float
  *           example: 10.5
+ *         minimumInvestmentValueStock:
+ *           type: number
+ *           example: 1000
  *     Portfolio:
  *       type: object
  *       required:
@@ -93,8 +118,6 @@ const requireAdmin = require('../middleware/requirreAdmin');
  *         - subscriptionFee
  *         - minInvestment
  *         - durationMonths
- *         - cashBalance
- *         - currentValue
  *       properties:
  *         name:
  *           type: string
@@ -111,12 +134,20 @@ const requireAdmin = require('../middleware/requirreAdmin');
  *         cashBalance:
  *           type: number
  *           example: 1200.50
+ *           readOnly: true
  *         currentValue:
  *           type: number
  *           example: 10500.75
+ *           readOnly: true
  *         subscriptionFee:
- *           type: number
- *           example: 99.99
+ *           type: array
+ *           items:
+ *             $ref: '#/components/schemas/SubscriptionFee'
+ *           example:
+ *             - type: "monthly"
+ *               price: 19.99
+ *             - type: "yearly"
+ *               price: 199.99
  *         minInvestment:
  *           type: number
  *           example: 1000
@@ -264,7 +295,11 @@ router.get('/portfolios/:id', requireAdmin, portfolioController.getPortfolioById
  *                 value: "Tech focused"
  *               - key: "Risk"
  *                 value: "High"
- *             subscriptionFee: 149.99
+ *             subscriptionFee:
+ *               - type: "monthly"
+ *                 price: 19.99
+ *               - type: "yearly"
+ *                 price: 199.99
  *             minInvestment: 5000
  *             durationMonths: 12
  *             PortfolioCategory: "Premium"
@@ -273,9 +308,12 @@ router.get('/portfolios/:id', requireAdmin, portfolioController.getPortfolioById
  *                 sector: "Automotive"
  *                 buyPrice: 250.50
  *                 quantity: 20
+ *                 minimumInvestmentValueStock: 1000
+ *                 stockCapType: "large cap"
  *             downloadLinks:
  *               - linkType: "pdf"
  *                 linkUrl: "https://example.com/prospectus.pdf"
+ *                 linkDiscription: "Fund prospectus"
  *             youTubeLinks:
  *               - link: "https://youtube.com/watch?v=xyz456"
  *     responses:
@@ -325,9 +363,12 @@ router.post('/portfolios', requireAdmin, portfolioController.createPortfolio);
  *                 sector: "Automotive"
  *                 buyPrice: 260.75
  *                 quantity: 22
+ *                 minimumInvestmentValueStock: 1000
+ *                 stockCapType: "large cap"
  *             downloadLinks:
  *               - linkType: "excel"
  *                 linkUrl: "https://example.com/data.xlsx"
+ *                 linkDiscription: "Portfolio holdings"
  *     responses:
  *       200:
  *         description: Portfolio updated
@@ -491,6 +532,7 @@ router.delete('/portfolios/:id/youtube/:linkId', requireAdmin, portfolioControll
  *           example:
  *             linkType: "pdf"
  *             linkUrl: "https://example.com/new-document.pdf"
+ *             linkDiscription: "Updated prospectus"
  *     responses:
  *       201:
  *         description: Download link added

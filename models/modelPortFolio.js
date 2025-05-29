@@ -10,6 +10,20 @@ const { Schema } = mongoose;
  * - buyPrice: the price per share at time of purchase
  * - quantity: number of shares held
  */
+
+const subscriptionFeeSchema = new Schema({
+  type: {
+    type: String,
+    enum: ['monthly', 'quarterly', 'yearly'],
+    required: true
+  },
+  price: {
+    type: Number,
+    required: true,
+    min: 0
+  }
+}, { _id: false });
+
 const StockHoldingSchema = new Schema({
   symbol: {
     type: String,
@@ -29,6 +43,11 @@ const StockHoldingSchema = new Schema({
     required: true,
     trim: true
   },
+  stockCapType: {
+    type: String,
+    enum: ['small cap', 'mid cap', 'large cap', 'micro cap', 'mega cap'],
+    required: false
+  },
   status: {
     type: String,
     enum: ['Hold', 'Fresh-Buy', 'partial-sell', 'addon-buy', 'Sell'],
@@ -38,6 +57,11 @@ const StockHoldingSchema = new Schema({
     type: Number,
     required: true,
     min: 0.01
+  },
+  minimumInvestmentValueStock: {
+    type: Number,
+    required: true,
+    min: 1
   },
   quantity: {
     type: Number,
@@ -56,6 +80,10 @@ const portfolioDownLoadLinkSchema = new Schema({
   linkUrl: {
     type: String,
     required: true
+  },
+  linkDiscription: {
+    type: String,
+    required: false
   },
   createdAt: {
     type: Date,
@@ -139,9 +167,9 @@ const PortfolioSchema = new Schema({
     required: false
   },
   subscriptionFee: {
-    type: Number,
+    type: [subscriptionFeeSchema],
     required: true,
-    min: 0
+    validate: v => Array.isArray(v) && v.length > 0
   },
   minInvestment: {
     type: Number,
@@ -184,6 +212,7 @@ const PortfolioSchema = new Schema({
   toJSON: { virtuals: true },
   toObject: { virtuals: true }
 });
+
 // Virtual for total holdings value (cost basis)
 PortfolioSchema.virtual('holdingsValue').get(function() {
   return this.holdings.reduce((sum, holding) => 

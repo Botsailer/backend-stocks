@@ -10,6 +10,7 @@ const downloadLinksSchema = new Schema({
     type: String,
     required: true,
   },
+
 });
 
 const TipSchema = new Schema(
@@ -23,6 +24,10 @@ const TipSchema = new Schema(
       type: String,
       required: true,
       trim: true,
+    },
+    stockId :{
+      type:String,
+      required:true
     },
     //content can be an array of objects with key-value pairs
     content: [
@@ -49,10 +54,15 @@ const TipSchema = new Schema(
       enum: ["Active", "Closed"],
       default: "Active",
     },
+    action:String, //here action will be buy sell hold partial profit
     buyRange: String,
     targetPrice: String,
+    targetPercentage:String,
     addMoreAt: String,
     tipUrl: String,
+    exitPrice:String,
+    exitStatus:String,
+    exitStatusPercentage: String,
     horizon: { type: String, default: "Long Term" },
   },
   {

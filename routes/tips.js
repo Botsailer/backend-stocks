@@ -29,6 +29,7 @@ const requireAdmin = require("../middleware/requirreAdmin");
  *       type: object
  *       required:
  *         - title
+ *         - stockId
  *         - content
  *         - description
  *       properties:
@@ -44,6 +45,10 @@ const requireAdmin = require("../middleware/requirreAdmin");
  *           type: string
  *           description: Short title of the tip
  *           example: "Rebalance quarterly"
+ *         stockId:
+ *           type: string
+ *           description: Stock identifier associated with the tip
+ *           example: "AAPL"
  *         content:
  *           type: array
  *           description: Array of key-value pairs for tip content
@@ -66,6 +71,10 @@ const requireAdmin = require("../middleware/requirreAdmin");
  *           description: Whether the tip is still Active or has been Closed
  *           default: "Active"
  *           example: "Active"
+ *         action:
+ *           type: string
+ *           description: Recommended action for the stock (Buy/Sell/Hold/Partial Profit)
+ *           example: "Buy"
  *         buyRange:
  *           type: string
  *           description: The recommended buy range for the stock
@@ -74,6 +83,10 @@ const requireAdmin = require("../middleware/requirreAdmin");
  *           type: string
  *           description: The target price for the stock
  *           example: "180"
+ *         targetPercentage:
+ *           type: string
+ *           description: Expected percentage gain from the tip
+ *           example: "20%"
  *         addMoreAt:
  *           type: string
  *           description: The price point to add more to the position
@@ -82,6 +95,18 @@ const requireAdmin = require("../middleware/requirreAdmin");
  *           type: string
  *           description: URL with additional information about the tip
  *           example: "https://example.com/analysis/stock-xyz"
+ *         exitPrice:
+ *           type: string
+ *           description: Price at which to exit the position
+ *           example: "200"
+ *         exitStatus:
+ *           type: string
+ *           description: Final status when exiting the position
+ *           example: "Target Achieved"
+ *         exitStatusPercentage:
+ *           type: string
+ *           description: Percentage gain/loss at exit
+ *           example: "25%"
  *         horizon:
  *           type: string
  *           description: Investment time horizon for the tip

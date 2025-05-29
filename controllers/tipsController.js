@@ -1,26 +1,25 @@
-/**
- * Tips Controller
- * Handles CRUD operations for portfolio tips and download links
- */
 const Tip = require('../models/portfolioTips');
 const Portfolio = require('../models/modelPortFolio');
 
-/**
- * Utility function to map Tip document to camelCase response
- */
 function mapTipToCamelCase(tip) {
   if (!tip) return null;
   return {
     id: tip._id,
     portfolio: tip.portfolio,
     title: tip.title,
+    stockId: tip.stockId,
     content: tip.content,
     description: tip.description,
     status: tip.status,
+    action: tip.action,
     buyRange: tip.buyRange,
     targetPrice: tip.targetPrice,
+    targetPercentage: tip.targetPercentage,
     addMoreAt: tip.addMoreAt,
     tipUrl: tip.tipUrl,
+    exitPrice: tip.exitPrice,
+    exitStatus: tip.exitStatus,
+    exitStatusPercentage: tip.exitStatusPercentage,
     horizon: tip.horizon,
     downloadLinks: tip.downloadLinks,
     createdAt: tip.createdAt,
@@ -28,9 +27,6 @@ function mapTipToCamelCase(tip) {
   };
 }
 
-/**
- * Get all tips for a specific portfolio
- */
 exports.getTipsByPortfolio = async (req, res) => {
   try {
     const tips = await Tip.find({ portfolio: req.params.portfolioId }).sort('-createdAt');
@@ -40,9 +36,6 @@ exports.getTipsByPortfolio = async (req, res) => {
   }
 };
 
-/**
- * Get a single tip by ID
- */
 exports.getTipById = async (req, res) => {
   try {
     const tip = await Tip.findById(req.params.id);
@@ -53,27 +46,30 @@ exports.getTipById = async (req, res) => {
   }
 };
 
-/**
- * Create a new tip associated with a portfolio
- */
 exports.createTip = async (req, res) => {
   try {
     const {
       title,
+      stockId,
       content,
       description,
       status,
+      action,
       buyRange,
       targetPrice,
+      targetPercentage,
       addMoreAt,
       tipUrl,
+      exitPrice,
+      exitStatus,
+      exitStatusPercentage,
       horizon,
       downloadLinks
     } = req.body;
     const portfolio = await Portfolio.findById(req.params.portfolioId);
     if (!portfolio) return res.status(400).json({ error: 'Invalid portfolio' });
-    if (!title || !Array.isArray(content) || !description) {
-      return res.status(400).json({ error: 'Title, content (array), and description are required' });
+    if (!title || !stockId || !Array.isArray(content) || !description) {
+      return res.status(400).json({ error: 'Title, stockId, content (array), and description are required' });
     }
     if (content.some(item => !item.key || !item.value)) {
       return res.status(400).json({ error: 'Each content item must have key and value' });
@@ -81,13 +77,19 @@ exports.createTip = async (req, res) => {
     const tip = new Tip({
       portfolio: portfolio._id,
       title,
+      stockId,
       content,
       description,
       status: status || 'Active',
+      action,
       buyRange,
       targetPrice,
+      targetPercentage,
       addMoreAt,
       tipUrl,
+      exitPrice,
+      exitStatus,
+      exitStatusPercentage,
       horizon: horizon || 'Long Term',
       downloadLinks: Array.isArray(downloadLinks) ? downloadLinks : []
     });
@@ -98,9 +100,6 @@ exports.createTip = async (req, res) => {
   }
 };
 
-/**
- * Get all tips (with or without portfolio association)
- */
 exports.getalltipswithoutPortfolio = async (req, res) => {
   try {
     const tips = await Tip.find().sort('-createdAt');
@@ -110,38 +109,47 @@ exports.getalltipswithoutPortfolio = async (req, res) => {
   }
 };
 
-/**
- * Create a new tip without portfolio association (general tip)
- */
 exports.createTipWithoutPortfolio = async (req, res) => {
   try {
     const {
       title,
+      stockId,
       content,
       description,
       status,
+      action,
       buyRange,
       targetPrice,
+      targetPercentage,
       addMoreAt,
       tipUrl,
+      exitPrice,
+      exitStatus,
+      exitStatusPercentage,
       horizon,
       downloadLinks
     } = req.body;
-    if (!title || !Array.isArray(content) || !description) {
-      return res.status(400).json({ error: 'Title, content (array), and description are required' });
+    if (!title || !stockId || !Array.isArray(content) || !description) {
+      return res.status(400).json({ error: 'Title, stockId, content (array), and description are required' });
     }
     if (content.some(item => !item.key || !item.value)) {
       return res.status(400).json({ error: 'Each content item must have key and value' });
     }
     const tip = new Tip({
       title,
+      stockId,
       content,
       description,
       status: status || 'Active',
+      action,
       buyRange,
       targetPrice,
+      targetPercentage,
       addMoreAt,
       tipUrl,
+      exitPrice,
+      exitStatus,
+      exitStatusPercentage,
       horizon: horizon || 'Long Term',
       downloadLinks: Array.isArray(downloadLinks) ? downloadLinks : []
     });
@@ -152,25 +160,29 @@ exports.createTipWithoutPortfolio = async (req, res) => {
   }
 };
 
-/**
- * Update an existing tip
- */
 exports.updateTip = async (req, res) => {
   try {
     const {
       title,
+      stockId,
       content,
       description,
       status,
+      action,
       buyRange,
       targetPrice,
+      targetPercentage,
       addMoreAt,
       tipUrl,
+      exitPrice,
+      exitStatus,
+      exitStatusPercentage,
       horizon,
       downloadLinks
     } = req.body;
     const updates = {};
     if (title !== undefined) updates.title = title;
+    if (stockId !== undefined) updates.stockId = stockId;
     if (content !== undefined) {
       if (!Array.isArray(content)) {
         return res.status(400).json({ error: 'Content must be an array' });
@@ -182,10 +194,15 @@ exports.updateTip = async (req, res) => {
     }
     if (description !== undefined) updates.description = description;
     if (status !== undefined) updates.status = status;
+    if (action !== undefined) updates.action = action;
     if (buyRange !== undefined) updates.buyRange = buyRange;
     if (targetPrice !== undefined) updates.targetPrice = targetPrice;
+    if (targetPercentage !== undefined) updates.targetPercentage = targetPercentage;
     if (addMoreAt !== undefined) updates.addMoreAt = addMoreAt;
     if (tipUrl !== undefined) updates.tipUrl = tipUrl;
+    if (exitPrice !== undefined) updates.exitPrice = exitPrice;
+    if (exitStatus !== undefined) updates.exitStatus = exitStatus;
+    if (exitStatusPercentage !== undefined) updates.exitStatusPercentage = exitStatusPercentage;
     if (horizon !== undefined) updates.horizon = horizon;
     if (downloadLinks !== undefined) updates.downloadLinks = downloadLinks;
     const tip = await Tip.findByIdAndUpdate(
@@ -200,9 +217,6 @@ exports.updateTip = async (req, res) => {
   }
 };
 
-/**
- * Delete a tip by ID
- */
 exports.deleteTip = async (req, res) => {
   try {
     const tip = await Tip.findByIdAndDelete(req.params.id);
@@ -213,9 +227,6 @@ exports.deleteTip = async (req, res) => {
   }
 };
 
-/**
- * Get all download links for a tip
- */
 exports.getDownloadLinks = async (req, res) => {
   try {
     const tip = await Tip.findById(req.params.id);
@@ -226,9 +237,6 @@ exports.getDownloadLinks = async (req, res) => {
   }
 };
 
-/**
- * Add a download link to a tip
- */
 exports.addDownloadLink = async (req, res) => {
   try {
     const { name, url } = req.body;
@@ -246,9 +254,6 @@ exports.addDownloadLink = async (req, res) => {
   }
 };
 
-/**
- * Update a download link in a tip
- */
 exports.updateDownloadLink = async (req, res) => {
   try {
     const { name, url } = req.body;
@@ -271,9 +276,6 @@ exports.updateDownloadLink = async (req, res) => {
   }
 };
 
-/**
- * Delete a download link from a tip
- */
 exports.deleteDownloadLink = async (req, res) => {
   try {
     const tip = await Tip.findById(req.params.id);
