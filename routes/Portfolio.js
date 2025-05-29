@@ -1,7 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const portfolioController = require('../controllers/portfolioController');
-const requireAdmin = require('../middleware/requireAdmin');
+const requireAdmin = require('../middleware/requirreAdmin');
 
 /**
  * @swagger
