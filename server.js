@@ -40,9 +40,9 @@ dbAdapter.connect()
     app.use('/api/subscriptions', require('./routes/Subscription'));
     app.use('/api/admin/subscriptions', require('./routes/adminSubscription'));
     app.use('/api/stock-symbols', require('./routes/stocksymbol'));
-
+    app.use('/api/faqs', require('./routes/faqRoute'));
     app.use('/api/tips', require('./routes/tips')); 
-app.use('/api/bundles', require('./routes/bundleRouter'));
+    app.use('/api/bundles', require('./routes/bundleRouter'));
     app.use('/api/admin/configs', require('./routes/configRoute'));
     app.listen(config.server.port, () =>
       console.log(`Auth service running on port ${config.server.port}`),
