@@ -1,4 +1,4 @@
-const FAQ = require('../models/FAQ');
+const FAQ = require('../models/faqschema');
 const { validationResult } = require('express-validator');
 
 const asyncHandler = fn => (req, res, next) => 
