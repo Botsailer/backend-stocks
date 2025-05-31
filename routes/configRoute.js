@@ -1,7 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const configController = require('../controllers/configController');
-const requireAdmin = require('../middleware/requirreAdmin'); 
+const requireAdmin = require('../middleware/requirreAdmin');
 
 /**
  * @swagger
@@ -18,29 +18,36 @@ const requireAdmin = require('../middleware/requirreAdmin');
  *       type: object
  *       required:
  *         - key
- *         - value
  *         - category
  *         - description
  *       properties:
  *         key:
  *           type: string
- *           description: Unique identifier for the config setting (e.g., EMAIL_HOST)
+ *           description: Unique identifier for the config setting
  *         value:
  *           type: string
- *           description: Value of the configuration setting
+ *           description: Value for single-value configurations
  *         category:
  *           type: string
- *           enum: [smtp, payment, general, security]
+ *           enum: [smtp, payment, general, security, fmp_api, other]
  *           description: Category the config belongs to
  *         description:
  *           type: string
- *           description: Human-readable description of what this config does
+ *           description: Human-readable description
  *         isSecret:
  *           type: boolean
- *           description: Whether the config value should be masked in responses
+ *           description: Whether the config value should be masked
  *         isActive:
  *           type: boolean
  *           description: Whether the config is currently active
+ *         isArray:
+ *           type: boolean
+ *           description: Whether this config stores an array of values
+ *         arrayItems:
+ *           type: array
+ *           items:
+ *             type: string
+ *           description: Array values when isArray is true
  *         createdAt:
  *           type: string
  *           format: date-time
@@ -64,7 +71,7 @@ const requireAdmin = require('../middleware/requirreAdmin');
  *         name: category
  *         schema:
  *           type: string
- *           enum: [smtp, payment, general, security]
+ *           enum: [smtp, payment, general, security, fmp_api, other]
  *         description: Filter configs by category
  *     responses:
  *       200:
@@ -94,7 +101,7 @@ router.get('/', requireAdmin, configController.getAllConfigs);
  *         required: true
  *         schema:
  *           type: string
- *         description: Config key (e.g., EMAIL_HOST)
+ *         description: Config key
  *     responses:
  *       200:
  *         description: Configuration setting
@@ -123,34 +130,36 @@ router.get('/:key', requireAdmin, configController.getConfigByKey);
  *             type: object
  *             required:
  *               - key
- *               - value
  *               - category
  *               - description
  *             properties:
  *               key:
  *                 type: string
- *                 description: Unique config key (e.g., EMAIL_HOST)
- *                 example: EMAIL_HOST
+ *                 example: SMTP_CONFIG
  *               value:
  *                 type: string
- *                 description: Config value
  *                 example: smtp.example.com
  *               category:
  *                 type: string
- *                 enum: [smtp, payment, general, security]
- *                 description: Config category
+ *                 enum: [smtp, payment, general, security, fmp_api, other]
  *                 example: smtp
  *               description:
  *                 type: string
- *                 description: Human-readable description
- *                 example: SMTP server host address
+ *                 example: SMTP server configuration
  *               isSecret:
  *                 type: boolean
- *                 description: Whether to mask the value in responses
+ *                 example: true
+ *               isArray:
+ *                 type: boolean
  *                 example: false
+ *               arrayItems:
+ *                 type: array
+ *                 items:
+ *                   type: string
+ *                 example: []
  *     responses:
  *       201:
- *         description: Configuration created successfully
+ *         description: Configuration created
  *       400:
  *         description: Invalid input or duplicate key
  */
@@ -160,7 +169,7 @@ router.post('/', requireAdmin, configController.createConfig);
  * @swagger
  * /api/admin/configs/{key}:
  *   put:
- *     summary: Update an existing configuration setting
+ *     summary: Update a configuration
  *     tags: [Configuration]
  *     security:
  *       - bearerAuth: []
@@ -180,19 +189,25 @@ router.post('/', requireAdmin, configController.createConfig);
  *             properties:
  *               value:
  *                 type: string
- *                 description: New config value
+ *                 example: updated_value
+ *               category:
+ *                 type: string
+ *                 enum: [smtp, payment, general, security, fmp_api, other]
  *               description:
  *                 type: string
- *                 description: Updated description
  *               isActive:
  *                 type: boolean
- *                 description: Whether config is active
  *               isSecret:
  *                 type: boolean
- *                 description: Whether to mask the value
+ *               isArray:
+ *                 type: boolean
+ *               arrayItems:
+ *                 type: array
+ *                 items:
+ *                   type: string
  *     responses:
  *       200:
- *         description: Configuration updated successfully
+ *         description: Configuration updated
  *       404:
  *         description: Configuration not found
  */
@@ -202,7 +217,7 @@ router.put('/:key', requireAdmin, configController.updateConfig);
  * @swagger
  * /api/admin/configs/{key}:
  *   delete:
- *     summary: Delete a configuration setting
+ *     summary: Delete a configuration
  *     tags: [Configuration]
  *     security:
  *       - bearerAuth: []
@@ -215,7 +230,7 @@ router.put('/:key', requireAdmin, configController.updateConfig);
  *         description: Config key to delete
  *     responses:
  *       200:
- *         description: Configuration deleted successfully
+ *         description: Configuration deleted
  *       404:
  *         description: Configuration not found
  */
@@ -225,7 +240,7 @@ router.delete('/:key', requireAdmin, configController.deleteConfig);
  * @swagger
  * /api/admin/configs/batch:
  *   post:
- *     summary: Create or update multiple configurations at once
+ *     summary: Batch create/update configurations
  *     tags: [Configuration]
  *     security:
  *       - bearerAuth: []
@@ -244,25 +259,29 @@ router.delete('/:key', requireAdmin, configController.deleteConfig);
  *                   type: object
  *                   required:
  *                     - key
- *                     - value
  *                   properties:
  *                     key:
  *                       type: string
- *                       example: EMAIL_HOST
  *                     value:
  *                       type: string
- *                       example: smtp.example.com
  *                     category:
  *                       type: string
- *                       example: smtp
+ *                       enum: [smtp, payment, general, security, fmp_api, other]
  *                     description:
  *                       type: string
- *                       example: SMTP server host
+ *                     isSecret:
+ *                       type: boolean
+ *                     isArray:
+ *                       type: boolean
+ *                     arrayItems:
+ *                       type: array
+ *                       items:
+ *                         type: string
  *     responses:
  *       200:
- *         description: Results of batch operation
+ *         description: Batch operation results
  *       400:
- *         description: Invalid input format
+ *         description: Invalid input
  */
 router.post('/batch', requireAdmin, configController.batchUpdateConfigs);
 
@@ -270,7 +289,7 @@ router.post('/batch', requireAdmin, configController.batchUpdateConfigs);
  * @swagger
  * /api/admin/configs/test/smtp:
  *   post:
- *     summary: Test SMTP configuration by sending a test email
+ *     summary: Test SMTP configuration
  *     tags: [Configuration]
  *     security:
  *       - bearerAuth: []
@@ -286,15 +305,12 @@ router.post('/batch', requireAdmin, configController.batchUpdateConfigs);
  *               to:
  *                 type: string
  *                 format: email
- *                 description: Recipient email address
  *                 example: test@example.com
  *     responses:
  *       200:
- *         description: Test email sent successfully
+ *         description: Test email sent
  *       400:
  *         description: Missing recipient email
- *       500:
- *         description: Failed to send email
  */
 router.post('/test/smtp', requireAdmin, configController.testSmtpConfig);
 

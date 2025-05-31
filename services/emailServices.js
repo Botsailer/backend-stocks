@@ -7,19 +7,17 @@ async function createTransporter() {
   
   return nodemailer.createTransport({
     host: config.host,
-    port: config.port,
-    secure: config.port === 465,
+    port: Number(config.port),
+    secure: Number(config.port) === 465,
     auth: {
       user: config.user,
       pass: config.pass
     },
-    // Add these connection options
-    connectionTimeout: 10000, // 10 seconds
-    greetingTimeout: 10000,   // 10 seconds
-    tls: {
-      rejectUnauthorized: false // Less strict SSL checking (use only in development)
-    },
-    debug: true // Enable debugging for troubleshooting
+    connectionTimeout: 10000,
+    // tls: {
+    //   rejectUnauthorized: false
+    // },
+    debug: true
   });
 }
 
@@ -43,6 +41,7 @@ exports.sendEmail = async (to, subject, text, html) => {
     };
 
     return await transporter.sendMail(mailOptions);
+    transporter.close(); // Close the transporter after sending
   } catch (error) {
     console.error('Error sending email:', error);
     
@@ -102,3 +101,16 @@ exports.sendResetPasswordEmail = async (to, resetUrl) => {
   
   return await exports.sendEmail(to, subject, text, html);
 };
+
+
+exports.verifySmtpConfig = async () => {
+  try {
+  
+    const transporter = await createTransporter();
+    transporter.close();
+    return transporter.verify();
+  } catch (error) {
+    console.error('SMTP configuration error:', error);
+    throw new Error('Failed to verify SMTP configuration');
+  }
+} 

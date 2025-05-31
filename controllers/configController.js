@@ -11,11 +11,15 @@ exports.getAllConfigs = async (req, res) => {
     
     const configs = await ConfigSettings.find(query).sort('key');
     
-    // Mask secret values
+    // Mask secret values for both single and array configs
     const safeConfigs = configs.map(config => {
       const configObj = config.toObject();
       if (configObj.isSecret) {
-        configObj.value = '********';
+        if (configObj.isArray && configObj.arrayItems) {
+          configObj.arrayItems = configObj.arrayItems.map(() => '********');
+        } else {
+          configObj.value = '********';
+        }
       }
       return configObj;
     });
@@ -40,7 +44,11 @@ exports.getConfigByKey = async (req, res) => {
     
     const configObj = config.toObject();
     if (configObj.isSecret) {
-      configObj.value = '********';
+      if (configObj.isArray && configObj.arrayItems) {
+        configObj.arrayItems = configObj.arrayItems.map(() => '********');
+      } else {
+        configObj.value = '********';
+      }
     }
     
     res.json(configObj);
@@ -54,7 +62,12 @@ exports.getConfigByKey = async (req, res) => {
  */
 exports.createConfig = async (req, res) => {
   try {
-    const { key, value, category, description, isSecret } = req.body;
+    const { key, value, category, description, isSecret, isArray, arrayItems } = req.body;
+    
+    // Validate array config
+    if (isArray && (!arrayItems || !Array.isArray(arrayItems))) {
+      return res.status(400).json({ error: 'Array items required for array configuration' });
+    }
     
     // Check if config already exists
     const exists = await ConfigSettings.findOne({ key });
@@ -64,10 +77,12 @@ exports.createConfig = async (req, res) => {
     
     const config = new ConfigSettings({
       key,
-      value,
+      value: isArray ? null : value,
       category,
       description,
-      isSecret: isSecret || false
+      isSecret: isSecret || false,
+      isArray: isArray || false,
+      arrayItems: isArray ? arrayItems : undefined
     });
     
     await config.save();
@@ -84,6 +99,11 @@ exports.updateConfig = async (req, res) => {
   try {
     const { key } = req.params;
     const updates = req.body;
+    
+    // Validate array updates
+    if (updates.isArray && (!updates.arrayItems || !Array.isArray(updates.arrayItems))) {
+      return res.status(400).json({ error: 'Array items required for array configuration' });
+    }
     
     const config = await ConfigSettings.findOneAndUpdate(
       { key },
@@ -133,10 +153,16 @@ exports.batchUpdateConfigs = async (req, res) => {
     const results = [];
     
     for (const configData of configs) {
-      const { key, value, category, description, isSecret } = configData;
+      const { key, value, category, description, isSecret, isArray, arrayItems } = configData;
       
-      if (!key || value === undefined) {
-        results.push({ key, status: 'error', message: 'Key and value are required' });
+      if (!key || (value === undefined && !isArray)) {
+        results.push({ key, status: 'error', message: 'Key and value are required for non-array configs' });
+        continue;
+      }
+      
+      // Validate array config
+      if (isArray && (!arrayItems || !Array.isArray(arrayItems))) {
+        results.push({ key, status: 'error', message: 'Array items required for array configuration' });
         continue;
       }
       
@@ -146,10 +172,12 @@ exports.batchUpdateConfigs = async (req, res) => {
         if (existing) {
           // Update existing
           Object.assign(existing, { 
-            value,
+            value: isArray ? null : value,
             ...(category && { category }),
             ...(description && { description }),
-            ...(isSecret !== undefined && { isSecret })
+            ...(isSecret !== undefined && { isSecret }),
+            ...(isArray !== undefined && { isArray }),
+            ...(isArray && { arrayItems })
           });
           await existing.save();
           results.push({ key, status: 'updated' });
@@ -157,10 +185,12 @@ exports.batchUpdateConfigs = async (req, res) => {
           // Create new if all required fields provided
           const newConfig = new ConfigSettings({
             key, 
-            value,
+            value: isArray ? null : value,
             category,
             description,
-            isSecret: isSecret || false
+            isSecret: isSecret || false,
+            isArray: isArray || false,
+            arrayItems: isArray ? arrayItems : undefined
           });
           await newConfig.save();
           results.push({ key, status: 'created' });
@@ -199,5 +229,50 @@ exports.testSmtpConfig = async (req, res) => {
     res.json({ message: 'Test email sent successfully' });
   } catch (err) {
     res.status(500).json({ error: `Failed to send test email: ${err.message}` });
+  }
+};
+
+
+/**
+ * Generic method to get array configuration for any category
+ */
+exports.getArrayConfig = async (configKey) => {
+  try {
+    const config = await ConfigSettings.findOne({ 
+      key: configKey,
+      isActive: true,
+      isArray: true
+    });
+    
+    if (!config || !config.arrayItems) {
+      throw new Error(`No active array configuration found for key: ${configKey}`);
+    }
+    
+    return config.arrayItems;
+  } catch (err) {
+    console.error(`Error getting array config for ${configKey}:`, err);
+    throw err;
+  }
+};
+
+/**
+ * Generic method to get single-value configuration
+ */
+exports.getValueConfig = async (configKey) => {
+  try {
+    const config = await ConfigSettings.findOne({ 
+      key: configKey,
+      isActive: true,
+      isArray: false
+    });
+    
+    if (!config) {
+      throw new Error(`No active configuration found for key: ${configKey}`);
+    }
+    
+    return config.value;
+  } catch (err) {
+    console.error(`Error getting config for ${configKey}:`, err);
+    throw err;
   }
 };

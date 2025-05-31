@@ -89,6 +89,26 @@ async function getPaymentConfig() {
   };
 }
 
+
+async function getFmpApiKeys() {
+  try {
+    const config = await ConfigSettings.findOne({
+      key: 'fmp_apikey',
+      category: 'fmp_api',
+      isActive: true
+    });
+    if (!config || !config.isArray || !config.arrayItems) {
+      console.warn('No active FMP API keys found', config);
+      throw new Error('No active FMP API keys found');
+    }
+    return config.arrayItems;
+  }
+  catch (err) {
+    console.error('Error getting FMP API keys:', err);
+    throw err;
+  }
+}
+
 // Initialize the cache on module load
 refreshCache().catch(console.error);
 
@@ -96,5 +116,6 @@ module.exports = {
   getConfig,
   refreshCache,
   getSmtpConfig,
-  getPaymentConfig
+  getPaymentConfig,
+  getFmpApiKeys
 };

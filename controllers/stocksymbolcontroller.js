@@ -1,4 +1,20 @@
-const { StockSymbol } = require('../models/stockSymbol');
+const axios = require('axios');
+const { getFmpApiKeys } = require('../utils/configSettings');
+const stockSymbol = require('../models/stockSymbol');
+
+class ApiKeyManager {
+  constructor(keys = []) {
+    this.keys = keys.filter(key => key && key.trim() !== '');
+    this.index = 0;
+  }
+
+  getNextKey() {
+    if (this.keys.length === 0) return null;
+    const key = this.keys[this.index];
+    this.index = (this.index + 1) % this.keys.length;
+    return key;
+  }
+}
 
 /**
  * Controller for Stock Symbol CRUD operations
@@ -6,9 +22,6 @@ const { StockSymbol } = require('../models/stockSymbol');
 const stockSymbolController = {
   /**
    * Create a new stock symbol
-   * @param {Object} req - Express request object
-   * @param {Object} res - Express response object
-   * @returns {Object} JSON response with created stock symbol or error
    */
   createStockSymbol: async (req, res) => {
     try {
@@ -23,7 +36,7 @@ const stockSymbolController = {
       }
 
       // Check if symbol already exists
-      const existingSymbol = await StockSymbol.findOne({ symbol: symbol.toUpperCase() });
+      const existingSymbol = await stockSymbol.findOne({ symbol: symbol.toUpperCase() });
       if (existingSymbol) {
         return res.status(409).json({
           success: false,
@@ -31,8 +44,8 @@ const stockSymbolController = {
         });
       }
 
-      // Create new stock symbol with uppercase symbol
-      const newStockSymbol = await StockSymbol.create({
+      // Create new stock symbol
+      const newStockSymbol = await stockSymbol.create({
         symbol: symbol.toUpperCase(),
         name,
         currentPrice,
@@ -55,17 +68,14 @@ const stockSymbolController = {
 
   /**
    * Get all stock symbols
-   * @param {Object} req - Express request object
-   * @param {Object} res - Express response object
-   * @returns {Object} JSON response with all stock symbols or error
    */
   getAllStockSymbols: async (req, res) => {
     try {
-      const stockSymbols = await StockSymbol.find().sort({ createdAt: -1 });
+      const stockSymbols = await stockSymbol?.find().sort({ createdAt: -1 });
       
       return res.status(200).json({
         success: true,
-        count: stockSymbols.length,
+        count: stockSymbols?.length,
         data: stockSymbols,
       });
     } catch (error) {
@@ -79,16 +89,13 @@ const stockSymbolController = {
   },
 
   /**
-   * Get a stock symbol by ID
-   * @param {Object} req - Express request object
-   * @param {Object} res - Express response object
-   * @returns {Object} JSON response with stock symbol or error
+   * Get stock symbol by ID
    */
   getStockSymbolById: async (req, res) => {
     try {
       const { id } = req.params;
       
-      const stockSymbol = await StockSymbol.findById(id);
+      const stockSymbol = await stockSymbol.findById(id);
       
       if (!stockSymbol) {
         return res.status(404).json({
@@ -104,7 +111,6 @@ const stockSymbolController = {
     } catch (error) {
       console.error('Error fetching stock symbol:', error);
       
-      // Check if error is due to invalid ID format
       if (error.name === 'CastError') {
         return res.status(400).json({
           success: false,
@@ -121,16 +127,13 @@ const stockSymbolController = {
   },
 
   /**
-   * Get a stock symbol by ticker symbol
-   * @param {Object} req - Express request object
-   * @param {Object} res - Express response object
-   * @returns {Object} JSON response with stock symbol or error
+   * Get stock symbol by ticker symbol
    */
   getStockSymbolBySymbol: async (req, res) => {
     try {
       const { symbol } = req.params;
       
-      const stockSymbol = await StockSymbol.findOne({ symbol: symbol.toUpperCase() });
+      const stockSymbol = await stockSymbol.findOne({ symbol: symbol.toUpperCase() });
       
       if (!stockSymbol) {
         return res.status(404).json({
@@ -155,17 +158,13 @@ const stockSymbolController = {
 
   /**
    * Update a stock symbol
-   * @param {Object} req - Express request object
-   * @param {Object} res - Express response object
-   * @returns {Object} JSON response with updated stock symbol or error
    */
   updateStockSymbol: async (req, res) => {
     try {
       const { id } = req.params;
       const { name, currentPrice } = req.body;
       
-      // Find the stock symbol
-      const stockSymbol = await StockSymbol.findById(id);
+      const stockSymbol = await stockSymbol.findById(id);
       
       if (!stockSymbol) {
         return res.status(404).json({
@@ -174,11 +173,12 @@ const stockSymbolController = {
         });
       }
       
-      // Update fields if provided
       if (name) stockSymbol.name = name;
-      if (currentPrice) stockSymbol.currentPrice = currentPrice;
+      if (currentPrice) {
+        stockSymbol.previousPrice = stockSymbol.currentPrice;
+        stockSymbol.currentPrice = currentPrice;
+      }
       
-      // Save the updated stock symbol
       await stockSymbol.save();
       
       return res.status(200).json({
@@ -189,7 +189,6 @@ const stockSymbolController = {
     } catch (error) {
       console.error('Error updating stock symbol:', error);
       
-      // Check if error is due to invalid ID format
       if (error.name === 'CastError') {
         return res.status(400).json({
           success: false,
@@ -207,15 +206,12 @@ const stockSymbolController = {
 
   /**
    * Delete a stock symbol
-   * @param {Object} req - Express request object
-   * @param {Object} res - Express response object
-   * @returns {Object} JSON response with deletion status or error
    */
   deleteStockSymbol: async (req, res) => {
     try {
       const { id } = req.params;
       
-      const stockSymbol = await StockSymbol.findByIdAndDelete(id);
+      const stockSymbol = await stockSymbol.findByIdAndDelete(id);
       
       if (!stockSymbol) {
         return res.status(404).json({
@@ -231,7 +227,6 @@ const stockSymbolController = {
     } catch (error) {
       console.error('Error deleting stock symbol:', error);
       
-      // Check if error is due to invalid ID format
       if (error.name === 'CastError') {
         return res.status(400).json({
           success: false,
@@ -243,6 +238,108 @@ const stockSymbolController = {
         success: false,
         message: 'Internal server error',
         error: process.env.NODE_ENV === 'development' ? error.message : undefined,
+      });
+    }
+  },
+
+  /**
+   * Update stock prices from FMP API
+   */
+  updateStockPrices: async (req, res) => {
+    try {
+      // 1. Get FMP API keys
+      const apiKeys = await getFmpApiKeys();
+      if (!apiKeys || apiKeys.length === 0) {
+        return res.status(400).json({
+          success: false,
+          message: 'No active FMP API keys found'
+        });
+      }
+
+      const keyManager = new ApiKeyManager(apiKeys);
+
+      // 2. Get all stock symbols
+      const stocks = await stockSymbol.find({}, 'symbol currentPrice');
+      const symbols = stocks.map(stock => stock.symbol);
+      
+      if (symbols.length === 0) {
+        return res.status(400).json({
+          success: false,
+          message: 'No stocks found in database'
+        });
+      }
+
+      // 3. Prepare batch requests
+      const BATCH_SIZE = 10; // Increased batch size
+      const batches = [];
+      
+      for (let i = 0; i < symbols.length; i += BATCH_SIZE) {
+        batches.push(symbols.slice(i, i + BATCH_SIZE));
+      }
+
+      // 4. Fetch prices using round-robin API keys
+      const updateOperations = [];
+      const failedSymbols = [];
+      
+      for (const batch of batches) {
+        const apiKey = keyManager.getNextKey();
+        if (!apiKey) break;
+
+        try {
+          const response = await axios.get(
+            `https://financialmodelingprep.com/api/v3/quote/${batch.join(',')}`,
+            { 
+              params: { apikey: apiKey },
+              timeout: 15000 // Increased timeout
+            }
+          );
+
+          if (response.data && Array.isArray(response.data)) {
+            for (const stockData of response.data) {
+              const symbol = stockData.symbol;
+              const newPrice = stockData.price.toString();
+              const stock = stocks.find(s => s.symbol === symbol);
+              
+              if (stock) {
+                updateOperations.push({
+                  updateOne: {
+                    filter: { symbol },
+                    update: { 
+                      $set: { 
+                        currentPrice: newPrice,
+                        previousPrice: stock.currentPrice
+                      } 
+                    }
+                  }
+                });
+              }
+            }
+          }
+        } catch (error) {
+          console.error(`Failed to fetch batch ${batch.join(',')}:`, error.message);
+          failedSymbols.push(...batch);
+        }
+      }
+
+      // 5. Bulk update database
+      if (updateOperations.length > 0) {
+        await stockSymbol.bulkWrite(updateOperations);
+      }
+
+      res.json({
+        success: true,
+        updated: updateOperations.length,
+        failed: failedSymbols.length,
+        failedSymbols,
+        message: `Updated ${updateOperations.length} stocks, ${failedSymbols.length} failed`
+      });
+      
+    } catch (error) {
+      console.error('Error updating stock prices:', error);
+      res.status(500).json({
+        success: false,
+        message: 'Internal server error',
+        error: error.message
       });
     }
   }

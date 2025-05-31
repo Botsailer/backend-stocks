@@ -1,12 +1,13 @@
 const express = require('express');
 const router = express.Router();
 const stockSymbolController = require('../controllers/stocksymbolcontroller');
+const requireAdmin = require('../middleware/requirreAdmin');
 
 /**
  * @swagger
  * tags:
  *   name: Stock Symbols
- *   description: Endpoints for managing stock symbols and their current prices
+ *   description: Endpoints for managing stock symbols and their prices
  */
 
 /**
@@ -22,29 +23,31 @@ const stockSymbolController = require('../controllers/stocksymbolcontroller');
  *       properties:
  *         _id:
  *           type: string
- *           description: The auto-generated ID of the stock symbol
+ *           description: The auto-generated ID
  *         symbol:
  *           type: string
- *           description: The unique ticker symbol
+ *           description: Stock ticker symbol
  *         name:
  *           type: string
- *           description: The company name
+ *           description: Company name
  *         currentPrice:
  *           type: string
- *           description: The current stock price
+ *           description: Current stock price
+ *         previousPrice:
+ *           type: string
+ *           description: Previous stock price
  *         createdAt:
  *           type: string
  *           format: date-time
- *           description: The timestamp when the record was created
  *         updatedAt:
  *           type: string
  *           format: date-time
- *           description: The timestamp when the record was last updated
  *       example:
  *         _id: 60d21b4667d0d8992e610c85
  *         symbol: AAPL
  *         name: Apple Inc.
  *         currentPrice: "150.75"
+ *         previousPrice: "149.20"
  *         createdAt: 2023-05-17T15:34:22.000Z
  *         updatedAt: 2023-05-17T15:34:22.000Z
  */
@@ -54,48 +57,24 @@ const stockSymbolController = require('../controllers/stocksymbolcontroller');
  * /api/stock-symbols:
  *   post:
  *     summary: Create a new stock symbol
- *     description: Creates a new stock symbol with the provided data
  *     tags: [Stock Symbols]
  *     requestBody:
  *       required: true
  *       content:
  *         application/json:
  *           schema:
- *             type: object
- *             required:
- *               - symbol
- *               - name
- *               - currentPrice
- *             properties:
- *               symbol:
- *                 type: string
- *                 description: The stock ticker symbol (will be converted to uppercase)
- *               name:
- *                 type: string
- *                 description: The company name
- *               currentPrice:
- *                 type: string
- *                 description: The current stock price
+ *             $ref: '#/components/schemas/StockSymbol'
  *     responses:
  *       201:
- *         description: Stock symbol created successfully
+ *         description: Stock symbol created
  *         content:
  *           application/json:
  *             schema:
- *               type: object
- *               properties:
- *                 success:
- *                   type: boolean
- *                   example: true
- *                 message:
- *                   type: string
- *                   example: Stock symbol created successfully
- *                 data:
- *                   $ref: '#/components/schemas/StockSymbol'
+ *               $ref: '#/components/schemas/StockSymbol'
  *       400:
  *         description: Missing required fields
  *       409:
- *         description: Stock symbol already exists
+ *         description: Symbol already exists
  *       500:
  *         description: Internal server error
  */
@@ -106,7 +85,6 @@ router.post('/', stockSymbolController.createStockSymbol);
  * /api/stock-symbols:
  *   get:
  *     summary: Get all stock symbols
- *     description: Returns a list of all stock symbols in the database
  *     tags: [Stock Symbols]
  *     responses:
  *       200:
@@ -114,88 +92,37 @@ router.post('/', stockSymbolController.createStockSymbol);
  *         content:
  *           application/json:
  *             schema:
- *               type: object
- *               properties:
- *                 success:
- *                   type: boolean
- *                   example: true
- *                 count:
- *                   type: integer
- *                   example: 3
- *                 data:
- *                   type: array
- *                   items:
- *                     $ref: '#/components/schemas/StockSymbol'
+ *               type: array
+ *               items:
+ *                 $ref: '#/components/schemas/StockSymbol'
  *       500:
  *         description: Internal server error
  */
 router.get('/', stockSymbolController.getAllStockSymbols);
-
-// /**
-//  * @swagger
-//  * /api/stock-symbols/ticker/{symbol}:
-//  *   get:
-//  *     summary: Get stock symbol by ticker
-//  *     description: Returns a stock symbol by its ticker symbol
-//  *     tags: [Stock Symbols]
-//  *     parameters:
-//  *       - in: path
-//  *         name: symbol
-//  *         schema:
-//  *           type: string
-//  *         required: true
-//  *         description: Stock ticker symbol
-//  *     responses:
-//  *       200:
-//  *         description: Stock symbol found
-//  *         content:
-//  *           application/json:
-//  *             schema:
-//  *               type: object
-//  *               properties:
-//  *                 success:
-//  *                   type: boolean
-//  *                   example: true
-//  *                 data:
-//  *                   $ref: '#/components/schemas/StockSymbol'
-//  *       404:
-//  *         description: Stock symbol not found
-//  *       500:
-//  *         description: Internal server error
-//  */
-// router.get('/ticker/:symbol', stockSymbolController.getStockSymbolBySymbol);
 
 /**
  * @swagger
  * /api/stock-symbols/{id}:
  *   get:
  *     summary: Get stock symbol by ID
- *     description: Returns a stock symbol by its MongoDB ID
  *     tags: [Stock Symbols]
  *     parameters:
  *       - in: path
  *         name: id
+ *         required: true
  *         schema:
  *           type: string
- *         required: true
- *         description: MongoDB ID of the stock symbol
  *     responses:
  *       200:
- *         description: Stock symbol found
+ *         description: Stock symbol data
  *         content:
  *           application/json:
  *             schema:
- *               type: object
- *               properties:
- *                 success:
- *                   type: boolean
- *                   example: true
- *                 data:
- *                   $ref: '#/components/schemas/StockSymbol'
+ *               $ref: '#/components/schemas/StockSymbol'
  *       400:
  *         description: Invalid ID format
  *       404:
- *         description: Stock symbol not found
+ *         description: Symbol not found
  *       500:
  *         description: Internal server error
  */
@@ -203,18 +130,42 @@ router.get('/:id', stockSymbolController.getStockSymbolById);
 
 /**
  * @swagger
+ * /api/stock-symbols/ticker/{symbol}:
+ *   get:
+ *     summary: Get stock symbol by ticker
+ *     tags: [Stock Symbols]
+ *     parameters:
+ *       - in: path
+ *         name: symbol
+ *         required: true
+ *         schema:
+ *           type: string
+ *     responses:
+ *       200:
+ *         description: Stock symbol data
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/StockSymbol'
+ *       404:
+ *         description: Symbol not found
+ *       500:
+ *         description: Internal server error
+ */
+router.get('/ticker/:symbol', stockSymbolController.getStockSymbolBySymbol);
+
+/**
+ * @swagger
  * /api/stock-symbols/{id}:
  *   put:
  *     summary: Update a stock symbol
- *     description: Updates a stock symbol's information
  *     tags: [Stock Symbols]
  *     parameters:
  *       - in: path
  *         name: id
+ *         required: true
  *         schema:
  *           type: string
- *         required: true
- *         description: MongoDB ID of the stock symbol
  *     requestBody:
  *       required: true
  *       content:
@@ -224,30 +175,19 @@ router.get('/:id', stockSymbolController.getStockSymbolById);
  *             properties:
  *               name:
  *                 type: string
- *                 description: The company name
  *               currentPrice:
  *                 type: string
- *                 description: The current stock price
  *     responses:
  *       200:
- *         description: Stock symbol updated successfully
+ *         description: Updated stock symbol
  *         content:
  *           application/json:
  *             schema:
- *               type: object
- *               properties:
- *                 success:
- *                   type: boolean
- *                   example: true
- *                 message:
- *                   type: string
- *                   example: Stock symbol updated successfully
- *                 data:
- *                   $ref: '#/components/schemas/StockSymbol'
+ *               $ref: '#/components/schemas/StockSymbol'
  *       400:
  *         description: Invalid ID format
  *       404:
- *         description: Stock symbol not found
+ *         description: Symbol not found
  *       500:
  *         description: Internal server error
  */
@@ -258,18 +198,36 @@ router.put('/:id', stockSymbolController.updateStockSymbol);
  * /api/stock-symbols/{id}:
  *   delete:
  *     summary: Delete a stock symbol
- *     description: Removes a stock symbol from the database
  *     tags: [Stock Symbols]
  *     parameters:
  *       - in: path
  *         name: id
+ *         required: true
  *         schema:
  *           type: string
- *         required: true
- *         description: MongoDB ID of the stock symbol
  *     responses:
  *       200:
- *         description: Stock symbol deleted successfully
+ *         description: Success message
+ *       400:
+ *         description: Invalid ID format
+ *       404:
+ *         description: Symbol not found
+ *       500:
+ *         description: Internal server error
+ */
+router.delete('/:id', stockSymbolController.deleteStockSymbol);
+
+/**
+ * @swagger
+ * /api/stock-symbols/update-prices:
+ *   post:
+ *     summary: Update stock prices using FMP API
+ *     tags: [Stock Symbols]
+ *     security:
+ *       - bearerAuth: []
+ *     responses:
+ *       200:
+ *         description: Price update results
  *         content:
  *           application/json:
  *             schema:
@@ -277,17 +235,21 @@ router.put('/:id', stockSymbolController.updateStockSymbol);
  *               properties:
  *                 success:
  *                   type: boolean
- *                   example: true
+ *                 updated:
+ *                   type: integer
+ *                 failed:
+ *                   type: integer
+ *                 failedSymbols:
+ *                   type: array
+ *                   items:
+ *                     type: string
  *                 message:
  *                   type: string
- *                   example: Stock symbol deleted successfully
  *       400:
- *         description: Invalid ID format
- *       404:
- *         description: Stock symbol not found
+ *         description: No API keys or stocks found
  *       500:
  *         description: Internal server error
  */
-router.delete('/:id', stockSymbolController.deleteStockSymbol);
+router.post('/update-prices', requireAdmin, stockSymbolController.updateStockPrices);
 
-module.exports = (dbAdapter) => router;
+module.exports = router;
