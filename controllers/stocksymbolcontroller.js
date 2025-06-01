@@ -1,6 +1,6 @@
 const axios = require('axios');
 const { getFmpApiKeys } = require('../utils/configSettings');
-const stockSymbol = require('../models/stockSymbol');
+const StockSymbol = require('../models/stockSymbol'); // Use PascalCase for model
 
 class ApiKeyManager {
   constructor(keys = []) {
@@ -36,7 +36,7 @@ const stockSymbolController = {
       }
 
       // Check if symbol already exists
-      const existingSymbol = await stockSymbol.findOne({ symbol: symbol.toUpperCase() });
+      const existingSymbol = await StockSymbol.findOne({ symbol: symbol.toUpperCase() });
       if (existingSymbol) {
         return res.status(409).json({
           success: false,
@@ -45,7 +45,7 @@ const stockSymbolController = {
       }
 
       // Create new stock symbol
-      const newStockSymbol = await stockSymbol.create({
+      const newStockSymbol = await StockSymbol.create({
         symbol: symbol.toUpperCase(),
         name,
         currentPrice,
@@ -71,11 +71,10 @@ const stockSymbolController = {
    */
   getAllStockSymbols: async (req, res) => {
     try {
-      const stockSymbols = await stockSymbol?.find().sort({ createdAt: -1 });
-      
+      const stockSymbols = await StockSymbol.find().sort({ createdAt: -1 });
       return res.status(200).json({
         success: true,
-        count: stockSymbols?.length,
+        count: stockSymbols.length,
         data: stockSymbols,
       });
     } catch (error) {
@@ -94,30 +93,25 @@ const stockSymbolController = {
   getStockSymbolById: async (req, res) => {
     try {
       const { id } = req.params;
-      
-      const stockSymbol = await stockSymbol.findById(id);
-      
-      if (!stockSymbol) {
+      const stock = await StockSymbol.findById(id);
+      if (!stock) {
         return res.status(404).json({
           success: false,
           message: 'Stock symbol not found',
         });
       }
-      
       return res.status(200).json({
         success: true,
-        data: stockSymbol,
+        data: stock,
       });
     } catch (error) {
       console.error('Error fetching stock symbol:', error);
-      
       if (error.name === 'CastError') {
         return res.status(400).json({
           success: false,
           message: 'Invalid stock symbol ID format',
         });
       }
-      
       return res.status(500).json({
         success: false,
         message: 'Internal server error',
@@ -132,19 +126,16 @@ const stockSymbolController = {
   getStockSymbolBySymbol: async (req, res) => {
     try {
       const { symbol } = req.params;
-      
-      const stockSymbol = await stockSymbol.findOne({ symbol: symbol.toUpperCase() });
-      
-      if (!stockSymbol) {
+      const stock = await StockSymbol.findOne({ symbol: symbol.toUpperCase() });
+      if (!stock) {
         return res.status(404).json({
           success: false,
           message: 'Stock symbol not found',
         });
       }
-      
       return res.status(200).json({
         success: true,
-        data: stockSymbol,
+        data: stock,
       });
     } catch (error) {
       console.error('Error fetching stock symbol:', error);
@@ -163,39 +154,32 @@ const stockSymbolController = {
     try {
       const { id } = req.params;
       const { name, currentPrice } = req.body;
-      
-      const stockSymbol = await stockSymbol.findById(id);
-      
-      if (!stockSymbol) {
+      const stock = await StockSymbol.findById(id);
+      if (!stock) {
         return res.status(404).json({
           success: false,
           message: 'Stock symbol not found',
         });
       }
-      
-      if (name) stockSymbol.name = name;
+      if (name) stock.name = name;
       if (currentPrice) {
-        stockSymbol.previousPrice = stockSymbol.currentPrice;
-        stockSymbol.currentPrice = currentPrice;
+        stock.previousPrice = stock.currentPrice;
+        stock.currentPrice = currentPrice;
       }
-      
-      await stockSymbol.save();
-      
+      await stock.save();
       return res.status(200).json({
         success: true,
         message: 'Stock symbol updated successfully',
-        data: stockSymbol,
+        data: stock,
       });
     } catch (error) {
       console.error('Error updating stock symbol:', error);
-      
       if (error.name === 'CastError') {
         return res.status(400).json({
           success: false,
           message: 'Invalid stock symbol ID format',
         });
       }
-      
       return res.status(500).json({
         success: false,
         message: 'Internal server error',
@@ -210,30 +194,25 @@ const stockSymbolController = {
   deleteStockSymbol: async (req, res) => {
     try {
       const { id } = req.params;
-      
-      const stockSymbol = await stockSymbol.findByIdAndDelete(id);
-      
-      if (!stockSymbol) {
+      const stock = await StockSymbol.findByIdAndDelete(id);
+      if (!stock) {
         return res.status(404).json({
           success: false,
           message: 'Stock symbol not found',
         });
       }
-      
       return res.status(200).json({
         success: true,
         message: 'Stock symbol deleted successfully',
       });
     } catch (error) {
       console.error('Error deleting stock symbol:', error);
-      
       if (error.name === 'CastError') {
         return res.status(400).json({
           success: false,
           message: 'Invalid stock symbol ID format',
         });
       }
-      
       return res.status(500).json({
         success: false,
         message: 'Internal server error',
@@ -259,9 +238,9 @@ const stockSymbolController = {
       const keyManager = new ApiKeyManager(apiKeys);
 
       // 2. Get all stock symbols
-      const stocks = await stockSymbol.find({}, 'symbol currentPrice');
+      const stocks = await StockSymbol.find({}, 'symbol currentPrice');
       const symbols = stocks.map(stock => stock.symbol);
-      
+
       if (symbols.length === 0) {
         return res.status(400).json({
           success: false,
@@ -270,9 +249,8 @@ const stockSymbolController = {
       }
 
       // 3. Prepare batch requests
-      const BATCH_SIZE = 10; // Increased batch size
+      const BATCH_SIZE = 10;
       const batches = [];
-      
       for (let i = 0; i < symbols.length; i += BATCH_SIZE) {
         batches.push(symbols.slice(i, i + BATCH_SIZE));
       }
@@ -280,7 +258,7 @@ const stockSymbolController = {
       // 4. Fetch prices using round-robin API keys
       const updateOperations = [];
       const failedSymbols = [];
-      
+
       for (const batch of batches) {
         const apiKey = keyManager.getNextKey();
         if (!apiKey) break;
@@ -288,9 +266,9 @@ const stockSymbolController = {
         try {
           const response = await axios.get(
             `https://financialmodelingprep.com/api/v3/quote/${batch.join(',')}`,
-            { 
+            {
               params: { apikey: apiKey },
-              timeout: 15000 // Increased timeout
+              timeout: 15000
             }
           );
 
@@ -299,16 +277,16 @@ const stockSymbolController = {
               const symbol = stockData.symbol;
               const newPrice = stockData.price.toString();
               const stock = stocks.find(s => s.symbol === symbol);
-              
+
               if (stock) {
                 updateOperations.push({
                   updateOne: {
                     filter: { symbol },
-                    update: { 
-                      $set: { 
+                    update: {
+                      $set: {
                         currentPrice: newPrice,
                         previousPrice: stock.currentPrice
-                      } 
+                      }
                     }
                   }
                 });
@@ -323,7 +301,7 @@ const stockSymbolController = {
 
       // 5. Bulk update database
       if (updateOperations.length > 0) {
-        await stockSymbol.bulkWrite(updateOperations);
+        await StockSymbol.bulkWrite(updateOperations);
       }
 
       res.json({
@@ -333,7 +311,7 @@ const stockSymbolController = {
         failedSymbols,
         message: `Updated ${updateOperations.length} stocks, ${failedSymbols.length} failed`
       });
-      
+
     } catch (error) {
       console.error('Error updating stock prices:', error);
       res.status(500).json({
