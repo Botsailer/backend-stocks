@@ -1,3 +1,4 @@
+// routes/stocksymbolroutes.js
 const express = require('express');
 const router = express.Router();
 const stockSymbolController = require('../controllers/stocksymbolcontroller');
@@ -20,6 +21,7 @@ const requireAdmin = require('../middleware/requirreAdmin');
  *         - symbol
  *         - name
  *         - currentPrice
+ *         - exchange
  *       properties:
  *         _id:
  *           type: string
@@ -27,6 +29,9 @@ const requireAdmin = require('../middleware/requirreAdmin');
  *         symbol:
  *           type: string
  *           description: Stock ticker symbol
+ *         exchange:
+ *           type: string
+ *           description: Exchange identifier (NSE, BSE, NYSE, etc.)
  *         name:
  *           type: string
  *           description: Company name
@@ -36,6 +41,10 @@ const requireAdmin = require('../middleware/requirreAdmin');
  *         previousPrice:
  *           type: string
  *           description: Previous stock price
+ *         lastUpdated:
+ *           type: string
+ *           format: date-time
+ *           description: Last price update timestamp
  *         createdAt:
  *           type: string
  *           format: date-time
@@ -45,9 +54,11 @@ const requireAdmin = require('../middleware/requirreAdmin');
  *       example:
  *         _id: 60d21b4667d0d8992e610c85
  *         symbol: AAPL
+ *         exchange: NASDAQ
  *         name: Apple Inc.
  *         currentPrice: "150.75"
  *         previousPrice: "149.20"
+ *         lastUpdated: "2023-05-17T15:34:22.000Z"
  *         createdAt: 2023-05-17T15:34:22.000Z
  *         updatedAt: 2023-05-17T15:34:22.000Z
  */
@@ -63,7 +74,27 @@ const requireAdmin = require('../middleware/requirreAdmin');
  *       content:
  *         application/json:
  *           schema:
- *             $ref: '#/components/schemas/StockSymbol'
+ *             type: object
+ *             required:
+ *               - symbol
+ *               - name
+ *               - currentPrice
+ *               - exchange
+ *             properties:
+ *               symbol:
+ *                 type: string
+ *               name:
+ *                 type: string
+ *               currentPrice:
+ *                 type: string
+ *               exchange:
+ *                 type: string
+ *                 description: Stock exchange identifier (e.g., NSE, BSE, NASDAQ)
+ *             example:
+ *               symbol: "TCS"
+ *               name: "Tata Consultancy Services"
+ *               currentPrice: "3500.50"
+ *               exchange: "NSE"
  *     responses:
  *       201:
  *         description: Stock symbol created
@@ -74,7 +105,7 @@ const requireAdmin = require('../middleware/requirreAdmin');
  *       400:
  *         description: Missing required fields
  *       409:
- *         description: Symbol already exists
+ *         description: Symbol already exists for this exchange
  *       500:
  *         description: Internal server error
  */
@@ -221,7 +252,7 @@ router.delete('/:id', stockSymbolController.deleteStockSymbol);
  * @swagger
  * /api/stock-symbols/update-prices:
  *   post:
- *     summary: Update stock prices using FMP API
+ *     summary: Update stock prices using TradingView API
  *     tags: [Stock Symbols]
  *     security:
  *       - bearerAuth: []
@@ -239,14 +270,29 @@ router.delete('/:id', stockSymbolController.deleteStockSymbol);
  *                   type: integer
  *                 failed:
  *                   type: integer
+ *                 successSymbols:
+ *                   type: array
+ *                   items:
+ *                     type: string
  *                 failedSymbols:
  *                   type: array
  *                   items:
  *                     type: string
+ *                 progress:
+ *                   type: object
+ *                   properties:
+ *                     current:
+ *                       type: integer
+ *                     total:
+ *                       type: integer
+ *                     processed:
+ *                       type: integer
+ *                     totalSymbols:
+ *                       type: integer
  *                 message:
  *                   type: string
- *       400:
- *         description: No API keys or stocks found
+ *       404:
+ *         description: No stocks found in database
  *       500:
  *         description: Internal server error
  */

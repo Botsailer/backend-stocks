@@ -3,17 +3,15 @@ const passport = require('passport');
 const cors = require('cors');
 const app = express();
 const config = require('./config/config');
-const dbAdapter = require('./utils/db'); // This should export functions: connect, createUser, findUser, updateUser, findBannedUser
+const dbAdapter = require('./utils/db'); 
 const authRoutes = require('./routes/authRoutes');
-const setupSwagger = require('./swaggerOptions'); // optional, for swagger docs
-const { makeAdmin } = require('./services/adminservices');
-
+const setupSwagger = require('./swaggerOptions');
 // Middleware
 app.use(cors()); 
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
-// View engine setup if needed (e.g., for reset password pages)
+
 app.set('view engine', 'ejs');
 app.set('views', __dirname + '/views');
 
@@ -25,14 +23,13 @@ emailService.verifySmtpConfig()
   
 
 
-// Optional: Setup Swagger documentation
 setupSwagger(app);
 
-// Root route for sanity check
 app.get('/', (req, res) => {
-  res.render('index', { title: 'Authentication Module Home' });
-});
-
+  res.render('index', { title: 'Welcome to the Auth Service '
+  , message: 'This is the main page of the Auth Service. Use the API endpoints for authentication and user management. please visit the documentation at /api-docs for more details.'
+   });
+})
 
 dbAdapter.connect()
   .then(() => {

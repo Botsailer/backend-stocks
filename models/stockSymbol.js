@@ -8,6 +8,12 @@ const stockSymbolSchema = new Schema({
     unique: true,
     uppercase: true
   },
+  exchange:{
+    type: String,
+    required: true,
+    enum: ['NSE', 'BSE', 'NASDAQ', 'NYSE', 'LSE', 'TSE'], 
+    uppercase: true
+  },
   name: {
     type: String,
     required: true,

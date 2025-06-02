@@ -10,26 +10,12 @@ exports.getAllConfigs = async (req, res) => {
     const query = category ? { category } : {};
     
     const configs = await ConfigSettings.find(query).sort('key');
-    
-    // Mask secret values for both single and array configs
-    const safeConfigs = configs.map(config => {
-      const configObj = config.toObject();
-      if (configObj.isSecret) {
-        if (configObj.isArray && configObj.arrayItems) {
-          configObj.arrayItems = configObj.arrayItems.map(() => '********');
-        } else {
-          configObj.value = '********';
-        }
-      }
-      return configObj;
-    });
-    
-    res.json(safeConfigs);
+  
+    res.json(configs);
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
 };
-
 /**
  * Get configuration by key
  */
