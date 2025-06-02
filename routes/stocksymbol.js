@@ -131,6 +131,61 @@ router.post('/', stockSymbolController.createStockSymbol);
  */
 router.get('/', stockSymbolController.getAllStockSymbols);
 
+
+/**
+ * @swagger
+ * /api/stock-symbols/search:
+ *   get:
+ *     summary: Search stock symbols by keyword
+ *     tags: [Stock Symbols]
+ *     parameters:
+ *       - in: query
+ *         name: keyword
+ *         required: true
+ *         schema:
+ *           type: string
+ *         description: Search term (min 2 characters)
+ *     responses:
+ *       200:
+ *         description: List of matching stock symbols
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success:
+ *                   type: boolean
+ *                 count:
+ *                   type: integer
+ *                 data:
+ *                   type: array
+ *                   items:
+ *                     type: object
+ *                     properties:
+ *                       _id:
+ *                         type: string
+ *                       symbol:
+ *                         type: string
+ *                       name:
+ *                         type: string
+ *                       exchange:
+ *                         type: string
+ *                     example:
+ *                       _id: 60d21b4667d0d8992e610c85
+ *                       symbol: AAPL
+ *                       name: Apple Inc.
+ *                       exchange: NASDAQ
+ *       400:
+ *         description: Invalid keyword length
+ *       500:
+ *         description: Internal server error
+ */
+router.get('/search', stockSymbolController.searchStockSymbols);
+
+
+
+
+
 /**
  * @swagger
  * /api/stock-symbols/{id}:
@@ -224,6 +279,7 @@ router.get('/ticker/:symbol', stockSymbolController.getStockSymbolBySymbol);
  */
 router.put('/:id', stockSymbolController.updateStockSymbol);
 
+
 /**
  * @swagger
  * /api/stock-symbols/{id}:
@@ -297,5 +353,9 @@ router.delete('/:id', stockSymbolController.deleteStockSymbol);
  *         description: Internal server error
  */
 router.post('/update-prices', requireAdmin, stockSymbolController.updateStockPrices);
+
+
+
+
 
 module.exports = router;

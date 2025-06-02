@@ -83,6 +83,44 @@ const stockSymbolController = {
     }
   },
 
+
+
+searchStockSymbols: async (req, res) => {
+  try {
+    const { keyword } = req.query;
+    
+    if (!keyword || keyword.trim().length < 2) {
+      return res.status(400).json({
+        success: false,
+        message: 'Keyword must be at least 2 characters long'
+      });
+    }
+
+    const symbols = await StockSymbol.find({
+      $or: [
+        { symbol: { $regex: keyword, $options: 'i' } },
+        { name: { $regex: keyword, $options: 'i' } }
+      ]
+    })
+    .limit(10);
+
+    return res.status(200).json({
+      success: true,
+      count: symbols.length,
+      data: symbols
+    });
+    
+  } catch (error) {
+    console.error('Error searching stock symbols:', error);
+    return res.status(500).json({
+      success: false,
+      message: 'Internal server error',
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
+  }
+},
+
+
   getAllStockSymbols: async (req, res) => {
     try {
       const stockSymbols = await StockSymbol.find().sort({ createdAt: -1 });
@@ -311,7 +349,6 @@ const stockSymbolController = {
           batchManager.recordResult([], batch.map(s => `${s.exchange}:${s.symbol}`));
         }
 
-        // Add delay between batches to avoid rate limiting
         if (batchManager.currentBatch < batchManager.totalBatches) {
           await new Promise(resolve => setTimeout(resolve, delayBetweenBatches));
         }
