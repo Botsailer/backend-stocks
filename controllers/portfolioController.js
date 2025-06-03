@@ -180,6 +180,10 @@ exports.deletePortfolio = asyncHandler(async (req, res) => {
   res.status(200).json({ message: 'Portfolio and related price logs deleted successfully' });
 });
 
+
+//public portfolio routes and return data to subscribed users 
+
+
 // CRUD operations for YouTube links
 exports.addYouTubeLink = asyncHandler(async (req, res) => {
   const portfolio = await Portfolio.findById(req.params.id);

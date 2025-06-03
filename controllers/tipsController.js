@@ -21,9 +21,9 @@ function mapTipToCamelCase(tip) {
     exitStatus: tip.exitStatus,
     exitStatusPercentage: tip.exitStatusPercentage,
     horizon: tip.horizon,
-    downloadLinks: tip.downloadLinks,
-    createdAt: tip.createdAt,
-    updatedAt: tip.updatedAt,
+  downloadLinks: tip.downloadLinks || [], 
+    createdAt: tip.createdAt,  
+    updatedAt: tip.updatedAt   
   };
 }
 
@@ -68,12 +68,17 @@ exports.createTip = async (req, res) => {
     } = req.body;
     const portfolio = await Portfolio.findById(req.params.portfolioId);
     if (!portfolio) return res.status(400).json({ error: 'Invalid portfolio' });
+   
     if (!title || !stockId || !Array.isArray(content) || !description) {
       return res.status(400).json({ error: 'Title, stockId, content (array), and description are required' });
     }
     if (content.some(item => !item.key || !item.value)) {
       return res.status(400).json({ error: 'Each content item must have key and value' });
     }
+   if (downloadLinks && !Array.isArray(downloadLinks)) {
+  return res.status(400).json({ error: 'downloadLinks must be an array' });
+}
+
     const tip = new Tip({
       portfolio: portfolio._id,
       title,

@@ -349,6 +349,7 @@ searchStockSymbols: async (req, res) => {
           batchManager.recordResult([], batch.map(s => `${s.exchange}:${s.symbol}`));
         }
 
+        // Add delay between batches to avoid rate limiting
         if (batchManager.currentBatch < batchManager.totalBatches) {
           await new Promise(resolve => setTimeout(resolve, delayBetweenBatches));
         }

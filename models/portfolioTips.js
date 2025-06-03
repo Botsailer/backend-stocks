@@ -2,16 +2,9 @@ const mongoose = require("mongoose");
 const { Schema } = mongoose;
 
 const downloadLinksSchema = new Schema({
-  name: {
-    type: String,
-    required: true,
-  },
-  url: {
-    type: String,
-    required: true,
-  },
-
-});
+  name: { type: String, required: true },
+  url: { type: String, required: true },
+}, { _id: true }); 
 
 const TipSchema = new Schema(
   {
@@ -63,13 +56,14 @@ const TipSchema = new Schema(
     exitPrice:String,
     exitStatus:String,
     exitStatusPercentage: String,
+  downloadLinks: { 
+      type: [downloadLinksSchema],
+      default: [] 
+    },
     horizon: { type: String, default: "Long Term" },
   },
-  {
-    downloadLinks: [downloadLinksSchema],
-  },
-  { _id: true, versionKey: false },
-  { timestamps: true }
+  { _id: true, versionKey: false,timestamps: true }
+
 );
 
 module.exports = mongoose.model("Tip", TipSchema);
