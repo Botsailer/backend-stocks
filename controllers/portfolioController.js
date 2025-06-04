@@ -101,8 +101,12 @@ exports.createPortfolio = asyncHandler(async (req, res) => {
     currentValue: minInvestment
   });
 
-  await portfolio.save();
-  res.status(201).json(portfolio);
+const savedPortfolio = await portfolio.save(); 
+   const populatedPortfolio = await Portfolio.findById(savedPortfolio._id)
+res.status(201).json({
+    ...savedPortfolio.toObject(),
+    holdingsValue: populatedPortfolio.holdingsValue
+  });
 });
 
 exports.updatePortfolio = asyncHandler(async (req, res) => {
