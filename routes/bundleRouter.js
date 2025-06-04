@@ -9,11 +9,66 @@ const requireAdmin = require('../middleware/requirreAdmin');
  *   name: Bundles
  *   description: Portfolio bundle management
  * 
- * securitySchemes:
- *   bearerAuth:
- *     type: http
- *     scheme: bearer
- *     bearerFormat: JWT
+ * components:
+ *   schemas:
+ *     DescriptionItem:
+ *       type: object
+ *       required:
+ *         - key
+ *         - value
+ *       properties:
+ *         key:
+ *           type: string
+ *           example: "Who is it for?"
+ *         value:
+ *           type: string
+ *           example: "Best for new investors"
+ *     Bundle:
+ *       type: object
+ *       required:
+ *         - name
+ *         - portfolios
+ *         - discountPercentage
+ *       properties:
+ *         _id:
+ *           type: string
+ *           format: objectid
+ *         name:
+ *           type: string
+ *           example: "Starter Pack"
+ *         description:
+ *           type: array
+ *           items:
+ *             $ref: '#/components/schemas/DescriptionItem'
+ *           example: [{"key":"Who is it for?","value":"Best for new investors"}]
+ *         portfolios:
+ *           type: array
+ *           items:
+ *             type: string
+ *             format: objectid
+ *           description: Array of Portfolio IDs
+ *         discountPercentage:
+ *           type: number
+ *           minimum: 0
+ *           maximum: 100
+ *           example: 15
+ *         monthlyPrice:
+ *           type: number
+ *           description: "Auto-calculated monthly price after discount"
+ *         quarterlyPrice:
+ *           type: number
+ *           description: "Auto-calculated quarterly price after discount"
+ *         yearlyPrice:
+ *           type: number
+ *           description: "Auto-calculated yearly price after discount"
+ *         createdAt:
+ *           type: string
+ *           format: date-time
+ *           readOnly: true
+ *         updatedAt:
+ *           type: string
+ *           format: date-time
+ *           readOnly: true
  */
 
 /**
@@ -32,7 +87,7 @@ const requireAdmin = require('../middleware/requirreAdmin');
  *             $ref: '#/components/schemas/Bundle'
  *           example:
  *             name: "Starter Pack"
- *             description: "Best portfolios for new investors"
+ *             description: [{"key":"Who is it for?","value":"Best for new investors"}]
  *             portfolios: ["615a2d4b87d9c34f7d4f8a12", "615a2d4b87d9c34f7d4f8a13"]
  *             discountPercentage: 20
  *     responses:
@@ -67,10 +122,16 @@ router.post('/', passport.authenticate('jwt', { session: false }), requireAdmin,
  *             $ref: '#/components/schemas/Bundle'
  *           example:
  *             name: "Updated Starter Pack"
+ *             description: [{"key":"Who is it for?","value":"Now for everyone"}]
+ *             portfolios: ["615a2d4b87d9c34f7d4f8a12"]
  *             discountPercentage: 25
  *     responses:
  *       200:
  *         description: Bundle updated successfully
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/Bundle'
  *       404:
  *         description: Bundle not found
  */

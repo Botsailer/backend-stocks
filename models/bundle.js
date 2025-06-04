@@ -1,62 +1,18 @@
 const mongoose = require('mongoose');
 const { Schema } = mongoose;
 
-/**
- * @swagger
- * components:
- *   schemas:
- *     BundleSubscription:
- *       type: object
- *       required:
- *         - amount
- *         - currency
- *       properties:
- *         amount:
- *           type: number
- *           description: Total subscription amount after discount
- *         currency:
- *           type: string
- *           default: "INR"
- *         interval:
- *           type: string
- *           enum: [one-time, monthly, yearly]
- *           default: "monthly"
- * 
- *     Bundle:
- *       type: object
- *       required:
- *         - name
- *         - portfolios
- *         - discountPercentage
- *       properties:
- *         name:
- *           type: string
- *           example: "Starter Pack"
- *         description:
- *           type: string
- *           example: "Best portfolios for new investors"
- *         portfolios:
- *           type: array
- *           items:
- *             type: string
- *             format: objectid
- *           description: Array of Portfolio IDs
- *         discountPercentage:
- *           type: number
- *           minimum: 0
- *           maximum: 100
- *           example: 15
- *         subscription:
- *           $ref: '#/components/schemas/BundleSubscription'
- *         createdAt:
- *           type: string
- *           format: date-time
- *           readOnly: true
- *         updatedAt:
- *           type: string
- *           format: date-time
- *           readOnly: true
- */
+const descriptionItemSchema = new Schema({
+  key: {
+    type: String,
+    required: true,
+    trim: true
+  },
+  value: {
+    type: String,
+    required: true,
+    trim: true
+  }
+}, { _id: false });
 
 const BundleSchema = new Schema({
   name: {
@@ -65,7 +21,10 @@ const BundleSchema = new Schema({
     unique: true,
     trim: true
   },
-  description: String,
+  description: {
+    type: [descriptionItemSchema],
+    default: []
+  },
   portfolios: [{
     type: Schema.Types.ObjectId,
     ref: 'Portfolio',
@@ -77,37 +36,39 @@ const BundleSchema = new Schema({
     min: 0,
     max: 100
   },
-  subscription: {
-    amount: {
-      type: Number,
-      required: true,
-      min: 0
-    },
-    currency: {
-      type: String,
-      default: 'INR'
-    },
-    interval: {
-      type: String,
-      enum: ['one-time', 'monthly', 'yearly'],
-      default: 'monthly'
-    }
-  }
-}, { timestamps: true });
+  // Prices will be calculated virtually
+}, { 
+  timestamps: true,
+  toJSON: { virtuals: true },
+  toObject: { virtuals: true }
+});
 
-// Calculate subscription amount before saving
-BundleSchema.pre('save', async function(next) {
-  if (this.isModified('portfolios') || this.isModified('discountPercentage')) {
-    const portfolios = await mongoose.model('Portfolio').find({
-      _id: { $in: this.portfolios }
-    });
-    
-    const total = portfolios.reduce((sum, portfolio) => 
-      sum + (portfolio.subscriptionFee || 0), 0);
-    
-    this.subscription.amount = total * (1 - this.discountPercentage / 100);
-  }
-  next();
+// Virtuals for auto-calculated prices
+BundleSchema.virtual('monthlyPrice').get(function() {
+  if (!this.populated('portfolios')) return 0;
+  const total = this.portfolios.reduce((sum, portfolio) => {
+    const monthlyFee = portfolio.subscriptionFee.find(f => f.type === 'monthly');
+    return sum + (monthlyFee ? monthlyFee.price : 0);
+  }, 0);
+  return total * (1 - this.discountPercentage / 100);
+});
+
+BundleSchema.virtual('quarterlyPrice').get(function() {
+  if (!this.populated('portfolios')) return 0;
+  const total = this.portfolios.reduce((sum, portfolio) => {
+    const quarterlyFee = portfolio.subscriptionFee.find(f => f.type === 'quarterly');
+    return sum + (quarterlyFee ? quarterlyFee.price : 0);
+  }, 0);
+  return total * (1 - this.discountPercentage / 100);
+});
+
+BundleSchema.virtual('yearlyPrice').get(function() {
+  if (!this.populated('portfolios')) return 0;
+  const total = this.portfolios.reduce((sum, portfolio) => {
+    const yearlyFee = portfolio.subscriptionFee.find(f => f.type === 'yearly');
+    return sum + (yearlyFee ? yearlyFee.price : 0);
+  }, 0);
+  return total * (1 - this.discountPercentage / 100);
 });
 
 module.exports = mongoose.model('Bundle', BundleSchema);

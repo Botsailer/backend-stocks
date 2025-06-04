@@ -4,16 +4,35 @@ const Portfolio = require('../models/modelPortFolio');
 const asyncHandler = fn => (req, res, next) => 
   Promise.resolve(fn(req, res, next)).catch(next);
 
-// @desc    Create new bundle
-// @route   POST /api/bundles
+function computePrices(portfolios, discountPercentage) {
+  const prices = {
+    monthly: 0,
+    quarterly: 0,
+    yearly: 0
+  };
+
+  portfolios.forEach(portfolio => {
+    portfolio.subscriptionFee.forEach(fee => {
+      if (fee.type === 'monthly') prices.monthly += fee.price;
+      if (fee.type === 'quarterly') prices.quarterly += fee.price;
+      if (fee.type === 'yearly') prices.yearly += fee.price;
+    });
+  });
+
+  return {
+    monthly: prices.monthly * (1 - discountPercentage / 100),
+    quarterly: prices.quarterly * (1 - discountPercentage / 100),
+    yearly: prices.yearly * (1 - discountPercentage / 100)
+  };
+}
+
 exports.createBundle = asyncHandler(async (req, res) => {
-  const { name, description, portfolios, discountPercentage } = req.body;
+  const { name, description = [], portfolios, discountPercentage } = req.body;
 
   if (!name || !portfolios?.length || discountPercentage == null) {
     return res.status(400).json({ error: 'Missing required fields' });
   }
 
-  // Verify all portfolios exist
   const existingPortfolios = await Portfolio.find({ _id: { $in: portfolios } });
   if (existingPortfolios.length !== portfolios.length) {
     return res.status(400).json({ error: 'Invalid portfolio IDs' });
@@ -23,41 +42,55 @@ exports.createBundle = asyncHandler(async (req, res) => {
     name,
     description,
     portfolios,
-    discountPercentage,
-    subscription: { amount: 0 } // Will be calculated in pre-save hook
+    discountPercentage
   });
 
   await bundle.save();
-  res.status(201).json(bundle);
+  
+  // Populate for virtuals
+  const populatedBundle = await Bundle.findById(bundle._id)
+    .populate({
+      path: 'portfolios',
+      select: 'subscriptionFee'
+    });
+  
+  res.status(201).json(populatedBundle);
 });
 
-// @desc    Update bundle
-// @route   PUT /api/bundles/:id
 exports.updateBundle = asyncHandler(async (req, res) => {
-  const updates = { ...req.body };
-  
-  if (updates.portfolios) {
-    const existing = await Portfolio.countDocuments({ _id: { $in: updates.portfolios } });
-    if (existing !== updates.portfolios.length) {
-      return res.status(400).json({ error: 'Invalid portfolio IDs' });
-    }
-  }
-
-  const bundle = await Bundle.findByIdAndUpdate(
-    req.params.id,
-    updates,
-    { new: true, runValidators: true }
-  );
-
+  const bundle = await Bundle.findById(req.params.id);
   if (!bundle) {
     return res.status(404).json({ error: 'Bundle not found' });
   }
 
-  res.json(bundle);
+  const { portfolios, discountPercentage } = req.body;
+
+  if (portfolios) {
+    const existing = await Portfolio.countDocuments({ _id: { $in: portfolios } });
+    if (existing !== portfolios.length) {
+      return res.status(400).json({ error: 'Invalid portfolio IDs' });
+    }
+    bundle.portfolios = portfolios;
+  }
+
+  if (discountPercentage !== undefined) {
+    bundle.discountPercentage = discountPercentage;
+  }
+
+  if (req.body.name) bundle.name = req.body.name;
+  if (req.body.description) bundle.description = req.body.description;
+
+  await bundle.save();
+  
+  const populatedBundle = await Bundle.findById(bundle._id)
+    .populate({
+      path: 'portfolios',
+      select: 'subscriptionFee'
+    });
+    
+  res.status(200).json(populatedBundle);
 });
 
-// @desc    Get all bundles (with portfolio details)
-// @route   GET /api/bundles
 exports.getAllBundles = asyncHandler(async (req, res) => {
   const bundles = await Bundle.find()
     .populate({
@@ -69,8 +102,6 @@ exports.getAllBundles = asyncHandler(async (req, res) => {
   res.json(bundles);
 });
 
-// @desc    Get single bundle
-// @route   GET /api/bundles/:id
 exports.getBundleById = asyncHandler(async (req, res) => {
   const bundle = await Bundle.findById(req.params.id)
     .populate({
@@ -85,11 +116,10 @@ exports.getBundleById = asyncHandler(async (req, res) => {
   res.json(bundle);
 });
 
-// @desc    Delete bundle
-// @route   DELETE /api/bundles/:id
 exports.deleteBundle = asyncHandler(async (req, res) => {
   const bundle = await Bundle.findByIdAndDelete(req.params.id);
-  
+  //clear whole cillection
+  // await Bundle.deleteMany({});
   if (!bundle) {
     return res.status(404).json({ error: 'Bundle not found' });
   }
