@@ -11,18 +11,6 @@ const requireAdmin = require('../middleware/requirreAdmin');
  * 
  * components:
  *   schemas:
- *     DescriptionItem:
- *       type: object
- *       required:
- *         - key
- *         - value
- *       properties:
- *         key:
- *           type: string
- *           example: "Who is it for?"
- *         value:
- *           type: string
- *           example: "Best for new investors"
  *     Bundle:
  *       type: object
  *       required:
@@ -37,16 +25,16 @@ const requireAdmin = require('../middleware/requirreAdmin');
  *           type: string
  *           example: "Starter Pack"
  *         description:
- *           type: array
- *           items:
- *             $ref: '#/components/schemas/DescriptionItem'
- *           example: [{"key":"Who is it for?","value":"Best for new investors"}]
+ *           type: string
+ *           description: "Description of the bundle"
+ *           example: "Curated bundle for new investors"
  *         portfolios:
  *           type: array
  *           items:
  *             type: string
  *             format: objectid
  *           description: Array of Portfolio IDs
+ *           example: ["615a2d4b87d9c34f7d4f8a12", "615a2d4b87d9c34f7d4f8a13"]
  *         discountPercentage:
  *           type: number
  *           minimum: 0
@@ -87,7 +75,7 @@ const requireAdmin = require('../middleware/requirreAdmin');
  *             $ref: '#/components/schemas/Bundle'
  *           example:
  *             name: "Starter Pack"
- *             description: [{"key":"Who is it for?","value":"Best for new investors"}]
+ *             description: "Curated bundle for new investors"
  *             portfolios: ["615a2d4b87d9c34f7d4f8a12", "615a2d4b87d9c34f7d4f8a13"]
  *             discountPercentage: 20
  *     responses:
@@ -122,7 +110,7 @@ router.post('/', passport.authenticate('jwt', { session: false }), requireAdmin,
  *             $ref: '#/components/schemas/Bundle'
  *           example:
  *             name: "Updated Starter Pack"
- *             description: [{"key":"Who is it for?","value":"Now for everyone"}]
+ *             description: "Now for everyone"
  *             portfolios: ["615a2d4b87d9c34f7d4f8a12"]
  *             discountPercentage: 25
  *     responses:

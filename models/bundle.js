@@ -1,19 +1,6 @@
 const mongoose = require('mongoose');
 const { Schema } = mongoose;
 
-const descriptionItemSchema = new Schema({
-  key: {
-    type: String,
-    required: true,
-    trim: true
-  },
-  value: {
-    type: String,
-    required: true,
-    trim: true
-  }
-}, { _id: false });
-
 const BundleSchema = new Schema({
   name: {
     type: String,
@@ -22,8 +9,9 @@ const BundleSchema = new Schema({
     trim: true
   },
   description: {
-    type: [descriptionItemSchema],
-    default: []
+    type: String, // Changed to String
+    required: true,
+    default: ""   // Default empty string
   },
   portfolios: [{
     type: Schema.Types.ObjectId,
@@ -36,39 +24,50 @@ const BundleSchema = new Schema({
     min: 0,
     max: 100
   },
-  // Prices will be calculated virtually
 }, { 
   timestamps: true,
   toJSON: { virtuals: true },
   toObject: { virtuals: true }
 });
 
-// Virtuals for auto-calculated prices
+// Add safety checks to virtuals
 BundleSchema.virtual('monthlyPrice').get(function() {
-  if (!this.populated('portfolios')) return 0;
+  if (!this.portfolios || !Array.isArray(this.portfolios)) return 0;
+  
   const total = this.portfolios.reduce((sum, portfolio) => {
+    if (!portfolio || !portfolio.subscriptionFee || !Array.isArray(portfolio.subscriptionFee)) return sum;
+    
     const monthlyFee = portfolio.subscriptionFee.find(f => f.type === 'monthly');
     return sum + (monthlyFee ? monthlyFee.price : 0);
   }, 0);
+  
   return total * (1 - this.discountPercentage / 100);
 });
 
+// Apply same safety checks to other virtuals
 BundleSchema.virtual('quarterlyPrice').get(function() {
-  if (!this.populated('portfolios')) return 0;
+  if (!this.portfolios || !Array.isArray(this.portfolios)) return 0;
+  
   const total = this.portfolios.reduce((sum, portfolio) => {
+    if (!portfolio || !portfolio.subscriptionFee || !Array.isArray(portfolio.subscriptionFee)) return sum;
+    
     const quarterlyFee = portfolio.subscriptionFee.find(f => f.type === 'quarterly');
     return sum + (quarterlyFee ? quarterlyFee.price : 0);
   }, 0);
+  
   return total * (1 - this.discountPercentage / 100);
 });
 
 BundleSchema.virtual('yearlyPrice').get(function() {
-  if (!this.populated('portfolios')) return 0;
+  if (!this.portfolios || !Array.isArray(this.portfolios)) return 0;
+  
   const total = this.portfolios.reduce((sum, portfolio) => {
+    if (!portfolio || !portfolio.subscriptionFee || !Array.isArray(portfolio.subscriptionFee)) return sum;
+    
     const yearlyFee = portfolio.subscriptionFee.find(f => f.type === 'yearly');
     return sum + (yearlyFee ? yearlyFee.price : 0);
   }, 0);
+  
   return total * (1 - this.discountPercentage / 100);
 });
-
 module.exports = mongoose.model('Bundle', BundleSchema);

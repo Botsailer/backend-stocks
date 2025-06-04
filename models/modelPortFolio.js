@@ -213,8 +213,9 @@ const PortfolioSchema = new Schema({
   toObject: { virtuals: true }
 });
 
-// Virtual for total holdings value (cost basis)
+
 PortfolioSchema.virtual('holdingsValue').get(function() {
+  if (!Array.isArray(this.holdings)) return 0; 
   return this.holdings.reduce((sum, holding) => 
     sum + (holding.buyPrice * holding.quantity), 0);
 });
@@ -222,7 +223,8 @@ PortfolioSchema.virtual('holdingsValue').get(function() {
 // Validate total allocation doesn't exceed minInvestment AT CREATION
 PortfolioSchema.pre('validate', function(next) {
   if (this.isNew) {
-    const totalCost = this.holdings.reduce((sum, holding) => 
+    const holdings = this.holdings || [];
+    const totalCost = holdings.reduce((sum, holding) => 
       sum + (holding.buyPrice * holding.quantity), 0);
     
     if (totalCost > this.minInvestment) {
@@ -238,9 +240,10 @@ PortfolioSchema.pre('validate', function(next) {
 
 // Calculate weight percentages before saving
 PortfolioSchema.pre('save', function(next) {
+  const holdings = this.holdings || [];
   const totalValue = this.currentValue;
   
-  this.holdings.forEach(holding => {
+  holdings.forEach(holding => {
     if (totalValue > 0) {
       holding.weight = ((holding.buyPrice * holding.quantity) / totalValue) * 100;
     }

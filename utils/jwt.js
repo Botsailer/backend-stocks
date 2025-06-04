@@ -30,7 +30,6 @@ async function verifyAccessToken(token, user) {
   if (user.changedPasswordAt.getTime() > issued) {
     throw new Error('Credentials changed—please log in again');
   }
-  // If tokenVersion mismatches, reject
   if (payload.tokenVersion !== user.tokenVersion) {
     throw new Error('Token revoked—please log in again');
   }
