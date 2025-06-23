@@ -55,7 +55,7 @@ BundleSchema.virtual('quarterlyPrice').get(function() {
     return sum + (quarterlyFee ? quarterlyFee.price : 0);
   }, 0);
   
-  return total * (1 - this.discountPercentage / 100);
+  return Math.round((total * (1 - this.discountPercentage / 100)) * 100) / 100;
 });
 
 BundleSchema.virtual('yearlyPrice').get(function() {
@@ -68,6 +68,7 @@ BundleSchema.virtual('yearlyPrice').get(function() {
     return sum + (yearlyFee ? yearlyFee.price : 0);
   }, 0);
   
-  return total * (1 - this.discountPercentage / 100);
+  return Math.round((total * (1 - this.discountPercentage / 100)) * 100) / 100;
 });
+
 module.exports = mongoose.model('Bundle', BundleSchema);

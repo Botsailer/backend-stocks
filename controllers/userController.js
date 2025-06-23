@@ -32,7 +32,7 @@ exports.getProfile = async (req, res) => {
 exports.getAllPortfolios = async (req, res) => {
   try {
     const portfolios = await Portfolio.find()
-      .select('name description subscriptionFee minInvestment durationMonths createdAt')
+      .select('name description subscriptionFee minInvestment durationMonths createdAt CAGRSinceInception monthlyGains oneYearGains')
       .sort('name');
     res.json(portfolios);
   } catch (err) {
@@ -46,7 +46,7 @@ exports.getAllPortfolios = async (req, res) => {
 exports.getPortfolioById = async (req, res) => {
   try {
     const portfolio = await Portfolio.findById(req.params.id)
-      .select('name description subscriptionFee minInvestment durationMonths createdAt');
+      .select('name description subscriptionFee minInvestment durationMonths createdAt CAGRSinceInception monthlyGains oneYearGains');
     
     if (!portfolio) return res.status(404).json({ error: 'Portfolio not found' });
     res.json(portfolio);
