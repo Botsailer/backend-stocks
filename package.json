@@ -43,7 +43,6 @@
     "swagger-jsdoc": "^6.2.8",
     "swagger-ui-express": "^5.0.1",
     "tradingview-scraper": "^1.0.4"
-   
   },
   "devDependencies": {
     "jest": "^29.7.0",
