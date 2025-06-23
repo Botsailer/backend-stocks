@@ -1,28 +1,51 @@
-/**
- * userController.js
- * -----------------
- * Controller for user-specific routes to access non-sensitive portfolio data
- * and manage user profile information
- */
+const mongoose = require('mongoose');
 const User = require('../models/user');
 const Portfolio = require('../models/modelPortFolio');
+const Bundle = require('../models/bundle');
 const Subscription = require('../models/subscription');
-const Cart = require('../models/carts'); // Use a single consistent name with PascalCase
+const Cart = require('../models/carts');
 const PaymentHistory = require('../models/paymenthistory');
 const Tip = require('../models/portfolioTips');
+
+// Helper function for consistent error handling
+const handleError = (res, err, status = 500) => {
+  if (err instanceof mongoose.Error.ValidationError) {
+    return res.status(400).json({ error: err.message });
+  }
+  if (err.name === 'CastError') {
+    return res.status(400).json({ error: 'Invalid ID format' });
+  }
+  res.status(status).json({ error: err.message });
+};
+
+// Helper to populate cart items
+const populateCart = async (cart) => {
+  return cart.populate([
+    {
+      path: 'items.productId',
+      select: 'name description subscriptionFee monthlyPrice quarterlyPrice yearlyPrice',
+      model: 'Portfolio'
+    },
+    {
+      path: 'items.productId',
+      select: 'name description monthlyPrice quarterlyPrice yearlyPrice',
+      model: 'Bundle'
+    }
+  ]);
+};
+
 /**
  * Get user's profile information
  */
 exports.getProfile = async (req, res) => {
   try {
-    // User is already available from JWT authentication
     const user = await User.findById(req.user._id)
       .select('-password -refreshToken -tokenVersion');
     
     if (!user) return res.status(404).json({ error: 'User not found' });
     res.json(user);
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    handleError(res, err);
   }
 };
 
@@ -36,7 +59,7 @@ exports.getAllPortfolios = async (req, res) => {
       .sort('name');
     res.json(portfolios);
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    handleError(res, err);
   }
 };
 
@@ -51,69 +74,76 @@ exports.getPortfolioById = async (req, res) => {
     if (!portfolio) return res.status(404).json({ error: 'Portfolio not found' });
     res.json(portfolio);
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    handleError(res, err);
   }
 };
 
 /**
- * Get all user subscriptions with limited portfolio data
+ * Get all user subscriptions
  */
 exports.getUserSubscriptions = async (req, res) => {
   try {
     const subscriptions = await Subscription.find({ user: req.user._id })
- .populate('productId', 'name description subscriptionFee minInvestment durationMonths')
-    .sort('-createdAt');
+      .populate({
+        path: 'productId',
+        select: 'name description',
+        model: 'Portfolio'
+      })
+      .populate({
+        path: 'bundle',
+        select: 'name description',
+        model: 'Bundle'
+      })
+      .sort('-createdAt');
     
     res.json(subscriptions);
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    handleError(res, err);
   }
 };
 
 /**
  * Get tips with subscription-based access control
- * Public can see titles only, subscribers see full details
  */
 exports.getTips = async (req, res) => {
   try {
-    // Get all tips with populated portfolio information upfront
     const tips = await Tip.find().populate('portfolio', 'name').sort('-createdAt');
     let userSubscriptions = [];
     
-    // If user is authenticated, get their subscriptions
     if (req.user) {
       const subscriptions = await Subscription.find({ 
         user: req.user._id,
         isActive: true 
       });
-      userSubscriptions = subscriptions.map(sub => sub.portfolio.toString());
+      
+      // Get both portfolio and bundle subscriptions
+      userSubscriptions = [
+        ...subscriptions.map(sub => sub.portfolio?.toString()),
+        ...subscriptions.flatMap(sub => 
+          sub.bundle?.portfolios?.map(p => p.toString()) || []
+        )
+      ].filter(Boolean);
     }
     
-    // Process tips based on authentication and subscription status
     const processedTips = tips.map(tip => {
-      // If user is not authenticated, or tip has a portfolio they're not subscribed to
-      if (!req.user || (tip.portfolio && !userSubscriptions.includes(tip.portfolio._id.toString()))) {
-        return {
+      const isSubscribed = req.user && tip.portfolio && 
+        userSubscriptions.includes(tip.portfolio._id.toString());
+      
+      return isSubscribed ? 
+        { ...tip.toObject(), isSubscribed: true } :
+        {
           _id: tip._id,
           title: tip.title,
           portfolio: tip.portfolio ? { _id: tip.portfolio._id, name: tip.portfolio.name } : null,
           isSubscribed: false
         };
-      }
-
-      return {
-        ...tip.toObject(),
-        isSubscribed: true
-      };
     });
     
     res.json(processedTips);
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    handleError(res, err);
   }
 };
-
-
 
 /**
  * Get user's payment history
@@ -122,12 +152,13 @@ exports.getUserPaymentHistory = async (req, res) => {
   try {
     const payments = await PaymentHistory.find({ user: req.user._id })
       .populate('portfolio', 'name')
-      .select('-signature') // Exclude sensitive data
+      .populate('bundle', 'name')
+      .select('-signature')
       .sort('-createdAt');
     
     res.json(payments);
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    handleError(res, err);
   }
 };
 
@@ -136,65 +167,90 @@ exports.getUserPaymentHistory = async (req, res) => {
  */
 exports.getCart = async (req, res) => {
   try {
-    let userCart = await Cart.findOne({ user: req.user._id })
-      .populate('items.portfolio', 'name description subscriptionFee minInvestment durationMonths');
+    let userCart = await Cart.findOne({ user: req.user._id });
     
-    // If cart doesn't exist yet, create an empty one
     if (!userCart) {
       userCart = new Cart({ user: req.user._id, items: [] });
       await userCart.save();
     }
     
-    res.json(userCart);
+    const populatedCart = await populateCart(userCart);
+    res.json(populatedCart);
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    handleError(res, err);
   }
 };
 
 /**
- * Add portfolio to cart
+ * Add product to cart
  */
 exports.addToCart = async (req, res) => {
   try {
-    const { portfolioId, quantity = 1 } = req.body;
+    const { productType, productId, planType = 'monthly', quantity = 1 } = req.body;
     
-    // Validate portfolio exists
-    const portfolio = await Portfolio.findById(portfolioId);
-    if (!portfolio) {
-      return res.status(404).json({ error: 'Portfolio not found' });
+    // Validate input
+    if (!['Portfolio', 'Bundle'].includes(productType)) {
+      return res.status(400).json({ error: 'Invalid product type' });
     }
     
-    // Find user's cart or create one if it doesn't exist
-    let userCart = await Cart.findOne({ user: req.user._id });
-    if (!userCart) {
-      userCart = new Cart({ user: req.user._id, items: [] });
+    if (!mongoose.Types.ObjectId.isValid(productId)) {
+      return res.status(400).json({ error: 'Invalid product ID' });
     }
     
-    // Check if item already in cart
-    const existingItemIndex = userCart.items.findIndex(
-      item => item.portfolio.toString() === portfolioId
+    if (!['monthly', 'quarterly', 'yearly'].includes(planType)) {
+      return res.status(400).json({ error: 'Invalid plan type' });
+    }
+    
+    if (!Number.isInteger(quantity) || quantity < 1) {
+      return res.status(400).json({ error: 'Quantity must be a positive integer' });
+    }
+    
+    // Verify product exists
+    const Model = productType === 'Portfolio' ? Portfolio : Bundle;
+    const product = await Model.findById(productId);
+    if (!product) {
+      return res.status(404).json({ error: `${productType} not found` });
+    }
+    
+    // Atomic operation to update cart
+    const userCart = await Cart.findOneAndUpdate(
+      { user: req.user._id },
+      {
+        $setOnInsert: { items: [] },
+        $addToSet: {
+          items: {
+            $each: [{
+              productType,
+              productId,
+              planType,
+              quantity
+            }]
+          }
+        }
+      },
+      {
+        new: true,
+        upsert: true,
+        runValidators: true
+      }
     );
     
-    if (existingItemIndex > -1) {
-      // Update quantity if already in cart
-      userCart.items[existingItemIndex].quantity += Number(quantity);
-    } else {
-      // Add new item to cart
-      userCart.items.push({
-        portfolio: portfolioId,
-        quantity: Number(quantity)
-      });
+    // For existing items, update quantity
+    const existingItem = userCart.items.find(item => 
+      item.productType === productType &&
+      item.productId.equals(productId) &&
+      item.planType === planType
+    );
+    
+    if (existingItem) {
+      existingItem.quantity += quantity;
+      await userCart.save();
     }
     
-    await userCart.save();
-    
-    // Return cart with populated portfolio details
-    const updatedCart = await Cart.findOne({ user: req.user._id })
-      .populate('items.portfolio', 'name description subscriptionFee minInvestment durationMonths');
-      
-    res.status(200).json(updatedCart);
+    const populatedCart = await populateCart(userCart);
+    res.status(200).json(populatedCart);
   } catch (err) {
-    res.status(400).json({ error: err.message });
+    handleError(res, err, 400);
   }
 };
 
@@ -203,28 +259,23 @@ exports.addToCart = async (req, res) => {
  */
 exports.removeFromCart = async (req, res) => {
   try {
-    const { portfolioId } = req.params;
+    const { itemId } = req.params;
     
-    // Find user's cart
-    const userCart = await Cart.findOne({ user: req.user._id });
+    // Atomic operation to remove item
+    const userCart = await Cart.findOneAndUpdate(
+      { user: req.user._id },
+      { $pull: { items: { _id: itemId } } },
+      { new: true }
+    );
+    
     if (!userCart) {
       return res.status(404).json({ error: 'Cart not found' });
     }
     
-    // Filter out the item to remove
-    userCart.items = userCart.items.filter(
-      item => item.portfolio.toString() !== portfolioId
-    );
-
-    await userCart.save();
-
-    // Return updated cart with populated portfolio details
-    const updatedCart = await Cart.findOne({ user: req.user._id })
-      .populate('items.portfolio', 'name description subscriptionFee minInvestment durationMonths');
-    
-    res.json(updatedCart);
+    const populatedCart = await populateCart(userCart);
+    res.json(populatedCart);
   } catch (err) {
-    res.status(400).json({ error: err.message });
+    handleError(res, err, 400);
   }
 };
 
@@ -233,16 +284,20 @@ exports.removeFromCart = async (req, res) => {
  */
 exports.clearCart = async (req, res) => {
   try {
-    const userCart = await Cart.findOne({ user: req.user._id });
+    // Atomic operation to clear cart
+    const userCart = await Cart.findOneAndUpdate(
+      { user: req.user._id },
+      { $set: { items: [] } },
+      { new: true }
+    );
+    
     if (!userCart) {
       return res.status(404).json({ error: 'Cart not found' });
     }
-
-    userCart.items = [];
-    await userCart.save();
-
-    res.json({ message: 'Cart cleared successfully', cart: userCart });
+    
+    const populatedCart = await populateCart(userCart);
+    res.json({ message: 'Cart cleared successfully', cart: populatedCart });
   } catch (err) {
-    res.status(400).json({ error: err.message });
+    handleError(res, err, 400);
   }
 };
