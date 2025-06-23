@@ -2,6 +2,9 @@ const express = require('express');
 const router = express.Router();
 const portfolioController = require('../controllers/portfolioController');
 const requireAdmin = require('../middleware/requirreAdmin');
+const cronController = require('../controllers/portfoliocroncontroller');
+
+
 
 /**
  * @swagger
@@ -242,6 +245,68 @@ const requireAdmin = require('../middleware/requirreAdmin');
  *         $ref: '#/components/responses/Forbidden'
  */
 router.get('/portfolios', requireAdmin, portfolioController.getAllPortfolios);
+
+
+
+
+/**
+ * @swagger
+ * /api/portfolios/{id}/price-history:
+ *   get:
+ *     summary: Get portfolio price history for charting
+ *     tags: [Portfolios]
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema:
+ *           type: string
+ *         description: Portfolio ID
+ *       - in: query
+ *         name: period
+ *         schema:
+ *           type: string
+ *           enum: [1w, 1m, 3m, 6m, 1y, all]
+ *         description: Time period for historical data
+ *     responses:
+ *       200:
+ *         description: Portfolio price history
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 portfolioId:
+ *                   type: string
+ *                 period:
+ *                   type: string
+ *                 dataPoints:
+ *                   type: integer
+ *                 data:
+ *                   type: array
+ *                   items:
+ *                     type: object
+ *                     properties:
+ *                       date:
+ *                         type: string
+ *                         format: date-time
+ *                       value:
+ *                         type: number
+ *                       cash:
+ *                         type: number
+ *                       change:
+ *                         type: number
+ *                       changePercent:
+ *                         type: number
+ *       400:
+ *         description: Invalid portfolio ID
+ *       404:
+ *         description: No price history found
+ *       500:
+ *         description: Server error
+ */
+router.get('/:id/price-history', portfolioController.getPortfolioPriceHistory);
+
 
 /**
  * @swagger
@@ -587,5 +652,46 @@ router.post('/portfolios/:id/downloads', requireAdmin, portfolioController.addDo
  *         description: Portfolio or link not found
  */
 router.delete('/portfolios/:id/downloads/:linkId', requireAdmin, portfolioController.removeDownloadLink);
+
+
+
+
+/**
+ * @swagger
+ * /api/portfolios/trigger-daily-valuation:
+ *   post:
+ *     summary: Manually trigger daily portfolio valuation
+ *     tags: [Portfolios]
+ *     security:
+ *       - bearerAuth: []
+ *     responses:
+ *       200:
+ *         description: Valuation results
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: array
+ *               items:
+ *                 type: object
+ *                 properties:
+ *                   portfolio:
+ *                     type: string
+ *                   status:
+ *                     type: string
+ *                   logId:
+ *                     type: string
+ *                   error:
+ *                     type: string
+ *       500:
+ *         description: Server error
+ */
+router.post('/trigger-daily-valuation', requireAdmin, async (req, res) => {
+  try {
+    const results = await cronController.triggerDailyValuation();
+    res.json(results);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
 
 module.exports = router;

@@ -1,143 +1,122 @@
 /**
  * userRoute.js
  * ------------
- * Routes for regular users to access their portfolio data
- * and profile information.
+ * Routes for user profile, portfolio access, tips, subscriptions, payments, and cart management.
  */
 const express = require('express');
 const router = express.Router();
 const passport = require('passport');
 const userController = require('../controllers/userController');
 
-// Middleware to require authenticated user
+// Middleware for required authentication
 const requireAuth = passport.authenticate('jwt', { session: false });
 
-/**
- * @swagger
- * tags:
- *   name: User
- *   description: User profile and subscription management
- */
-
-/**
- * @swagger
- * /api/user/profile:
- *   get:
- *     summary: Get user's profile information
- *     tags: [User]
- *     security:
- *       - bearerAuth: []
- *     responses:
- *       200:
- *         description: User profile data
- *       401:
- *         description: Unauthorized
- */
-router.get('/profile', requireAuth, userController.getProfile);
-
-
-// Custom middleware for optional authentication (allows public access but authenticates if token is present)
+// Middleware for optional authentication (authenticates if token present)
 const optionalAuth = (req, res, next) => {
   passport.authenticate('jwt', { session: false }, (err, user) => {
-    if (user) {
-      req.user = user;
-    }
+    if (user) req.user = user;
     next();
   })(req, res, next);
 };
 
 /**
  * @swagger
- * /api/user/tips:
+ * tags:
+ *   - name: User Profile
+ *     description: User account management
+ *   - name: Portfolios
+ *     description: Public portfolio information
+ *   - name: Tips
+ *     description: Investment tips with access control
+ *   - name: Subscriptions
+ *     description: User subscription management
+ *   - name: Payments
+ *     description: Payment history
+ *   - name: Cart
+ *     description: Shopping cart operations
+ */
+
+// ======================
+//  User Profile Routes
+// ======================
+/**
+ * @swagger
+ * /api/user/profile:
  *   get:
- *     summary: Get tips with subscription-based access control
- *     description: |
- *       Public endpoint that shows tips with controlled access based on subscription status.
- *       - Unauthenticated users will see only tip titles
- *       - Authenticated but unsubscribed users will see only tip titles
- *       - Users subscribed to a portfolio will see complete tip details for that portfolio's tips
- *       
- *       Each tip includes an `isSubscribed` boolean property indicating whether the user 
- *       can view full details.
- *     tags: [User]
+ *     summary: Get authenticated user's profile
+ *     description: Returns non-sensitive user information. Requires authentication.
+ *     tags: [User Profile]
  *     security:
  *       - bearerAuth: []
- *       - {}  # Empty security requirement means optional authentication
  *     responses:
  *       200:
- *         description: List of tips with subscription-based access control
+ *         description: User profile data
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 _id:
+ *                   type: string
+ *                 username:
+ *                   type: string
+ *                 email:
+ *                   type: string
+ *                 emailVerified:
+ *                   type: boolean
+ *                 createdAt:
+ *                   type: string
+ *                   format: date-time
+ *       401:
+ *         description: Unauthorized - Missing or invalid token
+ *       404:
+ *         description: User not found
+ */
+router.get('/profile', requireAuth, userController.getProfile);
+
+// ======================
+//  Portfolio Routes
+// ======================
+/**
+ * @swagger
+ * /api/user/portfolios:
+ *   get:
+ *     summary: Get all available portfolios
+ *     description: Returns public portfolio information. Accessible without authentication.
+ *     tags: [Portfolios]
+ *     responses:
+ *       200:
+ *         description: List of portfolios with public data
  *         content:
  *           application/json:
  *             schema:
  *               type: array
  *               items:
- *                 oneOf:
- *                   - type: object
- *                     properties:
- *                       _id: 
- *                         type: string
- *                         description: Tip ID
- *                       title:
- *                         type: string
- *                         description: Tip title (limited access)
- *                       isSubscribed:
- *                         type: boolean
- *                         description: Indicates user doesn't have access to full details
- *                         example: false
- *                   - type: object
- *                     properties:
- *                       _id:
- *                         type: string
- *                       title:
- *                         type: string
- *                       content:
- *                         type: string
- *                       status:
- *                         type: string
- *                       buyrange:
- *                         type: string
- *                       targetprice:
- *                         type: string
- *                       addmoreat:
- *                         type: string
- *                       tipurl:
- *                         type: string
- *                       horizon:
- *                         type: string
- *                       isSubscribed:
- *                         type: boolean
- *                         example: true
+ *                 type: object
+ *                 properties:
+ *                   _id:
+ *                     type: string
+ *                   name:
+ *                     type: string
+ *                   description:
+ *                     type: string
+ *                   minInvestment:
+ *                     type: number
+ *                   createdAt:
+ *                     type: string
+ *                     format: date-time
  *       500:
  *         description: Server error
  */
-router.get('/tips', requireAuth, userController.getTips);
-
-
-
-/**
- * @swagger
- * /api/user/portfolios:
- *   get:
- *     summary: Get all available portfolios (public data only)
- *     tags: [User]
- *     security:
- *       - bearerAuth: []
- *     responses:
- *       200:
- *         description: List of portfolios with limited data
- *       401:
- *         description: Unauthorized
- */
-router.get('/portfolios', requireAuth, userController.getAllPortfolios);
+router.get('/portfolios', userController.getAllPortfolios);
 
 /**
  * @swagger
  * /api/user/portfolios/{id}:
  *   get:
- *     summary: Get a portfolio by ID (public data only)
- *     tags: [User]
- *     security:
- *       - bearerAuth: []
+ *     summary: Get portfolio details by ID
+ *     description: Returns public information for a specific portfolio. Accessible without authentication.
+ *     tags: [Portfolios]
  *     parameters:
  *       - in: path
  *         name: id
@@ -147,63 +126,266 @@ router.get('/portfolios', requireAuth, userController.getAllPortfolios);
  *         description: Portfolio ID
  *     responses:
  *       200:
- *         description: Portfolio data with limited fields
- *       401:
- *         description: Unauthorized
+ *         description: Portfolio details
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 _id:
+ *                   type: string
+ *                 name:
+ *                   type: string
+ *                 description:
+ *                   type: string
+ *                 subscriptionFee:
+ *                   type: array
+ *                   items:
+ *                     type: object
+ *                     properties:
+ *                       type:
+ *                         type: string
+ *                       price:
+ *                         type: number
+ *                 minInvestment:
+ *                   type: number
+ *                 durationMonths:
+ *                   type: number
  *       404:
  *         description: Portfolio not found
+ *       500:
+ *         description: Server error
  */
-router.get('/portfolios/:id', requireAuth, userController.getPortfolioById);
+router.get('/portfolios/:id', userController.getPortfolioById);
 
+// ======================
+//  Tips Routes
+// ======================
+/**
+ * @swagger
+ * /api/user/tips:
+ *   get:
+ *     summary: Get investment tips with access control
+ *     description: |
+ *       Returns tips with content visibility based on user's subscription status.
+ *       - Unauthenticated users see only tip titles
+ *       - Authenticated users see full content for tips they're subscribed to
+ *       - Portfolio-specific tips require subscription to that portfolio
+ *       - Premium tips require premium bundle subscription
+ *       - Basic tips require any active subscription
+ *     tags: [Tips]
+ *     security: []
+ *     responses:
+ *       200:
+ *         description: List of tips with appropriate access
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: array
+ *               items:
+ *                 oneOf:
+ *                   - $ref: '#/components/schemas/RestrictedTip'
+ *                   - $ref: '#/components/schemas/FullTip'
+ *       500:
+ *         description: Server error
+ * 
+ * components:
+ *   schemas:
+ *     RestrictedTip:
+ *       type: object
+ *       properties:
+ *         _id:
+ *           type: string
+ *         title:
+ *           type: string
+ *         portfolio:
+ *           type: object
+ *           properties:
+ *             _id:
+ *               type: string
+ *             name:
+ *               type: string
+ *         category:
+ *           type: string
+ *           enum: [basic, premium]
+ *     FullTip:
+ *       type: object
+ *       properties:
+ *         _id:
+ *           type: string
+ *         title:
+ *           type: string
+ *         content:
+ *           type: string
+ *         status:
+ *           type: string
+ *         buyrange:
+ *           type: string
+ *         targetprice:
+ *           type: string
+ *         addmoreat:
+ *           type: string
+ *         tipurl:
+ *           type: string
+ *         horizon:
+ *           type: string
+ *         portfolio:
+ *           type: object
+ *           properties:
+ *             _id:
+ *               type: string
+ *             name:
+ *               type: string
+ *         category:
+ *           type: string
+ *           enum: [basic, premium]
+ */
+router.get('/tips', optionalAuth, userController.getTips);
+
+// ======================
+//  Subscription Routes
+// ======================
 /**
  * @swagger
  * /api/user/subscriptions:
  *   get:
- *     summary: Get user's subscriptions
- *     tags: [User]
+ *     summary: Get user's active subscriptions
+ *     description: Returns list of subscriptions for authenticated user.
+ *     tags: [Subscriptions]
  *     security:
  *       - bearerAuth: []
  *     responses:
  *       200:
- *         description: List of user's subscriptions
+ *         description: List of user subscriptions
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: array
+ *               items:
+ *                 type: object
+ *                 properties:
+ *                   _id:
+ *                     type: string
+ *                   productId:
+ *                     type: object
+ *                     properties:
+ *                       _id:
+ *                         type: string
+ *                       name:
+ *                         type: string
+ *                   startDate:
+ *                     type: string
+ *                     format: date-time
+ *                   endDate:
+ *                     type: string
+ *                     format: date-time
+ *                   isActive:
+ *                     type: boolean
  *       401:
  *         description: Unauthorized
+ *       500:
+ *         description: Server error
  */
 router.get('/subscriptions', requireAuth, userController.getUserSubscriptions);
 
+// ======================
+//  Payment Routes
+// ======================
 /**
  * @swagger
  * /api/user/payments:
  *   get:
  *     summary: Get user's payment history
- *     tags: [User]
+ *     description: Returns payment records for authenticated user.
+ *     tags: [Payments]
  *     security:
  *       - bearerAuth: []
  *     responses:
  *       200:
- *         description: List of user's payments
+ *         description: List of payment records
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: array
+ *               items:
+ *                 type: object
+ *                 properties:
+ *                   _id:
+ *                     type: string
+ *                   amount:
+ *                     type: number
+ *                   currency:
+ *                     type: string
+ *                   status:
+ *                     type: string
+ *                   portfolio:
+ *                     type: object
+ *                     properties:
+ *                       _id:
+ *                         type: string
+ *                       name:
+ *                         type: string
+ *                   createdAt:
+ *                     type: string
+ *                     format: date-time
  *       401:
  *         description: Unauthorized
+ *       500:
+ *         description: Server error
  */
 router.get('/payments', requireAuth, userController.getUserPaymentHistory);
 
-
-
+// ======================
+//  Cart Routes
+// ======================
 /**
  * @swagger
  * /api/user/cart:
  *   get:
- *     summary: Get user's cart
+ *     summary: Get user's shopping cart
+ *     description: Returns current cart contents for authenticated user.
  *     tags: [Cart]
  *     security:
  *       - bearerAuth: []
  *     responses:
  *       200:
- *         description: User's shopping cart
+ *         description: Shopping cart contents
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 _id:
+ *                   type: string
+ *                 user:
+ *                   type: string
+ *                 items:
+ *                   type: array
+ *                   items:
+ *                     type: object
+ *                     properties:
+ *                       portfolio:
+ *                         type: object
+ *                         properties:
+ *                           _id:
+ *                             type: string
+ *                           name:
+ *                             type: string
+ *                           subscriptionFee:
+ *                             type: array
+ *                             items:
+ *                               type: object
+ *                               properties:
+ *                                 type:
+ *                                   type: string
+ *                                 price:
+ *                                   type: number
+ *                       quantity:
+ *                         type: number
  *       401:
  *         description: Unauthorized
- *       500:
- *         description: Server error
+ *       404:
+ *         description: Cart not found
  */
 router.get('/cart', requireAuth, userController.getCart);
 
@@ -212,6 +394,7 @@ router.get('/cart', requireAuth, userController.getCart);
  * /api/user/cart:
  *   post:
  *     summary: Add portfolio to cart
+ *     description: Adds a portfolio to the authenticated user's shopping cart.
  *     tags: [Cart]
  *     security:
  *       - bearerAuth: []
@@ -226,14 +409,15 @@ router.get('/cart', requireAuth, userController.getCart);
  *             properties:
  *               portfolioId:
  *                 type: string
- *                 description: ID of portfolio to add to cart
+ *                 description: ID of the portfolio to add
  *               quantity:
  *                 type: integer
- *                 description: Quantity to add (default 1)
+ *                 minimum: 1
  *                 default: 1
+ *                 description: Quantity to add
  *     responses:
  *       200:
- *         description: Updated cart
+ *         description: Updated cart contents
  *       400:
  *         description: Invalid request
  *       401:
@@ -247,7 +431,8 @@ router.post('/cart', requireAuth, userController.addToCart);
  * @swagger
  * /api/user/cart/{portfolioId}:
  *   delete:
- *     summary: Remove item from cart
+ *     summary: Remove portfolio from cart
+ *     description: Removes a specific portfolio from the authenticated user's cart.
  *     tags: [Cart]
  *     security:
  *       - bearerAuth: []
@@ -257,14 +442,14 @@ router.post('/cart', requireAuth, userController.addToCart);
  *         required: true
  *         schema:
  *           type: string
- *         description: Portfolio ID to remove from cart
+ *         description: ID of portfolio to remove
  *     responses:
  *       200:
- *         description: Updated cart
+ *         description: Updated cart contents
  *       401:
  *         description: Unauthorized
  *       404:
- *         description: Cart not found or item not in cart
+ *         description: Cart or item not found
  */
 router.delete('/cart/:portfolioId', requireAuth, userController.removeFromCart);
 
@@ -272,21 +457,41 @@ router.delete('/cart/:portfolioId', requireAuth, userController.removeFromCart);
  * @swagger
  * /api/user/cart:
  *   delete:
- *     summary: Clear all items from cart
+ *     summary: Clear shopping cart
+ *     description: Removes all items from the authenticated user's cart.
  *     tags: [Cart]
  *     security:
  *       - bearerAuth: []
  *     responses:
  *       200:
  *         description: Cart cleared successfully
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 message:
+ *                   type: string
+ *                 cart:
+ *                   $ref: '#/components/schemas/Cart'
  *       401:
  *         description: Unauthorized
  *       404:
  *         description: Cart not found
+ * 
+ *   components:
+ *     schemas:
+ *       Cart:
+ *         type: object
+ *         properties:
+ *           _id:
+ *             type: string
+ *           user:
+ *             type: string
+ *           items:
+ *             type: array
+ *             items: {}
  */
 router.delete('/cart', requireAuth, userController.clearCart);
-
-
-
 
 module.exports = router;

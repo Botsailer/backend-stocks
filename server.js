@@ -6,6 +6,8 @@ const config = require('./config/config');
 const dbAdapter = require('./utils/db'); 
 const authRoutes = require('./routes/authRoutes');
 const setupSwagger = require('./swaggerOptions');
+const cronController = require('./controllers/portfoliocroncontroller');
+
 // Middleware
 app.use(cors()); 
 app.use(express.json());
@@ -47,9 +49,14 @@ dbAdapter.connect()
     app.use('/api/tips', require('./routes/tips')); 
     app.use('/api/bundles', require('./routes/bundleRouter'));
     app.use('/api/admin/configs', require('./routes/configRoute'));
-    app.listen(config.server.port, () =>
+    app.listen(config.server.port, () =>{
       console.log(`Auth service running on port ${config.server.port}`),
       console.log(`swagger docs available at http://${config.server.host}:${config.server.port}/api-docs`)
+    if (process.env.NODE_ENV === 'production') {
+      console.log('Production environment detected. Initializing scheduled jobs.');
+  cronController.initScheduledJobs();
+}
+    }
     );
   })
   .catch(err => console.error('Database connection error:', err));

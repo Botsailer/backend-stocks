@@ -109,6 +109,77 @@ res.status(201).json({
   });
 });
 
+
+
+exports.getPortfolioPriceHistory = asyncHandler(async (req, res) => {
+  const { id } = req.params;
+  const { period = '1m' } = req.query; // Default to 1 month
+  
+  if (!mongoose.Types.ObjectId.isValid(id)) {
+    return res.status(400).json({ error: 'Invalid portfolio ID' });
+  }
+
+  // Calculate date range based on period
+  const dateRanges = {
+    '1w': 7,
+    '1m': 30,
+    '3m': 90,
+    '6m': 180,
+    '1y': 365,
+    'all': null
+  };
+
+  const days = dateRanges[period] || 30;
+  const startDate = days 
+    ? new Date(Date.now() - days * 24 * 60 * 60 * 1000)
+    : new Date(0); // Beginning of time for 'all'
+
+  try {
+    const priceHistory = await PriceLog.find({
+      portfolio: id,
+      date: { $gte: startDate }
+    })
+    .sort({ date: 1 }) // Oldest first for charting
+    .select('date portfolioValue cashRemaining -_id');
+
+    if (priceHistory.length === 0) {
+      return res.status(404).json({ error: 'No price history found' });
+    }
+
+    // Calculate daily returns percentage
+    const chartData = priceHistory.map((log, index) => {
+      const entry = {
+        date: log.date,
+        value: log.portfolioValue,
+        cash: log.cashRemaining
+      };
+
+      // Calculate daily change percentage
+      if (index > 0) {
+        const prevValue = priceHistory[index - 1].portfolioValue;
+        const change = log.portfolioValue - prevValue;
+        entry.change = change;
+        entry.changePercent = prevValue > 0 
+          ? (change / prevValue) * 100 
+          : 0;
+      }
+
+      return entry;
+    });
+
+    res.status(200).json({
+      portfolioId: id,
+      period,
+      dataPoints: chartData.length,
+      data: chartData
+    });
+  } catch (error) {
+    console.error('Error fetching price history:', error);
+    res.status(500).json({ error: 'Failed to retrieve price history' });
+  }
+});
+
+
 exports.updatePortfolio = asyncHandler(async (req, res) => {
   const portfolio = await Portfolio.findById(req.params.id);
   

@@ -193,42 +193,113 @@ searchStockSymbols: async (req, res) => {
     }
   },
 
-  updateStockSymbol: async (req, res) => {
-    try {
-      const { id } = req.params;
-      const { name, currentPrice } = req.body;
-      const stock = await StockSymbol.findById(id);
-      if (!stock) {
-        return res.status(404).json({
-          success: false,
-          message: 'Stock symbol not found'
-        });
-      }
-      if (name) stock.name = name;
-      if (currentPrice) {
-        stock.previousPrice = stock.currentPrice;
-        stock.currentPrice = currentPrice;
-      }
-      await stock.save();
-      return res.status(200).json({
-        success: true,
-        data: stock
-      });
-    } catch (error) {
-      console.error('Error updating stock symbol:', error);
-      if (error.name === 'CastError') {
-        return res.status(400).json({
-          success: false,
-          message: 'Invalid stock symbol ID format'
-        });
-      }
-      return res.status(500).json({
+updateStockSymbol: async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { name, currentPrice } = req.body;
+
+    // Validate ID format
+    if (!mongoose.Types.ObjectId.isValid(id)) {
+      return res.status(400).json({
         success: false,
-        message: 'Internal server error',
-        error: process.env.NODE_ENV === 'development' ? error.message : undefined
+        message: 'Invalid stock symbol ID format'
       });
     }
-  },
+
+    // Validate request body
+    if (!name && currentPrice === undefined) {
+      return res.status(400).json({
+        success: false,
+        message: 'At least one field (name or currentPrice) must be provided'
+      });
+    }
+
+    // Validate currentPrice format if provided
+    if (currentPrice !== undefined) {
+      if (typeof currentPrice !== 'string' || !/^\d+(\.\d{1,2})?$/.test(currentPrice)) {
+        return res.status(400).json({
+          success: false,
+          message: 'Invalid price format. Must be a string with up to 2 decimal places (e.g., "150.75")'
+        });
+      }
+    }
+
+    // Find stock by ID
+    const stock = await StockSymbol.findById(id);
+    if (!stock) {
+      return res.status(404).json({
+        success: false,
+        message: 'Stock symbol not found'
+      });
+    }
+
+    // Prepare update data
+    const updateData = {};
+    const changes = [];
+
+    if (name && name !== stock.name) {
+      updateData.name = name;
+      changes.push(`name updated to: ${name}`);
+    }
+
+    if (currentPrice !== undefined && currentPrice !== stock.currentPrice) {
+      // Preserve previous price history
+      updateData.previousPrice = stock.currentPrice;
+      updateData.currentPrice = currentPrice;
+      updateData.lastUpdated = new Date();
+      changes.push(`price updated from ${stock.currentPrice} to ${currentPrice}`);
+    }
+
+    // Check if any actual changes were made
+    if (Object.keys(updateData).length === 0) {
+      return res.status(200).json({
+        success: true,
+        message: 'No changes detected',
+        data: stock
+      });
+    }
+
+    // Update and save
+    const updatedStock = await StockSymbol.findByIdAndUpdate(
+      id,
+      { $set: updateData },
+      { new: true, runValidators: true }
+    );
+
+    return res.status(200).json({
+      success: true,
+      message: changes.length ? changes.join(', ') : 'Symbol updated',
+      data: updatedStock
+    });
+
+  } catch (error) {
+    console.error('Error updating stock symbol:', error);
+    
+    // Handle validation errors
+    if (error.name === 'ValidationError') {
+      const errors = Object.values(error.errors).map(err => err.message);
+      return res.status(400).json({
+        success: false,
+        message: 'Validation error',
+        errors
+      });
+    }
+
+    // Handle database errors
+    if (error.name === 'MongoError' && error.code === 11000) {
+      return res.status(409).json({
+        success: false,
+        message: 'Stock symbol already exists in database'
+      });
+    }
+
+    return res.status(500).json({
+      success: false,
+      message: 'Internal server error',
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
+  }
+},
 
   deleteStockSymbol: async (req, res) => {
     try {

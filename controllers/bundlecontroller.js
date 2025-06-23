@@ -5,19 +5,27 @@ const asyncHandler = fn => (req, res, next) =>
   Promise.resolve(fn(req, res, next)).catch(next);
 
 exports.createBundle = asyncHandler(async (req, res) => {
-  const { name, description = "", portfolios, discountPercentage } = req.body;
+  const { name, description = "", portfolios, category, monthlyPrice, quarterlyPrice, yearlyPrice } = req.body;
 
-  
-  if (!name || !portfolios?.length || discountPercentage == null) {
-    return res.status(400).json({ error: 'Missing required fields: name, portfolios, or discountPercentage' });
+  // Validation
+  if (!name || !portfolios?.length || !category) {
+    return res.status(400).json({ error: 'Missing required fields: name, portfolios, or category' });
   }
 
-
-  if (discountPercentage < 0 || discountPercentage > 100) {
-    return res.status(400).json({ error: 'Discount percentage must be between 0 and 100' });
+  if (!['basic', 'premium'].includes(category)) {
+    return res.status(400).json({ error: 'Invalid category. Must be basic or premium' });
   }
 
+  if (portfolios.length === 0) {
+    return res.status(400).json({ error: 'At least one portfolio is required' });
+  }
 
+  // Check if at least one price is provided
+  if (monthlyPrice === null && quarterlyPrice === null && yearlyPrice === null) {
+    return res.status(400).json({ error: 'At least one pricing option is required' });
+  }
+
+  // Validate portfolio IDs
   const existingPortfolios = await Portfolio.find({ _id: { $in: portfolios } });
   if (existingPortfolios.length !== portfolios.length) {
     return res.status(400).json({ error: 'One or more portfolio IDs are invalid' });
@@ -28,20 +36,16 @@ exports.createBundle = asyncHandler(async (req, res) => {
     name,
     description,
     portfolios,
-    discountPercentage
+    category,
+    monthlyPrice,
+    quarterlyPrice,
+    yearlyPrice
   });
 
   // Save to database
   await bundle.save();
   
-  // Populate for virtual price calculations
-  const populatedBundle = await Bundle.findById(bundle._id)
-    .populate({
-      path: 'portfolios',
-      select: 'name subscriptionFee'
-    });
-  
-  res.status(201).json(populatedBundle);
+  res.status(201).json(bundle);
 });
 
 exports.updateBundle = asyncHandler(async (req, res) => {
@@ -50,9 +54,24 @@ exports.updateBundle = asyncHandler(async (req, res) => {
     return res.status(404).json({ error: 'Bundle not found' });
   }
 
-  const { portfolios, discountPercentage } = req.body;
+  const { name, description, portfolios, category, monthlyPrice, quarterlyPrice, yearlyPrice } = req.body;
 
+  // Update fields
+  if (name) bundle.name = name;
+  if (description !== undefined) bundle.description = description;
+  if (category) {
+    if (!['basic', 'premium'].includes(category)) {
+      return res.status(400).json({ error: 'Invalid category. Must be basic or premium' });
+    }
+    bundle.category = category;
+  }
+
+  // Validate portfolios if updating
   if (portfolios) {
+    if (portfolios.length === 0) {
+      return res.status(400).json({ error: 'At least one portfolio is required' });
+    }
+    
     const existingCount = await Portfolio.countDocuments({ _id: { $in: portfolios } });
     if (existingCount !== portfolios.length) {
       return res.status(400).json({ error: 'One or more portfolio IDs are invalid' });
@@ -60,32 +79,27 @@ exports.updateBundle = asyncHandler(async (req, res) => {
     bundle.portfolios = portfolios;
   }
 
-  if (discountPercentage !== undefined) {
-    if (discountPercentage < 0 || discountPercentage > 100) {
-      return res.status(400).json({ error: 'Discount percentage must be between 0 and 100' });
-    }
-    bundle.discountPercentage = discountPercentage;
+  // Update pricing
+  if (monthlyPrice !== undefined) bundle.monthlyPrice = monthlyPrice;
+  if (quarterlyPrice !== undefined) bundle.quarterlyPrice = quarterlyPrice;
+  if (yearlyPrice !== undefined) bundle.yearlyPrice = yearlyPrice;
+
+  // Validate at least one price exists
+  if (bundle.monthlyPrice === null && 
+      bundle.quarterlyPrice === null && 
+      bundle.yearlyPrice === null) {
+    return res.status(400).json({ error: 'At least one pricing option is required' });
   }
 
-  if (req.body.name) bundle.name = req.body.name;
-  if (req.body.description) bundle.description = req.body.description;
-
   await bundle.save();
-  
-  const populatedBundle = await Bundle.findById(bundle._id)
-    .populate({
-      path: 'portfolios',
-      select: 'name subscriptionFee'
-    });
-    
-  res.status(200).json(populatedBundle);
+  res.status(200).json(bundle);
 });
 
 exports.getAllBundles = asyncHandler(async (req, res) => {
   const bundles = await Bundle.find()
     .populate({
       path: 'portfolios',
-      select: 'name subscriptionFee minInvestment',
+      select: 'name description subscriptionFee minInvestment',
       options: { retainNullValues: true }
     })
     .sort('-createdAt');
@@ -101,10 +115,7 @@ exports.getBundleById = asyncHandler(async (req, res) => {
       options: { retainNullValues: true }
     });
 
-  // Add this safety check to handle missing portfolios
   if (!bundle) return res.status(404).json({ error: 'Bundle not found' });
-  if (!bundle.portfolios) bundle.portfolios = []; // Ensure portfolios exists
-
   res.json(bundle);
 });
 
@@ -113,6 +124,5 @@ exports.deleteBundle = asyncHandler(async (req, res) => {
   if (!bundle) {
     return res.status(404).json({ error: 'Bundle not found' });
   }
-  // await Bundle.deleteMany({})
   res.json({ message: 'Bundle deleted successfully' });
 });

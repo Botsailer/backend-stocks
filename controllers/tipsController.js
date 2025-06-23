@@ -8,6 +8,7 @@ function mapTipToCamelCase(tip) {
     portfolio: tip.portfolio,
     title: tip.title,
     stockId: tip.stockId,
+    category: tip.category,
     content: tip.content,
     description: tip.description,
     status: tip.status,
@@ -21,9 +22,9 @@ function mapTipToCamelCase(tip) {
     exitStatus: tip.exitStatus,
     exitStatusPercentage: tip.exitStatusPercentage,
     horizon: tip.horizon,
-  downloadLinks: tip.downloadLinks || [], 
-    createdAt: tip.createdAt,  
-    updatedAt: tip.updatedAt   
+    downloadLinks: tip.downloadLinks || [],
+    createdAt: tip.createdAt,
+    updatedAt: tip.updatedAt
   };
 }
 
@@ -68,16 +69,16 @@ exports.createTip = async (req, res) => {
     } = req.body;
     const portfolio = await Portfolio.findById(req.params.portfolioId);
     if (!portfolio) return res.status(400).json({ error: 'Invalid portfolio' });
-   
+    
     if (!title || !stockId || !Array.isArray(content) || !description) {
       return res.status(400).json({ error: 'Title, stockId, content (array), and description are required' });
     }
     if (content.some(item => !item.key || !item.value)) {
       return res.status(400).json({ error: 'Each content item must have key and value' });
     }
-   if (downloadLinks && !Array.isArray(downloadLinks)) {
-  return res.status(400).json({ error: 'downloadLinks must be an array' });
-}
+    if (downloadLinks && !Array.isArray(downloadLinks)) {
+      return res.status(400).json({ error: 'downloadLinks must be an array' });
+    }
 
     const tip = new Tip({
       portfolio: portfolio._id,
@@ -119,6 +120,7 @@ exports.createTipWithoutPortfolio = async (req, res) => {
     const {
       title,
       stockId,
+      category,
       content,
       description,
       status,
@@ -134,15 +136,21 @@ exports.createTipWithoutPortfolio = async (req, res) => {
       horizon,
       downloadLinks
     } = req.body;
+    
     if (!title || !stockId || !Array.isArray(content) || !description) {
       return res.status(400).json({ error: 'Title, stockId, content (array), and description are required' });
     }
     if (content.some(item => !item.key || !item.value)) {
       return res.status(400).json({ error: 'Each content item must have key and value' });
     }
+    if (category && !['basic', 'premium'].includes(category)) {
+      return res.status(400).json({ error: 'Invalid category value' });
+    }
+
     const tip = new Tip({
       title,
       stockId,
+      category: category || 'basic',
       content,
       description,
       status: status || 'Active',
@@ -170,6 +178,7 @@ exports.updateTip = async (req, res) => {
     const {
       title,
       stockId,
+      category,
       content,
       description,
       status,
@@ -185,9 +194,16 @@ exports.updateTip = async (req, res) => {
       horizon,
       downloadLinks
     } = req.body;
+    
     const updates = {};
     if (title !== undefined) updates.title = title;
     if (stockId !== undefined) updates.stockId = stockId;
+    if (category !== undefined) {
+      if (!['basic', 'premium'].includes(category)) {
+        return res.status(400).json({ error: 'Invalid category value' });
+      }
+      updates.category = category;
+    }
     if (content !== undefined) {
       if (!Array.isArray(content)) {
         return res.status(400).json({ error: 'Content must be an array' });
@@ -210,6 +226,7 @@ exports.updateTip = async (req, res) => {
     if (exitStatusPercentage !== undefined) updates.exitStatusPercentage = exitStatusPercentage;
     if (horizon !== undefined) updates.horizon = horizon;
     if (downloadLinks !== undefined) updates.downloadLinks = downloadLinks;
+    
     const tip = await Tip.findByIdAndUpdate(
       req.params.id,
       updates,

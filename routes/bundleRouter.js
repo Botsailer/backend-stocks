@@ -16,47 +16,45 @@ const requireAdmin = require('../middleware/requirreAdmin');
  *       required:
  *         - name
  *         - portfolios
- *         - discountPercentage
+ *         - category
  *       properties:
  *         _id:
  *           type: string
  *           format: objectid
  *         name:
  *           type: string
- *           example: "Starter Pack"
+ *           example: "Premium Pack"
  *         description:
  *           type: string
- *           description: "Description of the bundle"
- *           example: "Curated bundle for new investors"
+ *           example: "Exclusive bundle for premium users"
  *         portfolios:
  *           type: array
  *           items:
  *             type: string
  *             format: objectid
- *           description: Array of Portfolio IDs
  *           example: ["615a2d4b87d9c34f7d4f8a12", "615a2d4b87d9c34f7d4f8a13"]
- *         discountPercentage:
- *           type: number
- *           minimum: 0
- *           maximum: 100
- *           example: 15
+ *         category:
+ *           type: string
+ *           enum: [basic, premium]
+ *           example: "premium"
  *         monthlyPrice:
  *           type: number
- *           description: "Auto-calculated monthly price after discount"
+ *           nullable: true
+ *           example: 49.99
  *         quarterlyPrice:
  *           type: number
- *           description: "Auto-calculated quarterly price after discount"
+ *           nullable: true
+ *           example: 129.99
  *         yearlyPrice:
  *           type: number
- *           description: "Auto-calculated yearly price after discount"
+ *           nullable: true
+ *           example: 399.99
  *         createdAt:
  *           type: string
  *           format: date-time
- *           readOnly: true
  *         updatedAt:
  *           type: string
  *           format: date-time
- *           readOnly: true
  */
 
 /**
@@ -74,10 +72,13 @@ const requireAdmin = require('../middleware/requirreAdmin');
  *           schema:
  *             $ref: '#/components/schemas/Bundle'
  *           example:
- *             name: "Starter Pack"
- *             description: "Curated bundle for new investors"
- *             portfolios: ["615a2d4b87d9c34f7d4f8a12", "615a2d4b87d9c34f7d4f8a13"]
- *             discountPercentage: 20
+ *             name: "Starter Bundle"
+ *             description: "Perfect for new investors"
+ *             portfolios: ["615a2d4b87d9c34f7d4f8a12"]
+ *             category: "basic"
+ *             monthlyPrice: 29.99
+ *             quarterlyPrice: 79.99
+ *             yearlyPrice: 299.99
  *     responses:
  *       201:
  *         description: Bundle created successfully
@@ -85,6 +86,10 @@ const requireAdmin = require('../middleware/requirreAdmin');
  *           application/json:
  *             schema:
  *               $ref: '#/components/schemas/Bundle'
+ *       400:
+ *         description: Validation error
+ *       401:
+ *         description: Unauthorized
  */
 router.post('/', passport.authenticate('jwt', { session: false }), requireAdmin, bundleController.createBundle);
 
@@ -109,10 +114,10 @@ router.post('/', passport.authenticate('jwt', { session: false }), requireAdmin,
  *           schema:
  *             $ref: '#/components/schemas/Bundle'
  *           example:
- *             name: "Updated Starter Pack"
- *             description: "Now for everyone"
- *             portfolios: ["615a2d4b87d9c34f7d4f8a12"]
- *             discountPercentage: 25
+ *             name: "Updated Premium Bundle"
+ *             description: "Enhanced premium package"
+ *             category: "premium"
+ *             yearlyPrice: 449.99
  *     responses:
  *       200:
  *         description: Bundle updated successfully
@@ -120,6 +125,10 @@ router.post('/', passport.authenticate('jwt', { session: false }), requireAdmin,
  *           application/json:
  *             schema:
  *               $ref: '#/components/schemas/Bundle'
+ *       400:
+ *         description: Validation error
+ *       401:
+ *         description: Unauthorized
  *       404:
  *         description: Bundle not found
  */
@@ -184,6 +193,8 @@ router.get('/:id', bundleController.getBundleById);
  *     responses:
  *       200:
  *         description: Bundle deleted successfully
+ *       401:
+ *         description: Unauthorized
  *       404:
  *         description: Bundle not found
  */

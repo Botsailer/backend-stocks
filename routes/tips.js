@@ -49,6 +49,12 @@ const requireAdmin = require("../middleware/requirreAdmin");
  *           type: string
  *           description: Stock identifier associated with the tip
  *           example: "AAPL"
+ *         category:
+ *           type: string
+ *           enum: [basic, premium]
+ *           description: Access category for general tips
+ *           default: "basic"
+ *           example: "premium"
  *         content:
  *           type: array
  *           description: Array of key-value pairs for tip content

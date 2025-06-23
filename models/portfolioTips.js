@@ -22,7 +22,12 @@ const TipSchema = new Schema(
       type:String,
       required:true
     },
-    //content can be an array of objects with key-value pairs
+
+      category: {
+      type: String,
+      enum: ["basic", "premium"],
+      default: "basic"
+    },
     content: [
       {
         key: {

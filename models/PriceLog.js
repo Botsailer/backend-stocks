@@ -32,7 +32,7 @@ const PriceLogSchema = new Schema({
   }
 }, { timestamps: true });
 
-// Compound index for quick lookup by portfolio and date descending
-PriceLogSchema.index({ portfolio: 1, date: -1 });
+PriceLogSchema.index({ portfolio: 1, date: 1 });  // For time-based queries
+PriceLogSchema.index({ date: 1 });                // For global historical analysis
 
 module.exports = mongoose.model('PriceLog', PriceLogSchema);

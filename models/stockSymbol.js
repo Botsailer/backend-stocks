@@ -8,12 +8,13 @@ const stockSymbolSchema = new Schema({
     unique: true,
     uppercase: true
   },
-  exchange:{
+  exchange: {
     type: String,
     required: true,
-    enum: ['NSE', 'BSE', 'NASDAQ', 'NYSE', 'LSE', 'TSE'], 
-    uppercase: true
-  },
+    enum: ['NSE', 'BSE', 'NASDAQ', 'NYSE', 'LSE', 'TSE'],
+    uppercase: true,
+    default: 'NSE'  // Default to Indian exchange
+  }, 
   name: {
     type: String,
     required: true,
@@ -43,6 +44,6 @@ const stockSymbolSchema = new Schema({
   toObject: {
     virtuals: true
   }
-});
+}, { _id: false });
 
 module.exports = mongoose.model('StockSymbol', stockSymbolSchema);
