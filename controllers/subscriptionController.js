@@ -1,6 +1,7 @@
+// controllers/subscriptionController.js
+
 const Razorpay = require('razorpay');
 const crypto = require('crypto');
-const mongoose = require('mongoose');
 const Subscription = require('../models/subscription');
 const Portfolio = require('../models/modelPortFolio');
 const Cart = require('../models/carts');
@@ -10,14 +11,18 @@ const { getPaymentConfig } = require('../utils/configSettings');
 
 // Utility function to generate short receipts for Razorpay (max 40 chars)
 function generateShortReceipt(prefix, userId) {
-  const timestamp = Date.now().toString().slice(-8);
-  const userIdShort = userId.toString().slice(-8);
+  const timestamp = Date.now().toString().slice(-8); // Last 8 digits
+  const userIdShort = userId.toString().slice(-8); // Last 8 chars
   return `${prefix}_${timestamp}_${userIdShort}`;
 }
 
 async function getRazorpayInstance() {
   try {
     const paymentConfig = await getPaymentConfig();
+    console.log('Payment config retrieved:', { 
+      hasKeyId: !!paymentConfig.key_id, 
+      hasKeySecret: !!paymentConfig.key_secret 
+    });
     
     if (!paymentConfig.key_id || !paymentConfig.key_secret) {
       throw new Error('Razorpay key_id or key_secret not configured');
@@ -33,103 +38,121 @@ async function getRazorpayInstance() {
   }
 }
 
-async function calculateCartAmount(cart) {
+async function calculateCartAmount(cart, planType = 'monthly') {
   let total = 0;
-  
   for (const item of cart.items) {
-    if (item.productType === 'Portfolio') {
-      const portfolio = await Portfolio.findById(item.productId);
-      if (!portfolio) throw new Error(`Portfolio not found: ${item.productId}`);
-      
-      const plan = portfolio.subscriptionFee.find(
-        fee => fee.type === item.planType
-      );
-      
-      if (!plan) {
-        throw new Error(`No ${item.planType} plan found for portfolio: ${portfolio.name}`);
-      }
-      
-      total += plan.price * item.quantity;
-    } 
-    else if (item.productType === 'Bundle') {
-      const bundle = await Bundle.findById(item.productId).populate('portfolios');
-      if (!bundle) throw new Error(`Bundle not found: ${item.productId}`);
-      
-      // Use virtual prices based on plan type
-      switch (item.planType) {
-        case 'monthly':
-          total += bundle.monthlyPrice * item.quantity;
-          break;
-        case 'quarterly':
-          total += bundle.quarterlyPrice * item.quantity;
-          break;
-        case 'yearly':
-          total += bundle.yearlyPrice * item.quantity;
-          break;
-        default:
-          throw new Error('Invalid plan type for bundle');
-      }
+    const portfolio = await Portfolio.findById(item.portfolio);
+    if (!portfolio) throw new Error('Portfolio not found');
+    
+    // Find the selected plan price using the provided planType
+    const plan = portfolio.subscriptionFee.find(
+      fee => fee.type === planType
+    );
+    
+    if (!plan) {
+      console.error(`No ${planType} plan found for portfolio:`, portfolio.name);
+      throw new Error(`${planType} subscription plan not found for portfolio: ${portfolio.name}`);
     }
+    
+    total += plan.price * item.quantity;
   }
-  
   return total;
 }
+
 
 // Create payment order for a single product
 exports.createOrder = async (req, res) => {
   try {
+    console.log('Creating order for:', req.body);
+    
     const { productType, productId, planType = 'monthly' } = req.body;
     
-    // Validate input
-    if (!productType || !productId || !['Portfolio', 'Bundle'].includes(productType)) {
-      return res.status(400).json({ error: 'Invalid product type or ID' });
+    if (!productType || !productId) {
+      return res.status(400).json({ error: 'productType and productId are required' });
     }
-
-    let amount;
+    
     let product;
+    let amount;
     
     if (productType === 'Portfolio') {
       product = await Portfolio.findById(productId);
-      if (!product) return res.status(404).json({ error: 'Portfolio not found' });
-      
-      const plan = product.subscriptionFee.find(fee => fee.type === planType);
-      if (!plan) {
-        return res.status(400).json({ error: `No ${planType} plan available` });
+      if (!product) {
+        return res.status(404).json({ error: 'Portfolio not found' });
       }
-      amount = plan.price;
-    } else {
-      product = await Bundle.findById(productId).populate('portfolios');
-      if (!product) return res.status(404).json({ error: 'Bundle not found' });
       
+      // Find the subscription fee for the specified plan type
+      const subscriptionPlan = product.subscriptionFee.find(fee => fee.type === planType);
+      if (!subscriptionPlan) {
+        return res.status(400).json({ error: `No ${planType} plan available for this portfolio` });
+      }
+      amount = subscriptionPlan.price;
+      
+    } else if (productType === "Bundle") {
+      // Populate the bundle with portfolio details to calculate pricing
+      product = await Bundle.findById(productId).populate({
+        path: 'portfolios',
+        select: 'subscriptionFee'
+      });
+      
+      if (!product) {
+        return res.status(404).json({ error: 'Bundle not found' });
+      }
+      
+      // Calculate bundle price based on plan type
       switch (planType) {
-        case 'monthly': amount = product.monthlyPrice; break;
-        case 'quarterly': amount = product.quarterlyPrice; break;
-        case 'yearly': amount = product.yearlyPrice; break;
-        default: return res.status(400).json({ error: 'Invalid plan type' });
+        case 'monthly':
+          amount = product.monthlyPrice;
+          break;
+        case 'quarterly':
+          amount = product.quarterlyPrice;
+          break;
+        case 'yearly':
+          amount = product.yearlyPrice;
+          break;
+        default:
+          return res.status(400).json({ error: 'Invalid plan type' });
       }
+      
+    } else {
+      return res.status(400).json({ error: 'Invalid product type' });
     }
-     
+
     if (!amount || amount <= 0) {
       return res.status(400).json({ error: 'Invalid subscription fee' });
     }
 
-    // Create Razorpay instance
-    const razorpay = await getRazorpayInstance();
+    console.log('Calculated amount:', amount);
 
-    // Generate short receipt
+    // Create Razorpay instance with timeout
+    const razorpay = await Promise.race([
+      getRazorpayInstance(),
+      new Promise((_, reject) => 
+        setTimeout(() => reject(new Error('Razorpay initialization timeout')), 10000)
+      )
+    ]);
+
+    // Create order with timeout
+    // Generate short receipt (max 40 chars for Razorpay)
     const receipt = generateShortReceipt('ord', req.user._id);
     
-    const order = await razorpay.orders.create({
-      amount: Math.round(amount * 100),
-      currency: 'INR',
-      receipt: receipt,
-      notes: {
-        userId: req.user._id.toString(),
-        productType,
-        productId,
-        planType
-      }
-    });
+    const order = await Promise.race([
+      razorpay.orders.create({
+        amount: Math.round(amount * 100), // Convert to paise and ensure integer
+        currency: 'INR',
+        receipt: receipt, // Max 40 characters
+        notes: {
+          userId: req.user._id.toString(),
+          productType,
+          productId,
+          planType
+        }
+      }),
+      new Promise((_, reject) => 
+        setTimeout(() => reject(new Error('Razorpay order creation timeout')), 15000)
+      )
+    ]);
+
+    console.log('Order created successfully:', order.id);
 
     res.status(201).json({
       orderId: order.id,
@@ -141,62 +164,78 @@ exports.createOrder = async (req, res) => {
   } catch (err) {
     console.error('Create order error:', err);
     
-    if (err.error?.description) {
+    // Handle Razorpay-specific errors
+    if (err.error && err.error.description) {
       return res.status(400).json({ error: err.error.description });
     }
     
-    res.status(500).json({ error: err.message || 'Failed to create order' });
+    // Handle timeout errors
+    const errorMessage = err.message || '';
+    if (errorMessage.includes('timeout')) {
+      return res.status(504).json({ error: 'Request timeout. Please try again.' });
+    }
+    
+    if (errorMessage.includes('not configured')) {
+      return res.status(503).json({ error: 'Payment service not configured. Please contact support.' });
+    }
+    
+    res.status(500).json({ error: errorMessage || 'Failed to create order' });
   }
 };
 
 exports.checkoutCart = async (req, res) => {
   try {
-    const cart = await Cart.findOne({ user: req.user._id }).populate({
-      path: 'items.productId',
-      select: 'name subscriptionFee'
-    });
+    const { planType = 'monthly' } = req.body; // Accept planType from request body
     
+    console.log('Cart checkout request:', { 
+      userId: req.user._id, 
+      planType 
+    });
+
+    const cart = await Cart.findOne({ user: req.user._id });
     if (!cart || cart.items.length === 0) {
       return res.status(400).json({ error: 'Cart is empty' });
     }
+    
+    console.log('Found cart with items:', cart.items.length);
 
-    // Calculate cart amount
-    const amount = await calculateCartAmount(cart);
+    // Calculate amount using the specified plan type
+    const amount = await calculateCartAmount(cart, planType);
     if (amount <= 0) {
       return res.status(400).json({ error: 'Invalid cart amount' });
     }
 
+    console.log('Calculated cart amount:', amount, 'for plan type:', planType);
+
     const razorpay = await getRazorpayInstance();
+    
+    // Generate short receipt (max 40 chars for Razorpay)
     const receipt = generateShortReceipt('cart', req.user._id);
     
-    // Prepare cart items for order notes
-    const cartItems = cart.items.map(item => ({
-      productType: item.productType,
-      productId: item.productId._id.toString(),
-      planType: item.planType,
-      quantity: item.quantity
-    }));
-    
     const order = await razorpay.orders.create({
-      amount: Math.round(amount * 100),
+      amount: Math.round(amount * 100), // Convert to paise
       currency: 'INR',
       receipt: receipt,
       notes: {
         userId: req.user._id.toString(),
         cartCheckout: true,
-        cartItems: JSON.stringify(cartItems)
+        planType: planType // Store planType in order notes
       }
     });
+
+    console.log('Razorpay order created:', order.id);
 
     res.status(201).json({
       orderId: order.id,
       amount: order.amount,
-      currency: order.currency
+      currency: order.currency,
+      planType: planType
     });
   } catch (err) {
     console.error('Checkout cart error:', err);
     
-    if (err.error?.description) {
+    // Handle Razorpay-specific errors
+    if (err.error && err.error.description) {
       return res.status(400).json({ error: err.error.description });
     }
     
@@ -209,6 +248,8 @@ exports.verifyPayment = async (req, res) => {
     const razorpay = await getRazorpayInstance();
     const { orderId, paymentId, signature } = req.body;
     
+    console.log('Verifying payment:', { orderId, paymentId, hasSignature: !!signature });
+    
     // Verify signature
     const generatedSignature = crypto
       .createHmac('sha256', (await getPaymentConfig()).key_secret)
@@ -219,140 +260,173 @@ exports.verifyPayment = async (req, res) => {
       return res.status(400).json({ error: 'Invalid signature' });
     }
 
-    // Fetch order details
+    // Find order details from Razorpay
     const order = await razorpay.orders.fetch(orderId);
     if (!order) {
       return res.status(404).json({ error: 'Order not found' });
     }
 
-    const userId = order.notes.userId;
-    const subscriptions = [];
-    const products = [];
-    let paymentHistory;
+    console.log('Order fetched:', { 
+      id: order.id, 
+      amount: order.amount, 
+      notes: order.notes 
+    });
 
-    // Handle cart checkout
-    if (order.notes.cartCheckout) {
-      const cart = await Cart.findOne({ user: userId });
+    let subscription;
+    let portfolioId;
+
+    // Handle cart checkout vs single product
+    if (order.notes && order.notes.cartCheckout) {
+      // Cart checkout - subscribe to all items in cart
+      const cart = await Cart.findOne({ user: req.user._id });
       if (!cart) {
         return res.status(404).json({ error: 'Cart not found' });
       }
 
-      // Parse cart items from order notes
-      const cartItems = JSON.parse(order.notes.cartItems || '[]');
-      
-      for (const item of cartItems) {
-        if (item.productType === 'Bundle') {
-          const bundle = await Bundle.findById(item.productId).populate('portfolios');
-          if (!bundle) continue;
-          
-          // Create subscriptions for each portfolio in bundle
-          for (const portfolio of bundle.portfolios) {
-            const sub = await Subscription.create({
-              user: userId,
-              productType: 'Portfolio',
-              productId: portfolio._id,
-              bundle: bundle._id,
-              portfolio: portfolio._id,
-              planType: item.planType,
-              isActive: true,
-              lastPaidAt: new Date()
-            });
-            subscriptions.push(sub);
-            products.push({
-              productType: 'Portfolio',
-              productId: portfolio._id,
-              bundleId: bundle._id
-            });
-          }
-        } else {
-          // Portfolio subscription
-          const sub = await Subscription.create({
-            user: userId,
-            productType: 'Portfolio',
-            productId: item.productId,
-            portfolio: item.productId,
-            planType: item.planType,
-            isActive: true,
-            lastPaidAt: new Date()
-          });
-          subscriptions.push(sub);
-          products.push({
-            productType: 'Portfolio',
-            productId: item.productId
-          });
-        }
-      }
+      console.log('Processing cart checkout with', cart.items.length, 'items');
 
-      // Clear cart
+      // Create subscriptions for each cart item
+      for (const item of cart.items) {
+        console.log('Creating subscription for portfolio:', item.portfolio);
+        
+        subscription = await Subscription.findOneAndUpdate(
+          {
+            user: req.user._id,
+            productType: 'Portfolio',
+            productId: item.portfolio,
+            portfolio: item.portfolio
+          },
+          {
+            $set: { 
+              isActive: true, 
+              lastPaidAt: new Date(), 
+              missedCycles: 0,
+              productType: 'Portfolio',
+              productId: item.portfolio,
+              portfolio: item.portfolio
+            }
+          },
+          { upsert: true, new: true }
+        );
+      }
+      
+      // Use the first portfolio for payment history
+      portfolioId = cart.items[0]?.portfolio;
+      
+      // Clear cart after successful payment
       cart.items = [];
       await cart.save();
-    } 
-    // Handle single product order
-    else {
-      const { productType, productId, planType = 'monthly' } = order.notes;
       
+      console.log('Cart cleared after successful payment');
+      
+    } else {
+      // Single product subscription
+      const productType = order.notes?.productType || 'Portfolio';
+      const productId = order.notes?.productId;
+      
+      if (!productId) {
+        return res.status(400).json({ error: 'Product ID not found in order' });
+      }
+
+      console.log('Creating subscription for:', { productType, productId });
+
+      // For Bundle, we need to create subscriptions for all portfolios in the bundle
       if (productType === 'Bundle') {
         const bundle = await Bundle.findById(productId).populate('portfolios');
         if (!bundle) {
           return res.status(404).json({ error: 'Bundle not found' });
         }
-        
-        // Create subscriptions for each portfolio in bundle
+
+        // Create subscriptions for each portfolio in the bundle
         for (const portfolio of bundle.portfolios) {
-          const sub = await Subscription.create({
-            user: userId,
-            productType: 'Portfolio',
-            productId: portfolio._id,
-            bundle: bundle._id,
-            portfolio: portfolio._id,
-            planType,
-            isActive: true,
-            lastPaidAt: new Date()
-          });
-          subscriptions.push(sub);
-          products.push({
-            productType: 'Portfolio',
-            productId: portfolio._id,
-            bundleId: bundle._id
-          });
+          await Subscription.findOneAndUpdate(
+            {
+              user: req.user._id,
+              productType: 'Portfolio',
+              productId: portfolio._id,
+              portfolio: portfolio._id
+            },
+            {
+              $set: { 
+                isActive: true, 
+                lastPaidAt: new Date(), 
+                missedCycles: 0,
+                productType: 'Portfolio',
+                productId: portfolio._id,
+                portfolio: portfolio._id
+              }
+            },
+            { upsert: true, new: true }
+          );
         }
+        
+        // Use the first portfolio for payment history
+        portfolioId = bundle.portfolios[0]?._id;
+        subscription = await Subscription.findOne({
+          user: req.user._id,
+          portfolio: portfolioId
+        });
+        
       } else {
-        // Portfolio subscription
-        const sub = await Subscription.create({
-          user: userId,
-          productType: 'Portfolio',
-          productId,
-          portfolio: productId,
-          planType,
-          isActive: true,
-          lastPaidAt: new Date()
-        });
-        subscriptions.push(sub);
-        products.push({
-          productType: 'Portfolio',
-          productId
-        });
+        // Single Portfolio subscription
+        portfolioId = productId;
+        subscription = await Subscription.findOneAndUpdate(
+          {
+            user: req.user._id,
+            productType: productType,
+            productId: productId,
+            portfolio: productId
+          },
+          {
+            $set: { 
+              isActive: true, 
+              lastPaidAt: new Date(), 
+              missedCycles: 0,
+              productType: productType,
+              productId: productId,
+              portfolio: productId
+            }
+          },
+          { upsert: true, new: true }
+        );
       }
     }
 
-    // Create payment history
-    paymentHistory = await PaymentHistory.create({
-      user: userId,
+    console.log('Subscription created/updated:', { 
+      subscriptionId: subscription?._id, 
+      portfolioId 
+    });
+
+    // Verify we have required data for PaymentHistory
+    if (!subscription) {
+      return res.status(500).json({ error: 'Failed to create subscription' });
+    }
+
+    if (!portfolioId) {
+      return res.status(500).json({ error: 'Portfolio ID not found' });
+    }
+
+    // Record payment history with all required fields
+    const paymentHistory = await PaymentHistory.create({
+      user: req.user._id,
+      portfolio: portfolioId,
+      subscription: subscription._id,
       orderId,
       paymentId,
       signature,
       amount: order.amount,
-      currency: order.currency || 'INR',
-      planType: order.notes.planType || 'monthly',
-      products,
       status: 'VERIFIED'
+    });
+
+    console.log('Payment history created:', { 
+      paymentHistoryId: paymentHistory._id 
     });
 
     res.json({ 
       success: true, 
-      message: 'Payment verified and subscriptions activated',
-      subscriptions,
-      paymentHistory
+      message: 'Payment verified and subscription activated',
+      subscription: subscription,
+      paymentHistory: paymentHistory
     });
     
   } catch (err) {
@@ -369,6 +443,8 @@ exports.razorpayWebhook = async (req, res) => {
     
     // Validate webhook signature
     const signature = req.headers['x-razorpay-signature'];
+    const body = req.body;
+
     const expectedSignature = crypto
       .createHmac('sha256', paymentConfig.key_secret)
       .update(req.rawBody)
@@ -378,117 +454,56 @@ exports.razorpayWebhook = async (req, res) => {
       return res.status(400).json({ error: 'Invalid webhook signature' });
     }
 
-    const body = req.body;
-    
     // Handle payment captured event
     if (body.event === 'payment.captured') {
       const payment = body.payload.payment.entity;
       const orderId = payment.order_id;
       const order = await razorpay.orders.fetch(orderId);
-      const userId = order.notes.userId;
-      const products = [];
 
-      // Cart checkout
-      if (order.notes.cartCheckout) {
+      // If cart checkout, subscribe to all items in cart
+      if (order.notes && order.notes.cartCheckout) {
+        const userId = order.notes.userId;
         const cart = await Cart.findOne({ user: userId });
-        if (!cart) return res.status(200).json({ status: 'Cart not found' });
-        
-        // Parse cart items from order notes
-        const cartItems = JSON.parse(order.notes.cartItems || '[]');
-        
-        for (const item of cartItems) {
-          if (item.productType === 'Bundle') {
-            const bundle = await Bundle.findById(item.productId).populate('portfolios');
-            if (!bundle) continue;
-            
-            for (const portfolio of bundle.portfolios) {
-              await Subscription.create({
+        if (cart) {
+          for (const item of cart.items) {
+            await Subscription.findOneAndUpdate(
+              {
                 user: userId,
                 productType: 'Portfolio',
-                productId: portfolio._id,
-                bundle: bundle._id,
-                portfolio: portfolio._id,
-                planType: item.planType,
-                isActive: true,
-                lastPaidAt: new Date()
-              });
-              products.push({
-                productType: 'Portfolio',
-                productId: portfolio._id,
-                bundleId: bundle._id
-              });
-            }
-          } else {
-            await Subscription.create({
-              user: userId,
-              productType: 'Portfolio',
-              productId: item.productId,
-              portfolio: item.productId,
-              planType: item.planType,
-              isActive: true,
-              lastPaidAt: new Date()
-            });
-            products.push({
-              productType: 'Portfolio',
-              productId: item.productId
-            });
+                productId: item.portfolio
+              },
+              {
+                $set: { isActive: true, lastPaidAt: new Date(), missedCycles: 0 }
+              },
+              { upsert: true, new: true }
+            );
           }
+          cart.items = [];
+          await cart.save();
         }
-        cart.items = [];
-        await cart.save();
-      } 
-      // Single product
-      else {
-        const { productType, productId, planType = 'monthly' } = order.notes;
-        
-        if (productType === 'Bundle') {
-          const bundle = await Bundle.findById(productId).populate('portfolios');
-          if (!bundle) return res.status(200).json({ status: 'Bundle not found' });
-          
-          for (const portfolio of bundle.portfolios) {
-            await Subscription.create({
-              user: userId,
-              productType: 'Portfolio',
-              productId: portfolio._id,
-              bundle: bundle._id,
-              portfolio: portfolio._id,
-              planType,
-              isActive: true,
-              lastPaidAt: new Date()
-            });
-            products.push({
-              productType: 'Portfolio',
-              productId: portfolio._id,
-              bundleId: bundle._id
-            });
-          }
-        } else {
-          await Subscription.create({
-            user: userId,
-            productType: 'Portfolio',
-            productId,
-            portfolio: productId,
-            planType,
-            isActive: true,
-            lastPaidAt: new Date()
-          });
-          products.push({
-            productType: 'Portfolio',
-            productId
-          });
-        }
+      } else {
+        // Single product subscription
+        await Subscription.findOneAndUpdate(
+          {
+            user: order.notes.userId,
+            productType: order.notes.productType,
+            productId: order.notes.productId
+          },
+          {
+            $set: { isActive: true, lastPaidAt: new Date(), missedCycles: 0 }
+          },
+          { upsert: true, new: true }
+        );
       }
 
       // Record payment history
       await PaymentHistory.create({
-        user: userId,
+        user: order.notes.userId,
         orderId,
         paymentId: payment.id,
         amount: payment.amount,
         currency: payment.currency,
-        planType: order.notes.planType || 'monthly',
-        products,
-        status: 'PAID'
+        status: payment.status
       });
     }
 
@@ -503,12 +518,7 @@ exports.razorpayWebhook = async (req, res) => {
 exports.getHistory = async (req, res) => {
   try {
     const payments = await PaymentHistory.find({ user: req.user._id })
-      .populate({
-        path: 'products.productId',
-        select: 'name'
-      })
       .sort('-createdAt');
-      
     res.json(payments);
   } catch (err) {
     console.error('Get history error:', err);

@@ -35,7 +35,8 @@ const requireAuth = passport.authenticate('jwt', { session: false });
  */
 router.get('/profile', requireAuth, userController.getProfile);
 
-// Custom middleware for optional authentication
+
+// Custom middleware for optional authentication (allows public access but authenticates if token is present)
 const optionalAuth = (req, res, next) => {
   passport.authenticate('jwt', { session: false }, (err, user) => {
     if (user) {
@@ -50,6 +51,14 @@ const optionalAuth = (req, res, next) => {
  * /api/user/tips:
  *   get:
  *     summary: Get tips with subscription-based access control
+ *     description: |
+ *       Public endpoint that shows tips with controlled access based on subscription status.
+ *       - Unauthenticated users will see only tip titles
+ *       - Authenticated but unsubscribed users will see only tip titles
+ *       - Users subscribed to a portfolio will see complete tip details for that portfolio's tips
+ *       
+ *       Each tip includes an `isSubscribed` boolean property indicating whether the user 
+ *       can view full details.
  *     tags: [User]
  *     security:
  *       - bearerAuth: []
@@ -57,10 +66,53 @@ const optionalAuth = (req, res, next) => {
  *     responses:
  *       200:
  *         description: List of tips with subscription-based access control
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: array
+ *               items:
+ *                 oneOf:
+ *                   - type: object
+ *                     properties:
+ *                       _id: 
+ *                         type: string
+ *                         description: Tip ID
+ *                       title:
+ *                         type: string
+ *                         description: Tip title (limited access)
+ *                       isSubscribed:
+ *                         type: boolean
+ *                         description: Indicates user doesn't have access to full details
+ *                         example: false
+ *                   - type: object
+ *                     properties:
+ *                       _id:
+ *                         type: string
+ *                       title:
+ *                         type: string
+ *                       content:
+ *                         type: string
+ *                       status:
+ *                         type: string
+ *                       buyrange:
+ *                         type: string
+ *                       targetprice:
+ *                         type: string
+ *                       addmoreat:
+ *                         type: string
+ *                       tipurl:
+ *                         type: string
+ *                       horizon:
+ *                         type: string
+ *                       isSubscribed:
+ *                         type: boolean
+ *                         example: true
  *       500:
  *         description: Server error
  */
-router.get('/tips', optionalAuth, userController.getTips);
+router.get('/tips', requireAuth, userController.getTips);
+
+
 
 /**
  * @swagger
@@ -135,6 +187,8 @@ router.get('/subscriptions', requireAuth, userController.getUserSubscriptions);
  */
 router.get('/payments', requireAuth, userController.getUserPaymentHistory);
 
+
+
 /**
  * @swagger
  * /api/user/cart:
@@ -157,7 +211,7 @@ router.get('/cart', requireAuth, userController.getCart);
  * @swagger
  * /api/user/cart:
  *   post:
- *     summary: Add product to cart
+ *     summary: Add portfolio to cart
  *     tags: [Cart]
  *     security:
  *       - bearerAuth: []
@@ -168,21 +222,11 @@ router.get('/cart', requireAuth, userController.getCart);
  *           schema:
  *             type: object
  *             required:
- *               - productType
- *               - productId
+ *               - portfolioId
  *             properties:
- *               productType:
+ *               portfolioId:
  *                 type: string
- *                 enum: [Portfolio, Bundle]
- *                 description: Type of product to add
- *               productId:
- *                 type: string
- *                 description: ID of product to add
- *               planType:
- *                 type: string
- *                 enum: [monthly, quarterly, yearly]
- *                 default: monthly
- *                 description: Subscription plan type
+ *                 description: ID of portfolio to add to cart
  *               quantity:
  *                 type: integer
  *                 description: Quantity to add (default 1)
@@ -195,13 +239,13 @@ router.get('/cart', requireAuth, userController.getCart);
  *       401:
  *         description: Unauthorized
  *       404:
- *         description: Product not found
+ *         description: Portfolio not found
  */
 router.post('/cart', requireAuth, userController.addToCart);
 
 /**
  * @swagger
- * /api/user/cart/{itemId}:
+ * /api/user/cart/{portfolioId}:
  *   delete:
  *     summary: Remove item from cart
  *     tags: [Cart]
@@ -209,11 +253,11 @@ router.post('/cart', requireAuth, userController.addToCart);
  *       - bearerAuth: []
  *     parameters:
  *       - in: path
- *         name: itemId
+ *         name: portfolioId
  *         required: true
  *         schema:
  *           type: string
- *         description: Cart item ID to remove
+ *         description: Portfolio ID to remove from cart
  *     responses:
  *       200:
  *         description: Updated cart
@@ -222,7 +266,7 @@ router.post('/cart', requireAuth, userController.addToCart);
  *       404:
  *         description: Cart not found or item not in cart
  */
-router.delete('/cart/:itemId', requireAuth, userController.removeFromCart);
+router.delete('/cart/:portfolioId', requireAuth, userController.removeFromCart);
 
 /**
  * @swagger
@@ -241,5 +285,8 @@ router.delete('/cart/:itemId', requireAuth, userController.removeFromCart);
  *         description: Cart not found
  */
 router.delete('/cart', requireAuth, userController.clearCart);
+
+
+
 
 module.exports = router;

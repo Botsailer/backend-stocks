@@ -1,5 +1,5 @@
 // controllers/stocksymbolcontroller.js
-const { TradingViewAPI } = require("tradingview-scraper");
+const { TradingViewAPI } = require("tradingv-scraper");
 const StockSymbol = require('../models/stockSymbol');
 
 class BatchManager {

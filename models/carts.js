@@ -1,28 +1,24 @@
+// models/cart.js
 const mongoose = require('mongoose');
 const { Schema } = mongoose;
+/**
+ * models/cart.js
+ * -------------
+ * This model represents the shopping cart for a user.
+ * It contains references to portfolios and their quantities.
+ */
 
 const cartItemSchema = new mongoose.Schema({
-  productType: {
-    type: String,
-    enum: ['Portfolio', 'Bundle'],
-    required: true
-  },
-  productId: {
+  portfolio: {
     type: mongoose.Schema.Types.ObjectId,
-    required: true,
-    refPath: 'items.productType'
+    ref: 'Portfolio',
+    required: true
   },
   quantity: {
     type: Number,
     required: true,
     min: 1,
     default: 1
-  },
-  planType: {
-    type: String,
-    enum: ['monthly', 'quarterly', 'yearly'],
-    required: true,
-    default: 'monthly'
   },
   addedAt: {
     type: Date,
@@ -48,6 +44,7 @@ const cartSchema = new mongoose.Schema({
   }
 });
 
+// Update the "updatedAt" field on save
 cartSchema.pre('save', function(next) {
   this.updatedAt = Date.now();
   next();
