@@ -115,19 +115,99 @@ router.post('/', stockSymbolController.createStockSymbol);
  * @swagger
  * /api/stock-symbols:
  *   get:
- *     summary: Get all stock symbols
+ *     summary: Get all stock symbols with pagination
  *     tags: [Stock Symbols]
+ *     parameters:
+ *       - in: query
+ *         name: page
+ *         schema:
+ *           type: integer
+ *           minimum: 1
+ *           default: 1
+ *         description: Page number (default 1)
+ *       - in: query
+ *         name: limit
+ *         schema:
+ *           type: integer
+ *           minimum: 1
+ *           maximum: 5000
+ *           default: 2500
+ *         description: Number of items per page (default 2500, max 5000)
  *     responses:
  *       200:
- *         description: List of stock symbols
+ *         description: Paginated list of stock symbols
  *         content:
  *           application/json:
  *             schema:
- *               type: array
- *               items:
- *                 $ref: '#/components/schemas/StockSymbol'
+ *               type: object
+ *               properties:
+ *                 success:
+ *                   type: boolean
+ *                   example: true
+ *                 count:
+ *                   type: integer
+ *                   description: Number of items in current page
+ *                   example: 2500
+ *                 totalCount:
+ *                   type: integer
+ *                   description: Total number of stock symbols
+ *                   example: 5000
+ *                 pagination:
+ *                   type: object
+ *                   properties:
+ *                     currentPage:
+ *                       type: integer
+ *                       example: 1
+ *                     totalPages:
+ *                       type: integer
+ *                       example: 2
+ *                     limit:
+ *                       type: integer
+ *                       example: 2500
+ *                     hasNextPage:
+ *                       type: boolean
+ *                       example: true
+ *                     hasPrevPage:
+ *                       type: boolean
+ *                       example: false
+ *                     nextPage:
+ *                       type: integer
+ *                       nullable: true
+ *                       example: 2
+ *                     prevPage:
+ *                       type: integer
+ *                       nullable: true
+ *                       example: null
+ *                 data:
+ *                   type: array
+ *                   items:
+ *                     $ref: '#/components/schemas/StockSymbol'
+ *       400:
+ *         description: Invalid pagination parameters
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success:
+ *                   type: boolean
+ *                   example: false
+ *                 message:
+ *                   type: string
+ *                   example: "Page number must be greater than 0"
  *       500:
  *         description: Internal server error
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success:
+ *                   type: boolean
+ *                   example: false
+ *                 message:
+ *                   type: string
+ *                   example: "Server error"
  */
 router.get('/', stockSymbolController.getAllStockSymbols);
 
