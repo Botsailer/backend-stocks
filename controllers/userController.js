@@ -66,15 +66,35 @@ exports.getUserSubscriptions = async (req, res) => {
  */
 exports.getTips = async (req, res) => {
   try {
-    const tips = await Tip.find().populate('portfolio', 'name').sort('-createdAt');
-    let hasPremiumAccess = false;
-    let portfolioAccess = [];
+    const { startDate, endDate, category } = req.query;
+    const user = req.user;
+    const query = {};
 
-    // Check subscription status if authenticated
-    if (req.user) {
-      const subscriptions = await Subscription.find({ 
-        user: req.user._id,
-        isActive: true 
+    // Date filtering
+    if (startDate || endDate) {
+      query.createdAt = {};
+      if (startDate) query.createdAt.$gte = new Date(startDate);
+      if (endDate) query.createdAt.$lte = new Date(`${endDate}T23:59:59.999Z`);
+    }
+
+    // Category filtering
+    if (category) {
+      if (!['basic', 'premium'].includes(category)) {
+        return res.status(400).json({ error: 'Invalid category. Use "basic" or "premium"' });
+      }
+      query.category = category;
+    }
+
+    const tips = await Tip.find(query).populate('portfolio', 'name').sort('-createdAt');
+    
+    // Get user's subscription status
+    let portfolioAccess = [];
+    let hasPremiumAccess = false;
+    
+    if (user) {
+      const subscriptions = await Subscription.find({
+        user: user._id,
+        isActive: true
       });
       
       portfolioAccess = subscriptions
@@ -88,39 +108,42 @@ exports.getTips = async (req, res) => {
 
     // Process tips based on access rules
     const processedTips = tips.map(tip => {
-      // Portfolio-specific tips
+      const tipObj = tip.toObject();
+      
+      // Portfolio-associated tips
       if (tip.portfolio) {
-        const hasAccess = portfolioAccess.includes(tip.portfolio._id.toString());
-        return hasAccess 
-          ? tip.toObject() 
-          : { _id: tip._id, title: tip.title, portfolio: tip.portfolio };
+        const isSubscribed = portfolioAccess.includes(tip.portfolio._id.toString());
+        
+        return isSubscribed || user?.isAdmin
+          ? tipObj
+          : {
+              id: tip._id,
+              title: tip.title,
+              portfolio: { _id: tip.portfolio._id, name: tip.portfolio.name },
+              message: "Subscribe to this portfolio to view details"
+            };
       }
       
-      // Premium tips
-      if (tip.category === 'premium') {
-        return hasPremiumAccess 
-          ? tip.toObject()
-          : { _id: tip._id, title: tip.title, category: 'premium' };
+      // Non-portfolio tips
+      const canViewPremium = hasPremiumAccess || user?.isAdmin;
+      
+      if (tip.category === 'premium' && !canViewPremium) {
+        return {
+          id: tip._id,
+          title: tip.title,
+          category: 'premium',
+          message: "Upgrade to premium to view this content"
+        };
       }
       
-      // Basic tips
-      if (tip.category === 'basic') {
-        const hasBasicAccess = req.user && (portfolioAccess.length > 0 || hasPremiumAccess);
-        return hasBasicAccess
-          ? tip.toObject()
-          : { _id: tip._id, title: tip.title, category: 'basic' };
-      }
-      
-      // Unclassified tips (default to restricted)
-      return { _id: tip._id, title: tip.title };
+      return tipObj;
     });
-    
+
     res.json(processedTips);
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
 };
-
 
 /**
  * Get user's payment history

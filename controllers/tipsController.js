@@ -115,6 +115,142 @@ exports.getalltipswithoutPortfolio = async (req, res) => {
   }
 };
 
+exports.getTipsByDate = async (req, res) => {
+  try {
+    const { startDate, endDate, category } = req.query;
+    const user = req.user;
+    
+    // Validate date inputs
+    if ((startDate && isNaN(new Date(startDate))) || (endDate && isNaN(new Date(endDate)))) {
+      return res.status(400).json({ error: 'Invalid date format. Use ISO format (YYYY-MM-DD)' });
+    }
+
+    const query = {};
+    
+    // Date range filter
+    if (startDate || endDate) {
+      query.createdAt = {};
+      if (startDate) query.createdAt.$gte = new Date(startDate);
+      if (endDate) query.createdAt.$lte = new Date(`${endDate}T23:59:59.999Z`);
+    }
+    
+    // Category filter
+    if (category) {
+      if (!['basic', 'premium'].includes(category)) {
+        return res.status(400).json({ error: 'Invalid category. Use "basic" or "premium"' });
+      }
+      query.category = category;
+    }
+
+    // Fetch tips
+    const tips = await Tip.find(query).sort('-createdAt');
+    
+    // If user is admin, return all tips without restrictions
+    if (user.isAdmin) {
+      return res.json(tips.map(mapTipToCamelCase));
+    }
+    
+    // Filter based on user subscription (non-admin users)
+    const filteredTips = tips.map(tip => {
+      // Portfolio-associated tips
+      if (tip.portfolio) {
+        const isSubscribed = user.subscribedPortfolios?.some(
+          p => p.toString() === tip.portfolio.toString()
+        );
+        
+        return isSubscribed 
+          ? mapTipToCamelCase(tip)
+          : { 
+              id: tip._id, 
+              title: tip.title,
+              message: "Subscribe to this portfolio to view details"
+            };
+      }
+      // Non-portfolio tips
+      else {
+        const canViewPremium = user.subscriptionType === 'premium';
+        return (tip.category === 'basic' || canViewPremium)
+          ? mapTipToCamelCase(tip)
+          : { 
+              id: tip._id, 
+              title: tip.title,
+              message: "Upgrade to premium to view this content"
+            };
+      }
+    });
+
+    res.json(filteredTips);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+};
+
+
+exports.getTipByDateUsers= async (req, res) => {
+    try {
+    const { startDate, endDate, category } = req.query;
+    const user = req.user;
+    
+    // Validate date inputs
+    if ((startDate && isNaN(new Date(startDate))) || (endDate && isNaN(new Date(endDate)))) {
+      return res.status(400).json({ error: 'Invalid date format. Use ISO format (YYYY-MM-DD)' });
+    }
+
+    const query = {};
+    
+    // Date range filter
+    if (startDate || endDate) {
+      query.createdAt = {};
+      if (startDate) query.createdAt.$gte = new Date(startDate);
+      if (endDate) query.createdAt.$lte = new Date(`${endDate}T23:59:59.999Z`);
+    }
+    
+    // Category filter
+    if (category) {
+      if (!['basic', 'premium'].includes(category)) {
+        return res.status(400).json({ error: 'Invalid category. Use "basic" or "premium"' });
+      }
+      query.category = category;
+    }
+
+    // Fetch tips
+    const tips = await Tip.find(query).sort('-createdAt');
+    
+    // Filter based on user subscription
+    const filteredTips = tips.map(tip => {
+      // Portfolio-associated tips
+      if (tip.portfolio) {
+        const isSubscribed = user.subscribedPortfolios?.some(
+          p => p.toString() === tip.portfolio.toString()
+        );
+        
+        return isSubscribed || user.isAdmin 
+          ? mapTipToCamelCase(tip)
+          : { 
+              id: tip._id, 
+              title: tip.title,
+              message: "Subscribe to this portfolio to view details"
+            };
+      }
+      // Non-portfolio tips
+      else {
+        const canViewPremium = user.subscriptionType === 'premium' || user.isAdmin;
+        return (tip.category === 'basic' || canViewPremium)
+          ? mapTipToCamelCase(tip)
+          : { 
+              id: tip._id, 
+              title: tip.title,
+              message: "Upgrade to premium to view this content"
+            };
+      }
+    });
+
+    res.json(filteredTips);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+};
+
 exports.createTipWithoutPortfolio = async (req, res) => {
   try {
     const {
@@ -170,6 +306,43 @@ exports.createTipWithoutPortfolio = async (req, res) => {
     res.status(201).json(mapTipToCamelCase(saved));
   } catch (err) {
     res.status(400).json({ error: err.message });
+  }
+};
+
+exports.getalltipswithoutPortfolioUser = async (req, res) => {
+  try {
+    const tips = await Tip.find().sort('-createdAt');
+    const user = req.user;
+    const processedTips = tips.map(tip => {
+      // Portfolio-associated tips
+      if (tip.portfolio) {
+        const isSubscribed = user.subscribedPortfolios?.some(
+          p => p.toString() === tip.portfolio.toString()
+        );
+        return isSubscribed || user.isAdmin
+          ? mapTipToCamelCase(tip)
+          : {
+              id: tip._id,
+              title: tip.title,
+              portfolio: { _id: tip.portfolio._id, name: tip.portfolio.name },
+              message: "Subscribe to this portfolio to view details"
+            };
+      }
+      // Non-portfolio tips
+      const canViewPremium = user.subscriptionType === 'premium' || user.isAdmin;
+      if (tip.category === 'premium' && !canViewPremium) {
+        return {
+          id: tip._id,
+          title: tip.title,
+          category: 'premium',
+          message: "Upgrade to premium to view this content"
+        };
+      }
+      return mapTipToCamelCase(tip);
+    });
+    res.json(processedTips);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
   }
 };
 

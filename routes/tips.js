@@ -257,31 +257,115 @@ router.post(
 );
 
 // Get all tips across all portfolios
+
 /**
  * @swagger
  * /api/tips:
  *   get:
- *     summary: Get all tips across all portfolios
+ *     summary: Get all general tips with filters
  *     tags: [Tips]
  *     security:
  *       - bearerAuth: []
+ *     parameters:
+ *       - in: query
+ *         name: startDate
+ *         schema:
+ *           type: string
+ *           format: date
+ *         description: Start date (YYYY-MM-DD)
+ *       - in: query
+ *         name: endDate
+ *         schema:
+ *           type: string
+ *           format: date
+ *         description: End date (YYYY-MM-DD)
+ *       - in: query
+ *         name: category
+ *         schema:
+ *           type: string
+ *           enum: [basic, premium]
+ *         description: Filter by category
  *     responses:
  *       200:
- *         description: List of all tips
+ *         description: Tips with premium content filtered by subscription
  *         content:
  *           application/json:
  *             schema:
- *               type: array
- *               items:
- *                 $ref: '#/components/schemas/Tip'
+ *               oneOf:
+ *                 - $ref: '#/components/schemas/Tip'
+ *                 - type: object
+ *                   properties:
+ *                     id:
+ *                       type: string
+ *                     title:
+ *                       type: string
+ *                     message:
+ *                       type: string
+ *       400:
+ *         description: Invalid date format or category
  *       401:
  *         description: Unauthorized
- *       403:
- *         description: Forbidden
  *       500:
  *         description: Server error
  */
 router.get("/", requireAdmin, tipController.getalltipswithoutPortfolio);
+
+
+/**
+ * @swagger
+ * /api/tips/by-date:
+ *   get:
+ *     summary: Get tips by date range and category
+ *     tags: [Tips]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: query
+ *         name: startDate
+ *         schema:
+ *           type: string
+ *           format: date
+ *         description: Start date (YYYY-MM-DD)
+ *       - in: query
+ *         name: endDate
+ *         schema:
+ *           type: string
+ *           format: date
+ *         description: End date (YYYY-MM-DD)
+ *       - in: query
+ *         name: category
+ *         schema:
+ *           type: string
+ *           enum: [basic, premium]
+ *         description: Filter by category
+ *     responses:
+ *       200:
+ *         description: Tips with visibility based on subscription
+ *         content:
+ *           application/json:
+ *             schema:
+ *               oneOf:
+ *                 - $ref: '#/components/schemas/Tip'
+ *                 - type: object
+ *                   properties:
+ *                     id:
+ *                       type: string
+ *                     title:
+ *                       type: string
+ *                     message:
+ *                       type: string
+ *       400:
+ *         description: Invalid date format or category
+ *       401:
+ *         description: Unauthorized
+ *       500:
+ *         description: Server error
+ */
+router.get(
+  "/by-date",
+requireAdmin,
+  tipController.getTipsByDate
+);
 
 // Create a general tip (not associated with any portfolio)
 /**

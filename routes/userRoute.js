@@ -7,6 +7,7 @@ const express = require('express');
 const router = express.Router();
 const passport = require('passport');
 const userController = require('../controllers/userController');
+const { getalltipswithoutPortfolio, getalltipswithoutPortfolioUser } = require('../controllers/tipsController');
 
 // Middleware for required authentication
 const requireAuth = passport.authenticate('jwt', { session: false });
@@ -241,6 +242,60 @@ router.get('/portfolios/:id', userController.getPortfolioById);
  *           enum: [basic, premium]
  */
 router.get('/tips', optionalAuth, userController.getTips);
+
+
+
+//** tips without portfolio */
+/** * @swagger
+ * /api/user/tips/without-portfolio:
+ *   get:
+ *     summary: Get all tips without portfolio association
+ *     description: Returns all tips that are not associated with any portfolio.
+ *     tags: [Tips]
+ *     security:
+ *       - bearerAuth: []
+ *     responses:
+ *       200:
+ *         description: List of tips without portfolio
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: array
+ *               items:
+ *                 type: object
+ *                 properties:
+ *                   _id:
+ *                     type: string
+ *                   title:
+ *                     type: string
+ *                   content:
+ *                     type: string
+ *                   status:
+ *                     type: string
+ *                   buyrange:
+ *                     type: string
+ *                   targetprice:
+ *                     type: string
+ *                   addmoreat:
+ *                     type: string
+ *                   tipurl:
+ *                     type: string
+ *                   horizon:
+ *                     type: string
+ *                   category:
+ *                     type: string
+ *                     enum: [basic, premium]
+ *                   createdAt:
+ *                     type: string
+ *                     format: date-time
+ *       401:
+ *         description: Unauthorized - Missing or invalid token
+ *       500:
+ *         description: Server error
+ */
+router.get('/tips/without-portfolio', requireAuth, getalltipswithoutPortfolioUser);
+
+
 
 // ======================
 //  Subscription Routes
