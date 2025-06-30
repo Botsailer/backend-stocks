@@ -13,7 +13,10 @@ module.exports = (passport) => {
       try {
         const user = await db.findUser({
           provider: 'local',
-          $or: [{ username }, { email: username }]
+          $or: [
+            { username: { $regex: new RegExp(`^${username}$`, 'i') } }, 
+            { email: { $regex: new RegExp(`^${username}$`, 'i') } }
+          ]
         });
         if (!user) return done(null, false);
         const match = await bcrypt.compare(password, user.password);

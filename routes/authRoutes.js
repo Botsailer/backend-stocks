@@ -129,7 +129,6 @@ router.post('/signup', async (req, res) => {
  */
 router.post(
   '/login',
-  // allow email alias for username field
   (req, res, next) => {
     if (req.body.email && !req.body.username) {
       req.body.username = req.body.email;

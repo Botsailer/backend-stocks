@@ -69,15 +69,12 @@ exports.getTips = async (req, res) => {
     const { startDate, endDate, category } = req.query;
     const user = req.user;
     const query = {};
-
-    // Date filtering
     if (startDate || endDate) {
       query.createdAt = {};
       if (startDate) query.createdAt.$gte = new Date(startDate);
       if (endDate) query.createdAt.$lte = new Date(`${endDate}T23:59:59.999Z`);
     }
 
-    // Category filtering
     if (category) {
       if (!['basic', 'premium'].includes(category)) {
         return res.status(400).json({ error: 'Invalid category. Use "basic" or "premium"' });

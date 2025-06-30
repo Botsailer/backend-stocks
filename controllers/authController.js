@@ -6,7 +6,7 @@ const db           = require('../utils/db');
 const jwtUtil      = require('../utils/jwt');
 
 const {
-  accessTokenSecret,  // from your config
+  accessTokenSecret,  
   refreshTokenSecret
 } = require('../config/config').jwt;
 
@@ -173,7 +173,7 @@ exports.changeEmail = async (req, res) => {
 
 exports.forgotPassword = async (req, res) => {
   const { email } = req.body;
-  console.log('Email received in request:', email); // Debug log
+  console.log('Email received in request:', email);
   if (!email) {
     return res.status(400).json({ error: 'Email is required' });
   }
@@ -185,7 +185,7 @@ exports.forgotPassword = async (req, res) => {
   if (!user) {
     return res.status(404).json({ error: 'User not found' });
   }
-  console.log('User found:', user); // Debug log
+  console.log('User found:', user);
 
   // Use user.email or fallback to user.username
   const recipientEmail = user.email || user.username;
