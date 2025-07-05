@@ -1,4 +1,5 @@
 const Bundle = require('../models/bundle');
+const mongoose = require('mongoose');
 const Portfolio = require('../models/modelPortFolio');
 
 const asyncHandler = fn => (req, res, next) => 
@@ -113,17 +114,55 @@ exports.updateBundle = asyncHandler(async (req, res) => {
   res.status(200).json(bundle);
 });
 
+
 exports.getAllBundles = asyncHandler(async (req, res) => {
+  // First, get bundles without population to check the reference IDs
+  const rawBundles = await Bundle.find().lean();
+  console.log('Raw bundles with portfolio references:', 
+    JSON.stringify(rawBundles.map(b => ({
+      bundleId: b._id,
+      name: b.name,
+      portfolioIds: b.portfolios
+    })), null, 2)
+  );
+  
+  // Check if those portfolio IDs actually exist
+  if (rawBundles.length > 0 && rawBundles[0].portfolios.length > 0) {
+    const Portfolio = mongoose.model('Portfolio');
+    const samplePortfolioId = rawBundles[0].portfolios[0];
+    
+    try {
+      const portfolioExists = await Portfolio.findById(samplePortfolioId);
+      console.log(`Sample portfolio ID ${samplePortfolioId} exists: ${!!portfolioExists}`);
+      if (portfolioExists) {
+        console.log('Portfolio data sample:', {
+          id: portfolioExists._id,
+          name: portfolioExists.name
+        });
+      }
+    } catch (error) {
+      console.error('Error checking portfolio:', error.message);
+    }
+  }
+
+  // Try with specific fields in the populate
   const bundles = await Bundle.find()
     .populate({
       path: 'portfolios',
-      select: 'name description subscriptionFee minInvestment',
-      options: { retainNullValues: true }
+      select: 'name description subscriptionFee minInvestment'
     })
     .sort('-createdAt');
+  
+  console.log('Populated bundles portfolio count:', 
+    bundles.map(b => ({
+      bundleName: b.name,
+      portfolioCount: Array.isArray(b.portfolios) ? b.portfolios.length : 0
+    }))
+  );
 
   res.json(bundles);
 });
+
 
 exports.getBundleById = asyncHandler(async (req, res) => {
   const bundle = await Bundle.findById(req.params.id)

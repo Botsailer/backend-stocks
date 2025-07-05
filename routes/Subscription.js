@@ -1,3 +1,5 @@
+// routes/subscriptionRoutes.js
+
 const express = require("express");
 const router = express.Router();
 const passport = require("passport");
@@ -38,6 +40,11 @@ const requireAuth = passport.authenticate("jwt", { session: false });
  *                 type: string
  *                 format: objectid
  *                 example: "615a2d4b87d9c34f7d4f8a12"
+ *               planType:
+ *                 type: string
+ *                 enum: [monthly, quarterly, yearly]
+ *                 example: "quarterly"
+ *                 description: Plan type for the subscription
  *     responses:
  *       201:
  *         description: Payment order created
@@ -45,6 +52,8 @@ const requireAuth = passport.authenticate("jwt", { session: false });
  *         description: Invalid request parameters
  *       404:
  *         description: Product not found
+ *       409:
+ *         description: User already subscribed to this product
  *       503:
  *         description: Payment service unavailable
  */
@@ -58,6 +67,18 @@ router.post("/order", requireAuth, subscriptionController.createOrder);
  *     tags: [Subscriptions]
  *     security:
  *       - bearerAuth: []
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               planType:
+ *                 type: string
+ *                 enum: [monthly, quarterly, yearly]
+ *                 example: "quarterly"
+ *                 description: Plan type for the cart items
  *     responses:
  *       201:
  *         description: Payment order created for cart
@@ -65,6 +86,8 @@ router.post("/order", requireAuth, subscriptionController.createOrder);
  *         description: Cart is empty or invalid
  *       404:
  *         description: Portfolio not found
+ *       409:
+ *         description: User already subscribed to one or more portfolios in the cart
  *       503:
  *         description: Payment service unavailable
  */
@@ -181,6 +204,8 @@ router.get("/history", requireAuth, subscriptionController.getHistory);
  *         description: Invalid request parameters
  *       404:
  *         description: Product not found
+ *       409:
+ *         description: User already subscribed to this product
  *       503:
  *         description: Payment service unavailable
  */
@@ -201,10 +226,11 @@ router.post("/emandate", requireAuth, subscriptionController.createEmandate);
  *           schema:
  *             type: object
  *             required:
- *               - emandateId
+ *               - subscription_id
  *             properties:
- *               emandateId:
+ *               subscription_id:
  *                 type: string
+ *                 description: Razorpay subscription ID
  *     responses:
  *       200:
  *         description: eMandate verified and subscription activated
