@@ -305,7 +305,7 @@ router.get('/portfolios', requireAdmin, portfolioController.getAllPortfolios);
  *       500:
  *         description: Server error
  */
-router.get('/:id/price-history', portfolioController.getPortfolioPriceHistory);
+router.get('/portfolios/:id/price-history', portfolioController.getPortfolioPriceHistory);
 
 
 /**
