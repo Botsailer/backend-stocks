@@ -29,14 +29,6 @@ exports.getConfigByKey = async (req, res) => {
     }
     
     const configObj = config.toObject();
-    if (configObj.isSecret) {
-      if (configObj.isArray && configObj.arrayItems) {
-        configObj.arrayItems = configObj.arrayItems.map(() => '********');
-      } else {
-        configObj.value = '********';
-      }
-    }
-    
     res.json(configObj);
   } catch (err) {
     res.status(500).json({ error: err.message });
