@@ -200,16 +200,17 @@ exports.checkoutCart = async (req, res) => {
 
 exports.verifyPayment = async (req, res) => {
   try {
-    const { paymentId, orderId, signature, subscriptionType, bundleId } = req.body;
+    const { paymentId, orderId, signature, subscriptionType, bundleId, portfolioId } = req.body;
     if (!paymentId || !orderId || !signature) {
       return res.status(400).json({ error: "Missing required payment details" });
     }
+
+    // Check if either bundleId or portfolioId is provided
+    if (!bundleId && !portfolioId) {
+      return res.status(400).json({ error: "Either bundleId or portfolioId is required" });
+    }
+
     const body = orderId + "|" + paymentId;
-    
-; 
-
-  
-
     const expectedSignature = crypto.createHmac("sha256", (await getPaymentConfig()).key_secret)
       .update(body.toString())
       .digest("hex");
@@ -220,38 +221,77 @@ exports.verifyPayment = async (req, res) => {
       return res.status(400).json({ error: "Invalid payment signature" });
     }
 
-    // Get the bundle with populated portfolios
-    const bundle = await Bundle.findById(bundleId).populate('portfolios');
-    if (!bundle) {
-      return res.status(404).json({ error: "Bundle not found" });
+    let product = null;
+    let productType = '';
+    let portfolios = [];
+    let amount = 0;
+
+    // Try to find bundle first
+    if (bundleId) {
+      const bundle = await Bundle.findById(bundleId).populate('portfolios');
+      if (bundle) {
+        product = bundle;
+        productType = 'Bundle';
+        portfolios = bundle.portfolios || [];
+        
+        // Get pricing based on subscription type
+        switch(subscriptionType) {
+          case 'monthly':
+            amount = bundle.monthlyPrice;
+            break;
+          case 'quarterly':
+            amount = bundle.quarterlyPrice;
+            break;
+          case 'yearly':
+            amount = bundle.yearlyPrice;
+            break;
+          default:
+            return res.status(400).json({ error: "Invalid subscription type" });
+        }
+      }
     }
 
-    // Check if bundle has portfolios - only proceed if it has portfolios
-    if (!bundle.portfolios || bundle.portfolios.length === 0) {
+    // If no bundle found, try to find portfolio
+    if (!product && portfolioId) {
+      const portfolio = await Portfolio.findById(portfolioId);
+      if (portfolio) {
+        product = portfolio;
+        productType = 'Portfolio';
+        portfolios = [portfolio];
+        
+        // Get pricing based on subscription type
+        switch(subscriptionType) {
+          case 'monthly':
+            amount = portfolio.monthlyPrice;
+            break;
+          case 'quarterly':
+            amount = portfolio.quarterlyPrice;
+            break;
+          case 'yearly':
+            amount = portfolio.yearlyPrice;
+            break;
+          default:
+            return res.status(400).json({ error: "Invalid subscription type" });
+        }
+      }
+    }
+
+    // If neither bundle nor portfolio found
+    if (!product) {
+      return res.status(404).json({ error: "Product not found" });
+    }
+
+    // Check if product has valid pricing
+    if (!amount) {
       return res.status(400).json({ 
-        error: "Bundle has no portfolios available. Cannot activate subscription." 
+        error: `${subscriptionType} pricing not available for this ${productType.toLowerCase()}` 
       });
     }
 
-    // Get pricing based on subscription type
-    let amount;
-    switch(subscriptionType) {
-      case 'monthly':
-        amount = bundle.monthlyPrice;
-        break;
-      case 'quarterly':
-        amount = bundle.quarterlyPrice;
-        break;
-      case 'yearly':
-        amount = bundle.yearlyPrice;
-        break;
-      default:
-        return res.status(400).json({ error: "Invalid subscription type" });
-    }
-
-    if (!amount) {
+    // For bundles, check if it has portfolios
+    if (productType === 'Bundle' && portfolios.length === 0) {
       return res.status(400).json({ 
-        error: `${subscriptionType} pricing not available for this bundle` 
+        error: "Bundle has no portfolios available. Cannot activate subscription." 
       });
     }
 
@@ -261,8 +301,8 @@ exports.verifyPayment = async (req, res) => {
     // Create payment history record
     const paymentHistory = new PaymentHistory({
       user: userId,
-      subscription: bundleId, // Bundle ID as subscription reference
-      portfolio: bundle.portfolios[0]._id, // Use first portfolio as primary reference
+      subscription: productType === 'Bundle' ? bundleId : portfolioId,
+      portfolio: portfolios[0]._id, // Use first portfolio as primary reference
       amount: amount,
       razorpayPaymentId: paymentId,
       razorpayOrderId: orderId,
@@ -277,9 +317,9 @@ exports.verifyPayment = async (req, res) => {
     // Create subscription record
     const subscription = new Subscription({
       user: userId,
-      productType: 'Bundle',
-      productId: bundleId,
-      portfolio: bundle.portfolios[0]._id, // Primary portfolio reference
+      productType: productType,
+      productId: productType === 'Bundle' ? bundleId : portfolioId,
+      portfolio: portfolios[0]._id, // Primary portfolio reference
       isActive: true,
       subscriptionType: subscriptionType === 'yearly' ? 'yearlyEmandate' : 'regular',
       monthlyAmount: subscriptionType === 'yearly' ? amount / 12 : amount,
@@ -294,8 +334,9 @@ exports.verifyPayment = async (req, res) => {
       message: "Payment verified and subscription activated successfully",
       subscription: {
         id: subscription._id,
-        bundleId: bundleId,
-        portfolioCount: bundle.portfolios.length,
+        productType: productType,
+        productId: productType === 'Bundle' ? bundleId : portfolioId,
+        portfolioCount: portfolios.length,
         subscriptionType: subscriptionType,
         amount: amount,
         isActive: true
