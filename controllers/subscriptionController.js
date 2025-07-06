@@ -19,7 +19,7 @@ function generateShortReceipt(prefix, userId) {
 async function getRazorpayInstance() {
   try {
     const paymentConfig = await getPaymentConfig();
-    
+
     if (!paymentConfig.key_id || !paymentConfig.key_secret) {
       throw new Error("Razorpay credentials not configured");
     }
@@ -60,7 +60,7 @@ async function isUserSubscribed(userId, productType, productId) {
     productId,
     isActive: true
   });
-  
+
   return !!subscription;
 }
 
@@ -75,7 +75,7 @@ exports.createOrder = async (req, res) => {
 
     // Check if user is already subscribed
     if (await isUserSubscribed(req.user._id, productType, productId)) {
-      return res.status(409).json({ 
+      return res.status(409).json({
         error: `You are already subscribed to this ${productType.toLowerCase()}`
       });
     }
@@ -135,7 +135,7 @@ exports.createOrder = async (req, res) => {
     });
   } catch (err) {
     console.error("Create order error:", err);
-    
+
     if (err.error?.description) {
       return res.status(400).json({ error: err.error.description });
     }
@@ -189,7 +189,7 @@ exports.checkoutCart = async (req, res) => {
     });
   } catch (err) {
     console.error("Checkout cart error:", err);
-    
+
     if (err.error?.description) {
       return res.status(400).json({ error: err.error.description });
     }
@@ -281,13 +281,10 @@ exports.verifyPayment = async (req, res) => {
       user: userId,
       subscription: productId,
       portfolio: portfolios[0]._id,
-      amount,
-      razorpayPaymentId: paymentId,
-      razorpayOrderId: orderId,
-      razorpaySignature: signature,
-      subscriptionType,
-      status: "completed",
-      paymentMethod: "razorpay"
+      amount, paymentId,
+      orderId,
+      signature,
+      status: "VERIFIED",
     });
 
     await paymentHistory.save();
@@ -327,7 +324,7 @@ exports.verifyPayment = async (req, res) => {
 
 function calculateEndDate(subscriptionType) {
   const now = new Date();
-  switch(subscriptionType) {
+  switch (subscriptionType) {
     case 'monthly':
       return new Date(now.setMonth(now.getMonth() + 1));
     case 'quarterly':
@@ -500,8 +497,8 @@ async function createSubscriptionPlan(amountInPaisa) {
   const existingPlans = await razorpay.plans.all();
   const existingPlan = existingPlans.items.find(
     plan => plan.item.amount === amountInPaisa &&
-           plan.period === "monthly" &&
-           plan.interval === 1
+      plan.period === "monthly" &&
+      plan.interval === 1
   );
 
   if (existingPlan) return existingPlan;
@@ -532,7 +529,7 @@ exports.createEmandate = async (req, res) => {
 
     // Check if user is already subscribed
     if (await isUserSubscribed(req.user._id, productType, productId)) {
-      return res.status(409).json({ 
+      return res.status(409).json({
         error: `You are already subscribed to this ${productType.toLowerCase()}`
       });
     }
@@ -645,7 +642,7 @@ exports.createEmandate = async (req, res) => {
     });
   } catch (err) {
     console.error("Create eMandate error:", err);
-    
+
     if (err.error?.description) {
       return res.status(400).json({ error: err.error.description });
     }
@@ -691,9 +688,9 @@ exports.cancelSubscription = async (req, res) => {
 
     // Cancel all subscriptions with the same eMandateId
     await Subscription.updateMany(
-      { 
+      {
         user: req.user._id,
-        eMandateId: subscription.eMandateId 
+        eMandateId: subscription.eMandateId
       },
       { isActive: false }
     );
