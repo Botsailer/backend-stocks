@@ -552,6 +552,164 @@ router.post('/cart', requireAuth, userController.addToCart);
 
 /**
  * @swagger
+ * /api/contactus:
+ *   post:
+ *     summary: Send a contact us message
+ *     description: Allows users to send a contact us message with their name, email, and message content.
+ *     tags:
+ *       - Contact
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required:
+ *               - name
+ *               - email
+ *               - message
+ *             properties:
+ *               name:
+ *                 type: string
+ *                 description: Full name of the user sending the message
+ *                 example: "John Doe"
+ *                 minLength: 2
+ *                 maxLength: 100
+ *               email:
+ *                 type: string
+ *                 format: email
+ *                 description: Valid email address of the user
+ *                 example: "john.doe@example.com"
+ *               message:
+ *                 type: string
+ *                 description: The contact message content
+ *                 example: "I would like to know more about your investment portfolios."
+ *                 minLength: 10
+ *                 maxLength: 1000
+ *     responses:
+ *       200:
+ *         description: Contact message sent successfully
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 message:
+ *                   type: string
+ *                   example: "Contact us message sent successfully"
+ *       400:
+ *         description: Bad request - Missing required fields
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 error:
+ *                   type: string
+ *                   example: "All fields are required"
+ *       422:
+ *         description: Validation error
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 error:
+ *                   type: string
+ *                   example: "Invalid email format"
+ *       500:
+ *         description: Internal server error
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 error:
+ *                   type: string
+ *                   example: "Failed to send contact us message"
+ */
+/**
+ * @swagger
+ * /api/contactus:
+ *   post:
+ *     summary: Send a contact us message
+ *     description: Allows users to send a contact us message with their name, email, and message content.
+ *     tags:
+ *       - Contact
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required:
+ *               - name
+ *               - email
+ *               - message
+ *             properties:
+ *               name:
+ *                 type: string
+ *                 description: Full name of the user sending the message
+ *                 example: "John Doe"
+ *                 minLength: 2
+ *                 maxLength: 100
+ *               email:
+ *                 type: string
+ *                 format: email
+ *                 description: Valid email address of the user
+ *                 example: "john.doe@example.com"
+ *               message:
+ *                 type: string
+ *                 description: The contact message content
+ *                 example: "I would like to know more about your investment portfolios."
+ *                 minLength: 10
+ *                 maxLength: 1000
+ *     responses:
+ *       200:
+ *         description: Contact message sent successfully
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 message:
+ *                   type: string
+ *                   example: "Contact us message sent successfully"
+ *       400:
+ *         description: Bad request - Missing required fields
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 error:
+ *                   type: string
+ *                   example: "All fields are required"
+ *       422:
+ *         description: Validation error
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 error:
+ *                   type: string
+ *                   example: "Invalid email format"
+ *       500:
+ *         description: Internal server error
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 error:
+ *                   type: string
+ *                   example: "Failed to send contact us message"
+ */
+
+
+/**
+ * @swagger
  * /api/user/cart/{portfolioId}:
  *   delete:
  *     summary: Remove portfolio from cart

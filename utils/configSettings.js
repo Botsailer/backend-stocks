@@ -74,7 +74,8 @@ async function getSmtpConfig() {
     port: await getConfig('EMAIL_PORT'),
     user: await getConfig('EMAIL_USER'),
     pass: await getConfig('EMAIL_PASS'),
-    service: await getConfig('EMAIL_SERVICE')
+    service: await getConfig('EMAIL_SERVICE'),
+    receiveemailat: await getConfig('RECEIVE_EMAIL_AT')
   };
 }
 

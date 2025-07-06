@@ -49,6 +49,26 @@ dbAdapter.connect()
     app.use('/api/tips', require('./routes/tips')); 
     app.use('/api/bundles', require('./routes/bundleRouter'));
     app.use('/api/admin/configs', require('./routes/configRoute'));
+
+// Contact Us API
+//swagger documentation for contact us API
+
+
+
+app.post("/api/contactus", (req, res) => {
+  const { name, email, message } = req.body;
+  if (!name || !email || !message) {
+    return res.status(400).json({ error: 'All fields are required' });
+  }
+
+  emailService.sendContactUsEmail(name, email, message)
+    .then(() => res.status(200).json({ message: 'Contact us message sent successfully' }))
+    .catch(err => {
+      console.error('Error sending contact us email:', err);
+      res.status(500).json({ error: 'Failed to send contact us message' });
+    });
+});
+
     app.listen(config.server.port, () =>{
       console.log(`Auth service running on port ${config.server.port}`),
       console.log(`swagger docs available at http://${config.server.host}:${config.server.port}/api-docs`)

@@ -1,10 +1,11 @@
 const nodemailer = require('nodemailer');
-const { getSmtpConfig } = require('../utils/configSettings');
+const { getSmtpConfig, getConfig } = require('../utils/configSettings');
 
 // Function to create/update transporter with current config
+let config = {};
 async function createTransporter() {
-  const config = await getSmtpConfig();
-  
+ config = await getSmtpConfig();
+  receiveemailat = config?.receiveemailat
   return nodemailer.createTransport({
     host: config.host,
     port: Number(config.port),
@@ -79,7 +80,30 @@ exports.sendVerificationEmail = async (to, verifyUrl) => {
     </div>
   `;
   
-  return await exports.sendEmail(to, subject, text, html);
+  return await exports.sendEmail(to , subject, text, html);
+};
+
+exports.sendContactUsEmail = async (name, email, message) => {
+  // Get config inside the function
+  const smtpConfig = await getSmtpConfig();
+  const receiveemailat = smtpConfig?.receiveemailat;
+  console.log('SMTP Config:', smtpConfig);
+  if (!receiveemailat) {
+    throw new Error('Receive email address is not configured');
+  }
+  
+  const subject = `Contact Us Message from ${name}`;
+  const text = `You have received a new message from ${name} (${email}):\n\n${message}`;
+  const html = `
+    <div style="max-width:600px; margin:0 auto; padding:20px; font-family:sans-serif;">
+      <h2 style="color:#4a77e5;">New Contact Us Message</h2>
+      <p>You have received a new message from <strong>${name}</strong> (${email}):</p>
+      <p style="white-space:pre-wrap;">${message}</p>
+      <p>Do Not Reply to this email to respond to the sender It wont be reaching user.</p>
+    </div>
+  `;
+  
+  return await exports.sendEmail(receiveemailat, subject, text, html);
 };
 
 exports.sendResetPasswordEmail = async (to, resetUrl) => {
