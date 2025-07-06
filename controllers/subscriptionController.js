@@ -8,6 +8,7 @@ const Cart = require("../models/carts");
 const PaymentHistory = require("../models/paymenthistory");
 const Bundle = require("../models/bundle");
 const { getPaymentConfig } = require("../utils/configSettings");
+const { config } = require("dotenv");
 
 function generateShortReceipt(prefix, userId) {
   const timestamp = Date.now().toString().slice(-8);
@@ -204,8 +205,11 @@ exports.verifyPayment = async (req, res) => {
       return res.status(400).json({ error: "Missing required payment details" });
     }
     const body = orderId + "|" + paymentId;
+    
+    const config = await getPaymentConfig(); 
+
     const expectedSignature = crypto
-      .createHmac("sha256", process.env.RAZORPAY_KEY_SECRET)
+      .createHmac("sha256", config.RAZORPAY_KEY_SECRET)
       .update(body.toString())
       .digest("hex");
 
@@ -326,7 +330,7 @@ exports.verifyEmandate = async (req, res) => {
 
     // Verify signature for eMandate
     const generatedSignature = crypto
-      .createHmac("sha256", (await getPaymentConfig()).key_secret)
+      .createHmac("sha256", (await getPaymentConfig()).RAZORPAY_KEY_ID)
       .update(`${subscription_id}|${Date.now()}`)
       .digest("hex");
 
@@ -375,7 +379,7 @@ exports.razorpayWebhook = async (req, res) => {
 
     // Validate webhook signature
     const expectedSignature = crypto
-      .createHmac("sha256", paymentConfig.key_secret)
+      .createHmac("sha256", paymentConfig.RAZORPAY_KEY_ID)
       .update(req.rawBody)
       .digest("hex");
 
