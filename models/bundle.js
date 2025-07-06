@@ -16,7 +16,7 @@ const BundleSchema = new Schema({
   portfolios: [{
     type: Schema.Types.ObjectId,
     ref: 'Portfolio',
-    required: true,
+    required: false,
   }],
   category: {
     type: String,

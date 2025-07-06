@@ -322,6 +322,16 @@ exports.removeDownloadLink = asyncHandler(async (req, res) => {
   res.status(200).json(portfolio);
 });
 
+
+//get all youtube links for a portfolios merged together 
+exports.getAllYouTubeLinks = asyncHandler(async (req, res) => {
+  const portfolios = await Portfolio.find().select('youTubeLinks');
+  const allLinks = portfolios.reduce((acc, portfolio) => {
+    return acc.concat(portfolio.youTubeLinks);
+  }, []);
+  res.status(200).json(allLinks);
+});
+
 exports.errorHandler = (err, req, res, next) => {
   console.error(err.stack);
   const status = err.status || 500;

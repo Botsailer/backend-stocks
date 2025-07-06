@@ -199,138 +199,123 @@ exports.checkoutCart = async (req, res) => {
 
 exports.verifyPayment = async (req, res) => {
   try {
-    const razorpay = await getRazorpayInstance();
-    const { paymentId, signature } = req.body; // Only need paymentId and signature
-
-    // Fetch payment details from Razorpay
-    const payment = await razorpay.payments.fetch(paymentId);
-    if (!payment) {
-      return res.status(404).json({ error: "Payment not found" });
+    const { razorpay_payment_id, razorpay_order_id, razorpay_signature, subscriptionType, bundleId } = req.body;
+    if (!razorpay_payment_id || !razorpay_order_id || !razorpay_signature) {
+      return res.status(400).json({ error: "Missing required payment details" });
     }
-
-    // Get order ID from payment object
-    const orderId = payment.order_id;
-
-    // Verify signature using server-fetched order ID
-    const generatedSignature = crypto
-      .createHmac("sha256", (await getPaymentConfig()).key_secret)
-      .update(`${orderId}|${paymentId}`)
+    const body = razorpay_order_id + "|" + razorpay_payment_id;
+    const expectedSignature = crypto
+      .createHmac("sha256", process.env.RAZORPAY_KEY_SECRET)
+      .update(body.toString())
       .digest("hex");
 
-    if (generatedSignature !== signature) {
-      return res.status(400).json({ error: "Invalid signature" });
+    const isAuthentic = expectedSignature === razorpay_signature;
+
+    if (!isAuthentic) {
+      return res.status(400).json({ error: "Invalid payment signature" });
     }
 
-    // Fetch order details
-    const order = await razorpay.orders.fetch(orderId);
-    if (!order) {
-      return res.status(404).json({ error: "Order not found" });
+    // Get the bundle with populated portfolios
+    const bundle = await Bundle.findById(bundleId).populate('portfolios');
+    if (!bundle) {
+      return res.status(404).json({ error: "Bundle not found" });
     }
 
-    // Verify user ownership
-    if (order.notes.userId !== req.user._id.toString()) {
-      return res.status(403).json({ error: "Unauthorized payment verification" });
+    // Check if bundle has portfolios - only proceed if it has portfolios
+    if (!bundle.portfolios || bundle.portfolios.length === 0) {
+      return res.status(400).json({ 
+        error: "Bundle has no portfolios available. Cannot activate subscription." 
+      });
     }
 
-    let portfolioId;
-
-    if (order.notes?.cartCheckout) {
-      const cart = await Cart.findOne({ user: req.user._id });
-      if (!cart) return res.status(404).json({ error: "Cart not found" });
-
-      // Create subscriptions for all cart items
-      for (const item of cart.items) {
-        await Subscription.findOneAndUpdate(
-          {
-            user: req.user._id,
-            productType: "Portfolio",
-            productId: item.portfolio,
-            portfolio: item.portfolio,
-          },
-          {
-            isActive: true,
-            lastPaidAt: new Date(),
-            missedCycles: 0,
-          },
-          { upsert: true, new: true }
-        );
-      }
-
-      portfolioId = cart.items[0]?.portfolio;
-      cart.items = [];
-      await cart.save();
-    } else {
-      const productType = order.notes?.productType || "Portfolio";
-      const productId = order.notes?.productId;
-
-      if (!productId) {
-        return res.status(400).json({ error: "Product ID not found in order" });
-      }
-
-      if (productType === "Bundle") {
-        const bundle = await Bundle.findById(productId).populate("portfolios");
-        if (!bundle) return res.status(404).json({ error: "Bundle not found" });
-
-        // Create subscriptions for all portfolios in bundle
-        for (const portfolio of bundle.portfolios) {
-          await Subscription.findOneAndUpdate(
-            {
-              user: req.user._id,
-              productType: "Portfolio",
-              productId: portfolio._id,
-              portfolio: portfolio._id,
-            },
-            {
-              isActive: true,
-              lastPaidAt: new Date(),
-              missedCycles: 0,
-            },
-            { upsert: true, new: true }
-          );
-        }
-
-        portfolioId = bundle.portfolios[0]?._id;
-      } else {
-        // Portfolio subscription
-        portfolioId = productId;
-        await Subscription.findOneAndUpdate(
-          {
-            user: req.user._id,
-            productType,
-            productId,
-            portfolio: productId,
-          },
-          {
-            isActive: true,
-            lastPaidAt: new Date(),
-            missedCycles: 0,
-          },
-          { upsert: true, new: true }
-        );
-      }
+    // Get pricing based on subscription type
+    let amount;
+    switch(subscriptionType) {
+      case 'monthly':
+        amount = bundle.monthlyPrice;
+        break;
+      case 'quarterly':
+        amount = bundle.quarterlyPrice;
+        break;
+      case 'yearly':
+        amount = bundle.yearlyPrice;
+        break;
+      default:
+        return res.status(400).json({ error: "Invalid subscription type" });
     }
 
-    // Record payment history
-    const paymentHistory = await PaymentHistory.create({
-      user: req.user._id,
-      portfolio: portfolioId,
-      orderId,
-      paymentId,
-      signature,
-      amount: order.amount,
-      status: "VERIFIED",
+    if (!amount) {
+      return res.status(400).json({ 
+        error: `${subscriptionType} pricing not available for this bundle` 
+      });
+    }
+
+    // Get user from token
+    const userId = req.user.id;
+
+    // Create payment history record
+    const paymentHistory = new PaymentHistory({
+      user: userId,
+      subscription: bundleId, // Bundle ID as subscription reference
+      portfolio: bundle.portfolios[0]._id, // Use first portfolio as primary reference
+      amount: amount,
+      razorpayPaymentId: razorpay_payment_id,
+      razorpayOrderId: razorpay_order_id,
+      razorpaySignature: razorpay_signature,
+      subscriptionType: subscriptionType,
+      status: 'completed',
+      paymentMethod: 'razorpay'
     });
 
-    res.json({
-      success: true,
-      message: "Payment verified and subscription activated",
-      paymentHistory,
+    await paymentHistory.save();
+
+    // Create subscription record
+    const subscription = new Subscription({
+      user: userId,
+      productType: 'Bundle',
+      productId: bundleId,
+      portfolio: bundle.portfolios[0]._id, // Primary portfolio reference
+      isActive: true,
+      subscriptionType: subscriptionType === 'yearly' ? 'yearlyEmandate' : 'regular',
+      monthlyAmount: subscriptionType === 'yearly' ? amount / 12 : amount,
+      commitmentEndDate: subscriptionType === 'yearly' ? calculateEndDate('yearly') : null
     });
-  } catch (err) {
-    console.error("Verify payment error:", err);
-    res.status(400).json({ error: "Payment verification failed" });
+
+    // Record the payment
+    await subscription.recordPayment(new Date());
+
+    res.json({ 
+      success: true, 
+      message: "Payment verified and subscription activated successfully",
+      subscription: {
+        id: subscription._id,
+        bundleId: bundleId,
+        portfolioCount: bundle.portfolios.length,
+        subscriptionType: subscriptionType,
+        amount: amount,
+        isActive: true
+      }
+    });
+
+  } catch (error) {
+    console.error('Verify payment error:', error);
+    res.status(500).json({ error: "Payment verification failed" });
   }
 };
+
+function calculateEndDate(subscriptionType) {
+  const now = new Date();
+  switch(subscriptionType) {
+    case 'monthly':
+      return new Date(now.setMonth(now.getMonth() + 1));
+    case 'quarterly':
+      return new Date(now.setMonth(now.getMonth() + 3));
+    case 'yearly':
+      return new Date(now.setFullYear(now.getFullYear() + 1));
+    default:
+      return new Date(now.setMonth(now.getMonth() + 1));
+  }
+}
 
 
 
