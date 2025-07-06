@@ -199,17 +199,17 @@ exports.checkoutCart = async (req, res) => {
 
 exports.verifyPayment = async (req, res) => {
   try {
-    const { razorpay_payment_id, razorpay_order_id, razorpay_signature, subscriptionType, bundleId } = req.body;
-    if (!razorpay_payment_id || !razorpay_order_id || !razorpay_signature) {
+    const { paymentId, orderId, signature, subscriptionType, bundleId } = req.body;
+    if (!paymentId || !orderId || !signature) {
       return res.status(400).json({ error: "Missing required payment details" });
     }
-    const body = razorpay_order_id + "|" + razorpay_payment_id;
+    const body = orderId + "|" + paymentId;
     const expectedSignature = crypto
       .createHmac("sha256", process.env.RAZORPAY_KEY_SECRET)
       .update(body.toString())
       .digest("hex");
 
-    const isAuthentic = expectedSignature === razorpay_signature;
+    const isAuthentic = expectedSignature === signature;
 
     if (!isAuthentic) {
       return res.status(400).json({ error: "Invalid payment signature" });
@@ -259,9 +259,9 @@ exports.verifyPayment = async (req, res) => {
       subscription: bundleId, // Bundle ID as subscription reference
       portfolio: bundle.portfolios[0]._id, // Use first portfolio as primary reference
       amount: amount,
-      razorpayPaymentId: razorpay_payment_id,
-      razorpayOrderId: razorpay_order_id,
-      razorpaySignature: razorpay_signature,
+      razorpayPaymentId: paymentId,
+      razorpayOrderId: orderId,
+      razorpaySignature: signature,
       subscriptionType: subscriptionType,
       status: 'completed',
       paymentMethod: 'razorpay'

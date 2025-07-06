@@ -50,18 +50,16 @@ dbAdapter.connect()
     app.use('/api/bundles', require('./routes/bundleRouter'));
     app.use('/api/admin/configs', require('./routes/configRoute'));
 
-// Contact Us API
-//swagger documentation for contact us API
-
+    
 
 
 app.post("/api/contactus", (req, res) => {
-  const { name, email, message } = req.body;
+  const { name, email, askingabout,represent ,message } = req.body;
   if (!name || !email || !message) {
     return res.status(400).json({ error: 'All fields are required' });
   }
 
-  emailService.sendContactUsEmail(name, email, message)
+  emailService.sendContactUsEmail(name, email, askingabout , represent ,message)
     .then(() => res.status(200).json({ message: 'Contact us message sent successfully' }))
     .catch(err => {
       console.error('Error sending contact us email:', err);

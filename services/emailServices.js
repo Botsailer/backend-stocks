@@ -83,7 +83,7 @@ exports.sendVerificationEmail = async (to, verifyUrl) => {
   return await exports.sendEmail(to , subject, text, html);
 };
 
-exports.sendContactUsEmail = async (name, email, message) => {
+exports.sendContactUsEmail = async (name, email, askingabout , represent ,message) => {
   // Get config inside the function
   const smtpConfig = await getSmtpConfig();
   const receiveemailat = smtpConfig?.receiveemailat;
@@ -98,6 +98,9 @@ exports.sendContactUsEmail = async (name, email, message) => {
     <div style="max-width:600px; margin:0 auto; padding:20px; font-family:sans-serif;">
       <h2 style="color:#4a77e5;">New Contact Us Message</h2>
       <p>You have received a new message from <strong>${name}</strong> (${email}):</p>
+      <p><strong>Asking About:</strong> ${askingabout || 'N/A'}</p>
+      <p><strong>I Represent:</strong> ${represent || 'N/A'}</p>
+      <p style="font-weight:bold; color:#333;">Message:</p>
       <p style="white-space:pre-wrap;">${message}</p>
       <p>Do Not Reply to this email to respond to the sender It wont be reaching user.</p>
     </div>
