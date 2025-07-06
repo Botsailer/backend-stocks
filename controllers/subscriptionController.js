@@ -206,10 +206,12 @@ exports.verifyPayment = async (req, res) => {
     }
     const body = orderId + "|" + paymentId;
     
-    const config = await getPaymentConfig(); 
+; 
+
+  
 
     const expectedSignature = crypto
-      .createHmac("sha256", config.RAZORPAY_KEY_SECRET)
+      .createHmac("sha256",( await getPaymentConfig()).RAZORPAY_KEY_ID)
       .update(body.toString())
       .digest("hex");
 
