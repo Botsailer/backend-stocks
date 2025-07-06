@@ -1,3 +1,4 @@
+const { default: mongoose } = require('mongoose');
 const Portfolio = require('../models/modelPortFolio');
 const PriceLog = require('../models/PriceLog');
 
