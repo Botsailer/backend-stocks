@@ -210,8 +210,7 @@ exports.verifyPayment = async (req, res) => {
 
   
 
-    const expectedSignature = crypto
-      .createHmac("sha256",( await getPaymentConfig()).RAZORPAY_KEY_ID)
+    const expectedSignature = crypto.createHmac("sha256", (await getPaymentConfig()).key_secret)
       .update(body.toString())
       .digest("hex");
 
@@ -331,8 +330,7 @@ exports.verifyEmandate = async (req, res) => {
     const razorpay = await getRazorpayInstance();
 
     // Verify signature for eMandate
-    const generatedSignature = crypto
-      .createHmac("sha256", (await getPaymentConfig()).RAZORPAY_KEY_ID)
+    const generatedSignature = crypto.createHmac("sha256", (await getPaymentConfig()).key_secret)
       .update(`${subscription_id}|${Date.now()}`)
       .digest("hex");
 
