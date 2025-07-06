@@ -198,156 +198,132 @@ exports.checkoutCart = async (req, res) => {
   }
 };
 
+
 exports.verifyPayment = async (req, res) => {
   try {
-    const { paymentId, orderId, signature, subscriptionType, bundleId, portfolioId } = req.body;
+    const { paymentId, orderId, signature } = req.body;
     if (!paymentId || !orderId || !signature) {
       return res.status(400).json({ error: "Missing required payment details" });
     }
 
-    // Check if either bundleId or portfolioId is provided
-    if (!bundleId && !portfolioId) {
-      return res.status(400).json({ error: "Either bundleId or portfolioId is required" });
-    }
+    const { key_secret } = await getPaymentConfig();
 
-    const body = orderId + "|" + paymentId;
-    const expectedSignature = crypto.createHmac("sha256", (await getPaymentConfig()).key_secret)
-      .update(body.toString())
+    const expectedSignature = crypto
+      .createHmac("sha256", key_secret)
+      .update(`${orderId}|${paymentId}`)
       .digest("hex");
 
-    const isAuthentic = expectedSignature === signature;
-
-    if (!isAuthentic) {
+    if (expectedSignature !== signature) {
       return res.status(400).json({ error: "Invalid payment signature" });
     }
 
+    const razorpay = await getRazorpayInstance();
+    const order = await razorpay.orders.fetch(orderId);
+    const notes = order.notes || {};
+
+    const { productType, productId, planType = "monthly" } = notes;
+
+    if (!productType || !productId) {
+      return res.status(400).json({ error: "Invalid order notes: missing product info" });
+    }
+
+    const subscriptionType = planType;
+
     let product = null;
-    let productType = '';
     let portfolios = [];
     let amount = 0;
 
-    // Try to find bundle first
-    if (bundleId) {
-      const bundle = await Bundle.findById(bundleId).populate('portfolios');
-      if (bundle) {
-        product = bundle;
-        productType = 'Bundle';
-        portfolios = bundle.portfolios || [];
-        
-        // Get pricing based on subscription type
-        switch(subscriptionType) {
-          case 'monthly':
-            amount = bundle.monthlyPrice;
-            break;
-          case 'quarterly':
-            amount = bundle.quarterlyPrice;
-            break;
-          case 'yearly':
-            amount = bundle.yearlyPrice;
-            break;
-          default:
-            return res.status(400).json({ error: "Invalid subscription type" });
-        }
+    if (productType === "Bundle") {
+      const bundle = await Bundle.findById(productId).populate("portfolios");
+      if (!bundle) return res.status(404).json({ error: "Bundle not found" });
+
+      product = bundle;
+      portfolios = bundle.portfolios || [];
+
+      if (portfolios.length === 0) {
+        return res.status(400).json({ error: "Bundle has no portfolios" });
       }
-    }
 
-    // If no bundle found, try to find portfolio
-    if (!product && portfolioId) {
-      const portfolio = await Portfolio.findById(portfolioId);
-      if (portfolio) {
-        product = portfolio;
-        productType = 'Portfolio';
-        portfolios = [portfolio];
-        
-        // Get pricing based on subscription type
-        switch(subscriptionType) {
-          case 'monthly':
-            amount = portfolio.monthlyPrice;
-            break;
-          case 'quarterly':
-            amount = portfolio.quarterlyPrice;
-            break;
-          case 'yearly':
-            amount = portfolio.yearlyPrice;
-            break;
-          default:
-            return res.status(400).json({ error: "Invalid subscription type" });
-        }
+      switch (subscriptionType) {
+        case "monthly":
+          amount = bundle.monthlyPrice;
+          break;
+        case "quarterly":
+          amount = bundle.quarterlyPrice;
+          break;
+        case "yearly":
+          amount = bundle.yearlyPrice;
+          break;
+        default:
+          return res.status(400).json({ error: "Invalid subscription type" });
       }
+    } else if (productType === "Portfolio") {
+      const portfolio = await Portfolio.findById(productId);
+      if (!portfolio) return res.status(404).json({ error: "Portfolio not found" });
+
+      product = portfolio;
+      portfolios = [portfolio];
+
+      const plan = portfolio.subscriptionFee.find(f => f.type === subscriptionType);
+      if (!plan) return res.status(400).json({ error: "Invalid plan type" });
+      amount = plan.price;
+    } else {
+      return res.status(400).json({ error: "Invalid product type" });
     }
 
-    // If neither bundle nor portfolio found
-    if (!product) {
-      return res.status(404).json({ error: "Product not found" });
+    if (!amount || amount <= 0) {
+      return res.status(400).json({ error: `Invalid price for ${subscriptionType} subscription` });
     }
 
-    // Check if product has valid pricing
-    if (!amount) {
-      return res.status(400).json({ 
-        error: `${subscriptionType} pricing not available for this ${productType.toLowerCase()}` 
-      });
-    }
-
-    // For bundles, check if it has portfolios
-    if (productType === 'Bundle' && portfolios.length === 0) {
-      return res.status(400).json({ 
-        error: "Bundle has no portfolios available. Cannot activate subscription." 
-      });
-    }
-
-    // Get user from token
     const userId = req.user.id;
 
-    // Create payment history record
     const paymentHistory = new PaymentHistory({
       user: userId,
-      subscription: productType === 'Bundle' ? bundleId : portfolioId,
-      portfolio: portfolios[0]._id, // Use first portfolio as primary reference
-      amount: amount,
+      subscription: productId,
+      portfolio: portfolios[0]._id,
+      amount,
       razorpayPaymentId: paymentId,
       razorpayOrderId: orderId,
       razorpaySignature: signature,
-      subscriptionType: subscriptionType,
-      status: 'completed',
-      paymentMethod: 'razorpay'
+      subscriptionType,
+      status: "completed",
+      paymentMethod: "razorpay"
     });
 
     await paymentHistory.save();
 
-    // Create subscription record
     const subscription = new Subscription({
       user: userId,
-      productType: productType,
-      productId: productType === 'Bundle' ? bundleId : portfolioId,
-      portfolio: portfolios[0]._id, // Primary portfolio reference
+      productType,
+      productId,
+      portfolio: portfolios[0]._id,
       isActive: true,
-      subscriptionType: subscriptionType === 'yearly' ? 'yearlyEmandate' : 'regular',
-      monthlyAmount: subscriptionType === 'yearly' ? amount / 12 : amount,
-      commitmentEndDate: subscriptionType === 'yearly' ? calculateEndDate('yearly') : null
+      subscriptionType: subscriptionType === "yearly" ? "yearlyEmandate" : "regular",
+      monthlyAmount: subscriptionType === "yearly" ? amount / 12 : amount,
+      commitmentEndDate: subscriptionType === "yearly" ? calculateEndDate("yearly") : null,
     });
 
-    // Record the payment
     await subscription.recordPayment(new Date());
 
-    res.json({ 
-      success: true, 
+    return res.json({
+      success: true,
       message: "Payment verified and subscription activated successfully",
       subscription: {
         id: subscription._id,
-        productType: productType,
-        productId: productType === 'Bundle' ? bundleId : portfolioId,
+        productType,
+        productId,
         portfolioCount: portfolios.length,
-        subscriptionType: subscriptionType,
-        amount: amount,
+        subscriptionType,
+        amount,
         isActive: true
       }
     });
-
   } catch (error) {
-    console.error('Verify payment error:', error);
-    res.status(500).json({ error: "Payment verification failed" });
+    console.error("Verify payment error:", error);
+    return res.status(500).json({ error: "Payment verification failed" });
   }
 };
+
 
 function calculateEndDate(subscriptionType) {
   const now = new Date();
@@ -367,23 +343,22 @@ function calculateEndDate(subscriptionType) {
 
 exports.verifyEmandate = async (req, res) => {
   try {
-    const { subscription_id, signature } = req.body; // Add signature verification
-    const razorpay = await getRazorpayInstance();
+    const { subscription_id, signature } = req.body;
 
-    // Verify signature for eMandate
-    const generatedSignature = crypto.createHmac("sha256", (await getPaymentConfig()).key_secret)
-      .update(`${subscription_id}|${Date.now()}`)
+    const { key_secret } = await getPaymentConfig();
+    const expectedSignature = crypto
+      .createHmac("sha256", key_secret)
+      .update(subscription_id)
       .digest("hex");
 
-    if (generatedSignature !== signature) {
+    if (expectedSignature !== signature) {
       return res.status(400).json({ error: "Invalid signature" });
     }
 
-    // Fetch subscription details
+    const razorpay = await getRazorpayInstance();
     const subscription = await razorpay.subscriptions.fetch(subscription_id);
-
-    // Verify user matches subscription owner
     const customer = await razorpay.customers.fetch(subscription.customer_id);
+
     if (customer.email !== req.user.email) {
       return res.status(403).json({ error: "Unauthorized eMandate verification" });
     }
@@ -403,15 +378,16 @@ exports.verifyEmandate = async (req, res) => {
       });
     }
 
-    res.json({
+    return res.json({
       success: false,
       message: "eMandate not authenticated yet",
     });
   } catch (error) {
     console.error("eMandate authentication error:", error);
-    res.status(500).json({ error: "eMandate authentication failed" });
+    return res.status(500).json({ error: "eMandate authentication failed" });
   }
 };
+
 
 exports.razorpayWebhook = async (req, res) => {
   try {
