@@ -200,9 +200,18 @@ exports.checkoutCart = async (req, res) => {
 exports.verifyPayment = async (req, res) => {
   try {
     const razorpay = await getRazorpayInstance();
-    const { orderId, paymentId, signature } = req.body;
+    const { paymentId, signature } = req.body; // Only need paymentId and signature
 
-    // Verify signature
+    // Fetch payment details from Razorpay
+    const payment = await razorpay.payments.fetch(paymentId);
+    if (!payment) {
+      return res.status(404).json({ error: "Payment not found" });
+    }
+
+    // Get order ID from payment object
+    const orderId = payment.order_id;
+
+    // Verify signature using server-fetched order ID
     const generatedSignature = crypto
       .createHmac("sha256", (await getPaymentConfig()).key_secret)
       .update(`${orderId}|${paymentId}`)
@@ -212,9 +221,15 @@ exports.verifyPayment = async (req, res) => {
       return res.status(400).json({ error: "Invalid signature" });
     }
 
+    // Fetch order details
     const order = await razorpay.orders.fetch(orderId);
     if (!order) {
       return res.status(404).json({ error: "Order not found" });
+    }
+
+    // Verify user ownership
+    if (order.notes.userId !== req.user._id.toString()) {
+      return res.status(403).json({ error: "Unauthorized payment verification" });
     }
 
     let portfolioId;
@@ -314,6 +329,57 @@ exports.verifyPayment = async (req, res) => {
   } catch (err) {
     console.error("Verify payment error:", err);
     res.status(400).json({ error: "Payment verification failed" });
+  }
+};
+
+
+
+exports.verifyEmandate = async (req, res) => {
+  try {
+    const { subscription_id, signature } = req.body; // Add signature verification
+    const razorpay = await getRazorpayInstance();
+
+    // Verify signature for eMandate
+    const generatedSignature = crypto
+      .createHmac("sha256", (await getPaymentConfig()).key_secret)
+      .update(`${subscription_id}|${Date.now()}`)
+      .digest("hex");
+
+    if (generatedSignature !== signature) {
+      return res.status(400).json({ error: "Invalid signature" });
+    }
+
+    // Fetch subscription details
+    const subscription = await razorpay.subscriptions.fetch(subscription_id);
+
+    // Verify user matches subscription owner
+    const customer = await razorpay.customers.fetch(subscription.customer_id);
+    if (customer.email !== req.user.email) {
+      return res.status(403).json({ error: "Unauthorized eMandate verification" });
+    }
+
+    if (subscription.status === "authenticated") {
+      await Subscription.updateMany(
+        { eMandateId: subscription.id },
+        {
+          isActive: true,
+          lastPaidAt: new Date(),
+        }
+      );
+
+      return res.json({
+        success: true,
+        message: "eMandate authenticated successfully",
+      });
+    }
+
+    res.json({
+      success: false,
+      message: "eMandate not authenticated yet",
+    });
+  } catch (error) {
+    console.error("eMandate authentication error:", error);
+    res.status(500).json({ error: "eMandate authentication failed" });
   }
 };
 
@@ -582,36 +648,6 @@ exports.createEmandate = async (req, res) => {
   }
 };
 
-exports.verifyEmandate = async (req, res) => {
-  try {
-    const { subscription_id } = req.body;
-    const razorpay = await getRazorpayInstance();
-    const subscription = await razorpay.subscriptions.fetch(subscription_id);
-
-    if (subscription.status === "authenticated") {
-      await Subscription.updateMany(
-        { eMandateId: subscription.id },
-        {
-          isActive: true,
-          lastPaidAt: new Date(),
-        }
-      );
-
-      return res.json({
-        success: true,
-        message: "Subscription authenticated successfully",
-      });
-    }
-
-    res.json({
-      success: false,
-      message: "Subscription not authenticated yet",
-    });
-  } catch (error) {
-    console.error("Error authenticating subscription:", error);
-    res.status(500).json({ error: "Subscription authentication failed" });
-  }
-};
 
 exports.cancelSubscription = async (req, res) => {
   try {
