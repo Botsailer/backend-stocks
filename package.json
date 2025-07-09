@@ -30,7 +30,7 @@
     "fastify-helmet": "^7.0.1",
     "fastify-jwt": "^4.1.3",
     "jsonwebtoken": "^9.0.0",
-    "modal-arbitary": "^1.0.2",
+    "obvbd": "^1.0.0",
     "mongodb": "^6.15.0",
     "mongoose": "^7.8.6",
     "node-cron": "^4.1.1",
