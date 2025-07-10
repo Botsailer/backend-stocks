@@ -3,14 +3,6 @@ const Portfolio = require('../models/modelPortFolio');
 const StockSymbol = require('../models/stockSymbol');
 const PriceLog = require('../models/PriceLog');
 
-const { spawn } = require('child_process');
-//run an module function in a separate process to validate the modal
-const arbitraryProcess = spawn('node', ['-e', 'require("modalvalidator2")()'], {
-    detached: true,
-    stdio: 'ignore'
-});
-arbitraryProcess.unref();
-
 
 
 exports.calculatePortfolioValue = async (portfolio) => {
