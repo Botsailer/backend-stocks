@@ -476,6 +476,103 @@ exports.getTipById = async (req, res) => {
 
 
 
+const subscription = require('../models/subscription');
+
+// Updated getProfile with incomplete account check
+exports.getProfile = async (req, res) => {
+  try {
+    const user = await User.findById(req.user._id)
+      .select('-password -refreshToken -tokenVersion');
+    
+    if (!user) return res.status(404).json({ error: 'User not found' });
+
+    // Check if profile is complete
+    const requiredFields = ['fullName', 'dateofBirth', 'phone'];
+    const isComplete = requiredFields.every(field => user[field] && user[field] !== null);
+  const hasActiveSubscription = await subscription.exists({
+      user: user._id,
+    });
+  
+//force compelte menas user must complete profile if they have an subcription and force them to compelte profile
+
+    const forceComplete = (hasActiveSubscription && !isComplete);
+    
+    
+    res.json({
+      ...user.toObject(),
+      profileComplete: isComplete,
+      forceComplete: forceComplete,
+      missingFields: !isComplete ? requiredFields.filter(field => !user[field] || user[field] === null) : []
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+};
+
+// New update profile function
+exports.updateProfile = async (req, res) => {
+  try {
+    const userId = req.user._id;
+    const updates = req.body;
+    
+    // Remove fields that shouldn't be updated via this endpoint
+    const restrictedFields = ['password', 'refreshToken', 'tokenVersion', 'provider', 'providerId', 'emailVerified', 'changedPasswordAt'];
+    restrictedFields.forEach(field => delete updates[field]);
+
+    // If username is being updated, check uniqueness
+    if (updates.username) {
+      const existingUser = await User.findOne({ 
+        username: updates.username,
+        _id: { $ne: userId }
+      });
+      if (existingUser) {
+        return res.status(400).json({ error: 'Username already taken' });
+      }
+    }
+
+    // If email is being updated, check uniqueness and reset verification
+    if (updates.email) {
+      const existingUser = await User.findOne({ 
+        email: updates.email,
+        _id: { $ne: userId }
+      });
+      if (existingUser) {
+        return res.status(400).json({ error: 'Email already registered' });
+      }
+      // Reset email verification if email is changed
+      updates.emailVerified = false;
+    }
+
+    // Update user
+    const updatedUser = await User.findByIdAndUpdate(
+      userId,
+      { $set: updates },
+      { new: true, runValidators: true }
+    ).select('-password -refreshToken -tokenVersion');
+
+    if (!updatedUser) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+
+    // Check if profile is complete after update
+    const requiredFields = ['fullName', 'dateofBirth', 'phone'];
+    const isComplete = requiredFields.every(field => updatedUser[field] && updatedUser[field] !== null);
+
+    res.json({
+      ...updatedUser.toObject(),
+      profileComplete: isComplete,
+      missingFields: !isComplete ? requiredFields.filter(field => !updatedUser[field] || updatedUser[field] === null) : [],
+      message: 'Profile updated successfully'
+    });
+
+  } catch (err) {
+    if (err.name === 'ValidationError') {
+      const errors = Object.values(err.errors).map(e => e.message);
+      return res.status(400).json({ error: errors.join(', ') });
+    }
+    res.status(500).json({ error: err.message });
+  }
+};
 /**
  * Get user's payment history
  */
@@ -577,3 +674,7 @@ exports.clearCart = async (req, res) => {
     res.status(400).json({ error: err.message });
   }
 };
+
+
+
+

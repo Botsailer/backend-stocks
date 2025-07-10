@@ -8,7 +8,10 @@ const userSchema = new mongoose.Schema({
   provider: { type: String, enum: ['local','google'], default: 'local' },
   providerId: String,
   mainUserId: { type: String, default: null },
-
+  fullName: { type: String, default: null },
+  dateofBirth: { type: Date, default: null },
+  phone: { type: String, default: null },
+  pnadetails: { type: String, default: null },
   // NEW for token invalidation
   changedPasswordAt: { type: Date, default: Date.now },
   tokenVersion:      { type: Number, default: 0 },

