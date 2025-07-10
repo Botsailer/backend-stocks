@@ -543,6 +543,19 @@ exports.updateProfile = async (req, res) => {
       updates.emailVerified = false;
     }
 
+
+      if (updates.pandetails && updates.pandetails.trim() !== '') {
+      const panCardRegex = /^[A-Z]{5}[0-9]{4}[A-Z]{1}$/;
+      if (!panCardRegex.test(updates.pandetails.trim())) {
+        return res.status(400).json({ 
+          error: 'Invalid PAN card format. Must be AAAAA9999A (5 letters, 4 digits, 1 letter)' 
+        });
+      }
+      // Convert to uppercase
+      updates.pandetails = updates.pandetails.trim().toUpperCase();
+    }
+
+
     // Update user
     const updatedUser = await User.findByIdAndUpdate(
       userId,

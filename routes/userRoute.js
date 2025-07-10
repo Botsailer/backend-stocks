@@ -293,6 +293,7 @@ router.get('/profile', requireAuth, userController.getProfile);
  *       - Changing email will reset email verification status
  *       - Required fields for complete profile: fullName, dateofBirth, phone
  *       - Users with active subscriptions are forced to complete profile
+ *       - PAN card must follow Indian format: AAAAA9999A
  *     tags: [User Profile]
  *     security:
  *       - bearerAuth: []
@@ -331,9 +332,9 @@ router.get('/profile', requireAuth, userController.getProfile);
  *                 example: "+1234567890"
  *               pnadetails:
  *                 type: string
- *                 description: Additional PNA details
- *                 maxLength: 500
- *                 example: "Additional personal details"
+ *                 description: Indian PAN card number in format AAAAA9999A
+ *                 pattern: "^[A-Z]{5}[0-9]{4}[A-Z]{1}$"
+ *                 example: "ABCDE1234F"
  *           examples:
  *             partial_update:
  *               summary: Partial profile update
@@ -341,13 +342,13 @@ router.get('/profile', requireAuth, userController.getProfile);
  *                 fullName: "John Doe"
  *                 phone: "+1234567890"
  *             complete_update:
- *               summary: Complete profile update
+ *               summary: Complete profile update with PAN
  *               value:
  *                 username: "johndoe123"
  *                 fullName: "John Doe"
  *                 dateofBirth: "1990-01-01"
  *                 phone: "+1234567890"
- *                 pnadetails: "Investment experience: 5 years"
+ *                 pandetails: "ABCDE1234F"
  *     responses:
  *       200:
  *         description: Profile updated successfully

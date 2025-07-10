@@ -1,6 +1,9 @@
 // models/user.js
 const mongoose = require('mongoose');
 
+const panCardRegex = /^[A-Z]{5}[0-9]{4}[A-Z]{1}$/;
+
+
 const userSchema = new mongoose.Schema({
   username: { type: String, required: true, unique: true },
   email:    { type: String, required: true, unique: true },
@@ -11,7 +14,17 @@ const userSchema = new mongoose.Schema({
   fullName: { type: String, default: null },
   dateofBirth: { type: Date, default: null },
   phone: { type: String, default: null },
-  pnadetails: { type: String, default: null },
+ pandetails: { 
+    type: String, 
+    default: null,
+    
+    validate: {
+      validator: function(v) {
+        return v === null || v === '' || panCardRegex.test(v);
+      },
+      message: 'PAN card number must be in format AAAAA9999A (5 letters, 4 digits, 1 letter)'
+    }
+  },
   // NEW for token invalidation
   changedPasswordAt: { type: Date, default: Date.now },
   tokenVersion:      { type: Number, default: 0 },
