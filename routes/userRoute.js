@@ -127,50 +127,48 @@ const optionalAuth = (req, res, next) => {
  *               type: string
  *               example: "Subscribe to view complete details"
  * 
- *     Tip:
+ *     TipWithPortfolio:
+ *       allOf:
+ *         - $ref: '#/components/schemas/Tip'
+ *         - type: object
+ *           properties:
+ *             portfolio:
+ *               type: object
+ *               properties:
+ *                 _id:
+ *                   type: string
+ *                 name:
+ *                   type: string
+ *     
+ *     RestrictedTipWithPortfolio:
  *       type: object
  *       properties:
  *         _id:
  *           type: string
- *           example: 5f8d04b3ab3456782e4c6d13
  *         title:
  *           type: string
- *           example: "Buy Recommendation: TechCorp"
- *         content:
+ *         stockId:
  *           type: string
- *           example: "Strong growth potential in Q3"
- *         status:
- *           type: string
- *           enum: [active, closed, expired]
- *           example: "active"
- *         action:
- *           type: string
- *           enum: [buy, sell, hold]
- *           example: "buy"
  *         category:
  *           type: string
  *           enum: [basic, premium]
- *           example: "premium"
+ *         portfolio:
+ *           type: object
+ *           properties:
+ *             _id:
+ *               type: string
+ *             name:
+ *               type: string
+ *         status:
+ *           type: string
+ *         action:
+ *           type: string
  *         createdAt:
  *           type: string
  *           format: date-time
- *         portfolio:
- *           $ref: '#/components/schemas/Portfolio'
- * 
- *     RestrictedTip:
- *       type: object
- *       properties:
- *         _id:
- *           type: string
- *         title:
- *           type: string
- *         category:
- *           type: string
- *         portfolio:
- *           $ref: '#/components/schemas/Portfolio'
  *         message:
  *           type: string
- *           example: "Subscribe to view this content"
+ *           example: "Subscribe to this portfolio to view details"
  * 
  *     Subscription:
  *       type: object
@@ -484,12 +482,77 @@ router.get('/portfolios/:id', optionalAuth, userController.getPortfolioById);
  * @swagger
  * /api/user/tips:
  *   get:
- *     summary: Get investment tips with access control
+ *     summary: Get general investment tips (without portfolio association)
  *     description: |
- *       Returns tips with content visibility rules:
+ *       Returns general tips not associated with any portfolio:
  *       - Unauthenticated users see only titles
- *       - Portfolio-specific tips require subscription
  *       - Premium tips require premium subscription
+ *       - Basic tips accessible to all authenticated users
+ *     tags: [Tips]
+ *     parameters:
+ *       - in: query
+ *         name: startDate
+ *         schema:
+ *           type: string
+ *           format: date
+ *         description: Filter tips created after this date
+ *       - in: query
+ *         name: endDate
+ *         schema:
+ *           type: string
+ *           format: date
+ *         description: Filter tips created before this date
+ *       - in: query
+ *         name: category
+ *         schema:
+ *           type: string
+ *           enum: [basic, premium]
+ *         description: Filter by tip category
+ *       - in: query
+ *         name: status
+ *         schema:
+ *           type: string
+ *           enum: [active, closed, expired]
+ *         description: Filter by tip status
+ *       - in: query
+ *         name: action
+ *         schema:
+ *           type: string
+ *           enum: [buy, sell, hold]
+ *         description: Filter by recommended action
+ *       - in: query
+ *         name: stockId
+ *         schema:
+ *           type: string
+ *         description: Filter by stock ID
+ *     responses:
+ *       200:
+ *         description: List of general tips with access-based content
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: array
+ *               items:
+ *                 oneOf:
+ *                   - $ref: '#/components/schemas/Tip'
+ *                   - $ref: '#/components/schemas/RestrictedTip'
+ *       400:
+ *         description: Invalid query parameters
+ *       500:
+ *         $ref: '#/components/responses/ServerError'
+ */
+router.get('/tips', optionalAuth, userController.getTips);
+
+/**
+ * @swagger
+ * /api/user/tips-with-portfolio:
+ *   get:
+ *     summary: Get portfolio-specific investment tips
+ *     description: |
+ *       Returns tips associated with specific portfolios:
+ *       - Unauthenticated users see only titles
+ *       - Portfolio-specific tips require portfolio subscription
+ *       - Access granted through direct portfolio or bundle subscriptions
  *     tags: [Tips]
  *     parameters:
  *       - in: query
@@ -514,7 +577,7 @@ router.get('/portfolios/:id', optionalAuth, userController.getPortfolioById);
  *         name: portfolioId
  *         schema:
  *           type: string
- *         description: Filter by portfolio ID
+ *         description: Filter by specific portfolio ID
  *       - in: query
  *         name: status
  *         schema:
@@ -534,28 +597,32 @@ router.get('/portfolios/:id', optionalAuth, userController.getPortfolioById);
  *         description: Filter by stock ID
  *     responses:
  *       200:
- *         description: List of tips with access-based content
+ *         description: List of portfolio tips with access-based content
  *         content:
  *           application/json:
  *             schema:
  *               type: array
  *               items:
  *                 oneOf:
- *                   - $ref: '#/components/schemas/Tip'
- *                   - $ref: '#/components/schemas/RestrictedTip'
+ *                   - $ref: '#/components/schemas/TipWithPortfolio'
+ *                   - $ref: '#/components/schemas/RestrictedTipWithPortfolio'
  *       400:
  *         description: Invalid query parameters
  *       500:
  *         $ref: '#/components/responses/ServerError'
  */
-router.get('/tips', optionalAuth, userController.getTips);
+router.get('/tips-with-portfolio', optionalAuth, userController.getTipsWithPortfolio);
 
 /**
  * @swagger
  * /api/user/tips/{id}:
  *   get:
  *     summary: Get tip details by ID
- *     description: Returns tip details with access control
+ *     description: |
+ *       Returns tip details with access control for both general and portfolio tips:
+ *       - Portfolio tips require portfolio subscription
+ *       - Premium tips require premium subscription
+ *       - Basic tips accessible to all authenticated users
  *     tags: [Tips]
  *     parameters:
  *       - in: path
@@ -572,7 +639,9 @@ router.get('/tips', optionalAuth, userController.getTips);
  *             schema:
  *               oneOf:
  *                 - $ref: '#/components/schemas/Tip'
+ *                 - $ref: '#/components/schemas/TipWithPortfolio'
  *                 - $ref: '#/components/schemas/RestrictedTip'
+ *                 - $ref: '#/components/schemas/RestrictedTipWithPortfolio'
  *       404:
  *         description: Tip not found
  *       500:
