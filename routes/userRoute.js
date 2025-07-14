@@ -279,7 +279,6 @@ const optionalAuth = (req, res, next) => {
  *         $ref: '#/components/responses/ServerError'
  */
 router.get('/profile', requireAuth, userController.getProfile);
-
 /**
  * @swagger
  * /api/user/profile:
@@ -405,6 +404,8 @@ router.put('/profile', requireAuth, userController.updateProfile);
  *       - Unauthenticated users see basic portfolio details
  *       - Authenticated users see full details for subscribed portfolios
  *     tags: [Portfolios]
+ *     security:
+ *       - bearerAuth: []
  *     parameters:
  *       - in: query
  *         name: startDate
@@ -452,6 +453,8 @@ router.get('/portfolios', optionalAuth, userController.getAllPortfolios);
  *       - Public access shows basic information
  *       - Full details require subscription
  *     tags: [Portfolios]
+ *     security:
+ *       - bearerAuth: []
  *     parameters:
  *       - in: path
  *         name: id
@@ -489,6 +492,8 @@ router.get('/portfolios/:id', optionalAuth, userController.getPortfolioById);
  *       - Premium tips require premium subscription
  *       - Basic tips accessible to all authenticated users
  *     tags: [Tips]
+ *     security:
+ *       - bearerAuth: []
  *     parameters:
  *       - in: query
  *         name: startDate
@@ -554,6 +559,8 @@ router.get('/tips', optionalAuth, userController.getTips);
  *       - Portfolio-specific tips require portfolio subscription
  *       - Access granted through direct portfolio or bundle subscriptions
  *     tags: [Tips]
+ *     security:
+ *       - bearerAuth: []
  *     parameters:
  *       - in: query
  *         name: startDate
@@ -624,6 +631,8 @@ router.get('/tips-with-portfolio', optionalAuth, userController.getTipsWithPortf
  *       - Premium tips require premium subscription
  *       - Basic tips accessible to all authenticated users
  *     tags: [Tips]
+ *     security:
+ *       - bearerAuth: []
  *     parameters:
  *       - in: path
  *         name: id

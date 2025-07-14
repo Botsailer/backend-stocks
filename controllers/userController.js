@@ -372,7 +372,9 @@ exports.getTipsWithPortfolio = async (req, res) => {
   try {
     const { startDate, endDate, category, portfolioId, status, action, stockId } = req.query;
     const user = req.user;
-    const query = { portfolio: { $exists: true } };
+    
+    // Fix: Only get tips that have a portfolio (not null)
+    const query = { portfolio: { $ne: null } };
     
     if (startDate || endDate) {
       query.createdAt = {};
@@ -425,11 +427,19 @@ exports.getTipsWithPortfolio = async (req, res) => {
     });
     
     let bundlePortfolioIds = [];
+    let hasBasicAccess = false;
+    let hasPremiumAccess = false;
+    
     if (bundleSubscriptions.length > 0) {
       const bundleIds = bundleSubscriptions.map(sub => sub.productId);
       const bundles = await Bundle.find({ _id: { $in: bundleIds } });
       
       bundles.forEach(bundle => {
+        // Check subscription types
+        if (bundle.category === 'basic') hasBasicAccess = true;
+        if (bundle.category === 'premium') hasPremiumAccess = true;
+        
+        // Get portfolio IDs
         bundle.portfolios.forEach(pId => {
           bundlePortfolioIds.push(pId.toString());
         });
@@ -437,12 +447,28 @@ exports.getTipsWithPortfolio = async (req, res) => {
     }
     
     const accessiblePortfolioIds = [...new Set([...subscribedPortfolioIds, ...bundlePortfolioIds])];
-    
+
     const processedTips = tips.map(tip => {
       const tipObj = tip.toObject();
       
       if (user.isAdmin) return tipObj;
       
+      // Handle case where portfolio is null (shouldn't happen with current query, but safety check)
+      if (!tip.portfolio) {
+        return {
+          _id: tip._id,
+          title: tip.title,
+          stockId: tip.stockId,
+          category: tip.category,
+          portfolio: null,
+          status: tip.status,
+          action: tip.action,
+          createdAt: tip.createdAt,
+          message: "Subscribe to basic or premium to view this content"
+        };
+      }
+      
+      // For portfolio tips, access is based on portfolio subscription
       const hasPortfolioAccess = accessiblePortfolioIds.includes(tip.portfolio._id.toString());
       
       if (hasPortfolioAccess) {
@@ -464,6 +490,7 @@ exports.getTipsWithPortfolio = async (req, res) => {
 
     res.json(processedTips);
   } catch (err) {
+    console.log(err);
     res.status(500).json({ error: err.message });
   }
 };
@@ -496,58 +523,78 @@ exports.getTipById = async (req, res) => {
       return res.json(tip);
     }
     
-    if (tip.portfolio) {
-      const portfolioSub = await Subscription.exists({
-        user: user._id,
-        productType: 'Portfolio',
-        productId: tip.portfolio._id,
-        isActive: true
-      });
-      
-      const bundleSub = await Subscription.exists({
+    // Handle tips without portfolio (general tips)
+    if (!tip.portfolio) {
+      // Check subscription access for general tips
+      const hasBasicAccess = await Subscription.exists({
         user: user._id,
         productType: 'Bundle',
         isActive: true,
-        'bundle.portfolios': tip.portfolio._id
+        'bundle.category': 'basic'
       });
       
-      if (!portfolioSub && !bundleSub) {
-        return res.json({
-          _id: tip._id,
-          title: tip.title,
-          stockId: tip.stockId,
-          category: tip.category,
-          portfolio: { _id: tip.portfolio._id, name: tip.portfolio.name },
-          status: tip.status,
-          action: tip.action,
-          createdAt: tip.createdAt,
-          message: "Subscribe to this portfolio to view details"
-        });
+      const hasPremiumAccess = await Subscription.exists({
+        user: user._id,
+        productType: 'Bundle',
+        isActive: true,
+        'bundle.category': 'premium'
+      });
+      
+      // Premium users can see all tips
+      if (hasPremiumAccess) {
+        return res.json(tip);
       }
-    } else {
-      if (tip.category === 'premium') {
-        const hasPremiumAccess = await Subscription.exists({
-          user: user._id,
-          productType: 'Bundle',
-          isActive: true,
-          'bundle.category': 'premium'
-        });
-        
-        if (!hasPremiumAccess) {
-          return res.json({
-            _id: tip._id,
-            title: tip.title,
-            stockId: tip.stockId,
-            category: 'premium',
-            createdAt: tip.createdAt,
-            status: tip.status,
-            action: tip.action,
-            message: "Upgrade to premium to view this content"
-          });
-        }
+      
+      // Basic users can only see basic tips
+      if (hasBasicAccess && tip.category === 'basic') {
+        return res.json(tip);
       }
+      
+      // No access
+      return res.json({
+        _id: tip._id,
+        title: tip.title,
+        stockId: tip.stockId,
+        category: tip.category,
+        portfolio: null,
+        createdAt: tip.createdAt,
+        status: tip.status,
+        action: tip.action,
+        message: tip.category === 'premium' ? 
+          "Upgrade to premium to view this content" : 
+          "Subscribe to basic or premium to view this content"
+      });
     }
-    
+
+    // Handle portfolio tips - access based on portfolio subscription
+    const portfolioSub = await Subscription.exists({
+      user: user._id,
+      productType: 'Portfolio',
+      productId: tip.portfolio._id,
+      isActive: true
+    });
+
+    const bundleSub = await Subscription.exists({
+      user: user._id,
+      productType: 'Bundle',
+      isActive: true,
+      'bundle.portfolios': tip.portfolio._id
+    });
+
+    if (!portfolioSub && !bundleSub) {
+      return res.json({
+        _id: tip._id,
+        title: tip.title,
+        stockId: tip.stockId,
+        category: tip.category,
+        portfolio: { _id: tip.portfolio._id, name: tip.portfolio.name },
+        status: tip.status,
+        action: tip.action,
+        createdAt: tip.createdAt,
+        message: "Subscribe to this portfolio to view details"
+      });
+    }
+
     res.json(tip);
   } catch (err) {
     res.status(500).json({ error: err.message });
