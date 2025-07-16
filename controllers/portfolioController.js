@@ -77,7 +77,8 @@ exports.createPortfolio = asyncHandler(async (req, res) => {
     });
   }
 
-  const cashBalance = minInvestment - totalCost;
+const cashBalance = parseFloat((minInvestment - totalCost).toFixed(2));
+  
   
   const portfolio = new Portfolio({
     name,
@@ -99,7 +100,7 @@ exports.createPortfolio = asyncHandler(async (req, res) => {
     oneYearGains,
     compareWith,
     cashBalance,
-    currentValue: minInvestment
+ currentValue: parseFloat(minInvestment.toFixed(2))
   });
 
 const savedPortfolio = await portfolio.save(); 
@@ -148,25 +149,24 @@ exports.getPortfolioPriceHistory = asyncHandler(async (req, res) => {
     }
 
     // Calculate daily returns percentage
-    const chartData = priceHistory.map((log, index) => {
-      const entry = {
-        date: log.date,
-        value: log.portfolioValue,
-        cash: log.cashRemaining
-      };
-
+  const chartData = priceHistory.map((log, index) => {
+    const entry = {
+      date: log.date,
+      value: parseFloat(log.portfolioValue.toFixed(2)),
+      cash: parseFloat(log.cashRemaining.toFixed(2))
+    };
       // Calculate daily change percentage
-      if (index > 0) {
-        const prevValue = priceHistory[index - 1].portfolioValue;
-        const change = log.portfolioValue - prevValue;
-        entry.change = change;
-        entry.changePercent = prevValue > 0 
-          ? (change / prevValue) * 100 
-          : 0;
-      }
+     if (index > 0) {
+      const prevValue = priceHistory[index - 1].portfolioValue;
+      const change = log.portfolioValue - prevValue;
+      entry.change = parseFloat(change.toFixed(2));
+      entry.changePercent = prevValue > 0 
+        ? parseFloat(((change / prevValue) * 100).toFixed(2))
+        : 0;
+    }
 
-      return entry;
-    });
+    return entry;
+  });
 
     res.status(200).json({
       portfolioId: id,

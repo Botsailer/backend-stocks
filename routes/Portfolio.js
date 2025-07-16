@@ -685,7 +685,7 @@ router.delete('/portfolios/:id/downloads/:linkId', requireAdmin, portfolioContro
  *       500:
  *         description: Server error
  */
-router.post('/trigger-daily-valuation', requireAdmin, async (req, res) => {
+router.post('/portfolios/trigger-daily-valuation', requireAdmin, async (req, res) => {
   try {
     const results = await cronController.triggerDailyValuation();
     res.json(results);

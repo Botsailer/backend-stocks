@@ -106,13 +106,12 @@ exports.triggerDailyValuation = async () => {
     logger.info('📝 Logging portfolio values (manual)...');
     const portfolioResults = await portfolioService.logAllPortfoliosDaily();
     
-    // Analyze results
-    const successCount = portfolioResults.filter(r => r.status === 'success').length;
-    const failedCount = portfolioResults.filter(r => r.status === 'failed').length;
-    
-    const jobDuration = (new Date() - jobStart) / 1000;
-    logger.info(`🏁 Manual valuation completed in ${jobDuration.toFixed(2)} seconds: ${successCount} success, ${failedCount} failed`);
-    
+
+portfolioResults
+  .filter(r => r.status === 'success')
+  .forEach(success => {
+    logger.info(`✅ Portfolio "${success.portfolio}" valued at ${success.value}`);
+  });
     return portfolioResults;
   } catch (error) {
     logger.error(`🔥 MANUAL TRIGGER FAILED: ${error.message}\n${error.stack}`);
