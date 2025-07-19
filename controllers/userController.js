@@ -494,6 +494,9 @@ exports.getTipsWithPortfolio = async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 };
+
+
+
 exports.getTipById = async (req, res) => {
   try {
     const tip = await Tip.findById(req.params.id).populate('portfolio', 'name');
@@ -571,53 +574,41 @@ exports.getTipById = async (req, res) => {
         message: "Subscribe to this portfolio to view details"
       });
     } else {
-      // General tip (not portfolio-specific)
-      // Check bundle subscriptions for access to basic/premium content
+      // General tip (not portfolio-specific) - USE SAME LOGIC AS getTips
+      
+      // Get bundle subscriptions and check for premium access
       const bundleSubscriptions = await Subscription.find({
         user: user._id,
         productType: 'Bundle',
         isActive: true
       });
       
-      // Check if user has access to the tip category
-      let hasAccess = false;
+      // Check for premium access (same as getTips function)
+      let hasPremiumAccess = bundleSubscriptions.some(sub => 
+        sub.bundle && sub.bundle.category === 'premium'
+      );
       
-      if (tip.category === 'basic') {
-        // User needs basic or premium bundle access for basic tips
-        hasAccess = bundleSubscriptions.some(sub => 
-          sub.bundle && (sub.bundle.category === 'basic' || sub.bundle.category === 'premium')
-        );
-      } else if (tip.category === 'premium') {
-        // User needs premium bundle access for premium tips
-        hasAccess = bundleSubscriptions.some(sub => 
-          sub.bundle && sub.bundle.category === 'premium'
-        );
-      }
-      
-      if (!hasAccess) {
-        const message = tip.category === 'premium' 
-          ? "Upgrade to premium to view this content"
-          : "Subscribe to basic or premium to view this content";
-          
+      if (tip.category === 'premium' && !hasPremiumAccess) {
         return res.json({
           _id: tip._id,
           title: tip.title,
           stockId: tip.stockId,
-          category: tip.category,
+          category: 'premium',
           createdAt: tip.createdAt,
           status: tip.status,
           action: tip.action,
-          message: message
+          message: "Upgrade to premium to view this content"
         });
       }
-      
-      // User has required access - return full tip
-      return res.json(tip);
+          return res.json(tip);
     }
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
 };
+
+
+
 exports.getUserPaymentHistory = async (req, res) => {
   try {
     const payments = await PaymentHistory.find({ user: req.user._id })
