@@ -525,41 +525,94 @@ exports.getTipById = async (req, res) => {
     
     // Check access based on whether it's a portfolio tip or regular tip
     if (tip.portfolio) {
-      // Portfolio-specific tip logic...
-      // (existing portfolio logic here)
-    } else {
-      // General tip (not portfolio-specific)
-      if (tip.category === 'basic') {
-        // Basic tips are accessible to all authenticated users
-        return res.json(tip);
-      } else if (tip.category === 'premium') {
-        // Check premium access
-        const bundleSubscriptions = await Subscription.find({
-          user: user._id,
-          productType: 'Bundle',
-          isActive: true
-        });
-        
-        const hasPremiumAccess = bundleSubscriptions.some(sub => 
-          sub.bundle && sub.bundle.category === 'premium'
-        );
-        
-        if (!hasPremiumAccess) {
-          return res.json({
-            _id: tip._id,
-            title: tip.title,
-            stockId: tip.stockId,
-            category: 'premium',
-            createdAt: tip.createdAt,
-            status: tip.status,
-            action: tip.action,
-            message: "Upgrade to premium to view this content"
-          });
-        }
-        
-        // User has premium access
+      // Portfolio-specific tip - check subscription to that portfolio
+      
+      // 1. Direct portfolio subscription
+      const directSubscription = await Subscription.findOne({
+        user: user._id,
+        productType: 'Portfolio',
+        productId: tip.portfolio._id,
+        isActive: true
+      });
+      
+      if (directSubscription) {
         return res.json(tip);
       }
+      
+      // 2. Bundle subscription that includes this portfolio
+      const bundleSubscriptions = await Subscription.find({
+        user: user._id,
+        productType: 'Bundle',
+        isActive: true
+      });
+      
+      if (bundleSubscriptions.length > 0) {
+        const bundleIds = bundleSubscriptions.map(sub => sub.productId);
+        const hasAccessThroughBundle = await Bundle.countDocuments({
+          _id: { $in: bundleIds },
+          portfolios: tip.portfolio._id
+        });
+        
+        if (hasAccessThroughBundle > 0) {
+          return res.json(tip);
+        }
+      }
+      
+      // No access to this portfolio tip
+      return res.json({
+        _id: tip._id,
+        title: tip.title,
+        stockId: tip.stockId,
+        category: tip.category,
+        portfolio: { _id: tip.portfolio._id, name: tip.portfolio.name },
+        status: tip.status,
+        action: tip.action,
+        createdAt: tip.createdAt,
+        message: "Subscribe to this portfolio to view details"
+      });
+    } else {
+      // General tip (not portfolio-specific)
+      // Check bundle subscriptions for access to basic/premium content
+      const bundleSubscriptions = await Subscription.find({
+        user: user._id,
+        productType: 'Bundle',
+        isActive: true
+      });
+      
+      // Check if user has access to the tip category
+      let hasAccess = false;
+      
+      if (tip.category === 'basic') {
+        // User needs basic or premium bundle access for basic tips
+        hasAccess = bundleSubscriptions.some(sub => 
+          sub.bundle && (sub.bundle.category === 'basic' || sub.bundle.category === 'premium')
+        );
+      } else if (tip.category === 'premium') {
+        // User needs premium bundle access for premium tips
+        hasAccess = bundleSubscriptions.some(sub => 
+          sub.bundle && sub.bundle.category === 'premium'
+        );
+      }
+      
+      if (!hasAccess) {
+        const message = tip.category === 'premium' 
+          ? "Upgrade to premium to view this content"
+          : "Subscribe to basic or premium to view this content";
+          
+        return res.json({
+          _id: tip._id,
+          title: tip.title,
+          stockId: tip.stockId,
+          category: tip.category,
+          createdAt: tip.createdAt,
+          status: tip.status,
+          action: tip.action,
+          message: message
+        });
+      }
+      
+      // User has required access - return full tip
+      return res.json(tip);
     }
   } catch (err) {
     res.status(500).json({ error: err.message });
