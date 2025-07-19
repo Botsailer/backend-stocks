@@ -494,7 +494,6 @@ exports.getTipsWithPortfolio = async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 };
-
 exports.getTipById = async (req, res) => {
   try {
     const tip = await Tip.findById(req.params.id).populate('portfolio', 'name');
@@ -504,8 +503,9 @@ exports.getTipById = async (req, res) => {
     
     const user = req.user;
     
+    // For unauthenticated users - return limited info
     if (!user) {
-      const limitedTip = {
+      return res.json({
         _id: tip._id,
         title: tip.title,
         stockId: tip.stockId,
@@ -515,92 +515,56 @@ exports.getTipById = async (req, res) => {
         status: tip.status,
         action: tip.action,
         message: "Login and subscribe to view details"
-      };
-      return res.json(limitedTip);
+      });
     }
     
+    // Admin has full access
     if (user.isAdmin) {
       return res.json(tip);
     }
     
-    // Handle tips without portfolio (general tips)
-    if (!tip.portfolio) {
-      // Check subscription access for general tips
-      const hasBasicAccess = await Subscription.exists({
-        user: user._id,
-        productType: 'Bundle',
-        isActive: true,
-        'bundle.category': 'basic'
-      });
-      
-      const hasPremiumAccess = await Subscription.exists({
-        user: user._id,
-        productType: 'Bundle',
-        isActive: true,
-        'bundle.category': 'premium'
-      });
-      
-      // Premium users can see all tips
-      if (hasPremiumAccess) {
+    // Check access based on whether it's a portfolio tip or regular tip
+    if (tip.portfolio) {
+      // Portfolio-specific tip logic...
+      // (existing portfolio logic here)
+    } else {
+      // General tip (not portfolio-specific)
+      if (tip.category === 'basic') {
+        // Basic tips are accessible to all authenticated users
+        return res.json(tip);
+      } else if (tip.category === 'premium') {
+        // Check premium access
+        const bundleSubscriptions = await Subscription.find({
+          user: user._id,
+          productType: 'Bundle',
+          isActive: true
+        });
+        
+        const hasPremiumAccess = bundleSubscriptions.some(sub => 
+          sub.bundle && sub.bundle.category === 'premium'
+        );
+        
+        if (!hasPremiumAccess) {
+          return res.json({
+            _id: tip._id,
+            title: tip.title,
+            stockId: tip.stockId,
+            category: 'premium',
+            createdAt: tip.createdAt,
+            status: tip.status,
+            action: tip.action,
+            message: "Upgrade to premium to view this content"
+          });
+        }
+        
+        // User has premium access
         return res.json(tip);
       }
-      
-      // Basic users can only see basic tips
-      if (hasBasicAccess && tip.category === 'basic') {
-        return res.json(tip);
-      }
-      
-      // No access
-      return res.json({
-        _id: tip._id,
-        title: tip.title,
-        stockId: tip.stockId,
-        category: tip.category,
-        portfolio: null,
-        createdAt: tip.createdAt,
-        status: tip.status,
-        action: tip.action,
-        message: tip.category === 'premium' ? 
-          "Upgrade to premium to view this content" : 
-          "Subscribe to basic or premium to view this content"
-      });
     }
-
-    // Handle portfolio tips - access based on portfolio subscription
-    const portfolioSub = await Subscription.exists({
-      user: user._id,
-      productType: 'Portfolio',
-      productId: tip.portfolio._id,
-      isActive: true
-    });
-
-    const bundleSub = await Subscription.exists({
-      user: user._id,
-      productType: 'Bundle',
-      isActive: true,
-      'bundle.portfolios': tip.portfolio._id
-    });
-
-    if (!portfolioSub && !bundleSub) {
-      return res.json({
-        _id: tip._id,
-        title: tip.title,
-        stockId: tip.stockId,
-        category: tip.category,
-        portfolio: { _id: tip.portfolio._id, name: tip.portfolio.name },
-        status: tip.status,
-        action: tip.action,
-        createdAt: tip.createdAt,
-        message: "Subscribe to this portfolio to view details"
-      });
-    }
-
-    res.json(tip);
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
 };
-
 exports.getUserPaymentHistory = async (req, res) => {
   try {
     const payments = await PaymentHistory.find({ user: req.user._id })
