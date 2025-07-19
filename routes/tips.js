@@ -97,6 +97,13 @@ const requireAdmin = require("../middleware/requirreAdmin");
  *           type: string
  *           description: The price point to add more to the position
  *           example: "95"
+ *         analysistConfidence:
+ *           type: number
+ *           description: Analyst's confidence level in the tip (0-100)
+ *           default: 0
+ *           minimum: 0
+ *           maximum: 100
+ *           example: 85
  *         tipUrl:
  *           type: string
  *           description: URL with additional information about the tip

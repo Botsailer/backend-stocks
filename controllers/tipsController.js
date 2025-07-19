@@ -22,7 +22,8 @@ function mapTipToCamelCase(tip) {
     exitStatus: tip.exitStatus,
     exitStatusPercentage: tip.exitStatusPercentage,
     horizon: tip.horizon,
-    downloadLinks: tip.downloadLinks || [],
+    analysistConfidence: tip.analysistConfidence || 0,
+    downloadLinks: Array.isArray(tip.downloadLinks) ? tip.downloadLinks : [],
     createdAt: tip.createdAt,
     updatedAt: tip.updatedAt
   };
@@ -65,7 +66,8 @@ exports.createTip = async (req, res) => {
       exitStatus,
       exitStatusPercentage,
       horizon,
-      downloadLinks
+      downloadLinks,
+      analysistConfidence
     } = req.body;
     const portfolio = await Portfolio.findById(req.params.portfolioId);
     if (!portfolio) return res.status(400).json({ error: 'Invalid portfolio' });
@@ -94,6 +96,7 @@ exports.createTip = async (req, res) => {
       addMoreAt,
       tipUrl,
       exitPrice,
+      analysistConfidence,
       exitStatus,
       exitStatusPercentage,
       horizon: horizon || 'Long Term',
@@ -265,6 +268,7 @@ exports.createTipWithoutPortfolio = async (req, res) => {
       targetPrice,
       targetPercentage,
       addMoreAt,
+      analysistConfidence,
       tipUrl,
       exitPrice,
       exitStatus,
@@ -295,6 +299,7 @@ exports.createTipWithoutPortfolio = async (req, res) => {
       targetPrice,
       targetPercentage,
       addMoreAt,
+      analysistConfidence,
       tipUrl,
       exitPrice,
       exitStatus,
@@ -360,6 +365,7 @@ exports.updateTip = async (req, res) => {
       targetPrice,
       targetPercentage,
       addMoreAt,
+      analysistConfidence,
       tipUrl,
       exitPrice,
       exitStatus,
@@ -399,7 +405,8 @@ exports.updateTip = async (req, res) => {
     if (exitStatusPercentage !== undefined) updates.exitStatusPercentage = exitStatusPercentage;
     if (horizon !== undefined) updates.horizon = horizon;
     if (downloadLinks !== undefined) updates.downloadLinks = downloadLinks;
-    
+    if (analysistConfidence !== undefined) updates.analysistConfidence = analysistConfidence;
+
     const tip = await Tip.findByIdAndUpdate(
       req.params.id,
       updates,
