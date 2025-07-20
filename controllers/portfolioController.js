@@ -37,6 +37,9 @@ exports.createPortfolio = asyncHandler(async (req, res) => {
     details = '',
     monthlyGains = '',
     CAGRSinceInception = '',
+    lastRebalanceDate= '',
+    nextRebalanceDate= '',
+    monthlyContribution = 0,
     oneYearGains = '',
     compareWith = ''
   } = req.body;
@@ -96,6 +99,9 @@ const cashBalance = parseFloat((minInvestment - totalCost).toFixed(2));
     index,
     details,
     monthlyGains,
+    lastRebalanceDate,
+    nextRebalanceDate,
+    monthlyContribution,
     CAGRSinceInception,
     oneYearGains,
     compareWith,
@@ -221,7 +227,7 @@ exports.updatePortfolio = asyncHandler(async (req, res) => {
     'name', 'description', 'subscriptionFee', 'expiryDate', 'holdings', 
     'PortfolioCategory', 'downloadLinks', 'youTubeLinks', 'timeHorizon', 
     'rebalancing', 'index', 'details', 'monthlyGains', 'CAGRSinceInception', 
-    'oneYearGains', 'compareWith', 'cashBalance', 'currentValue'
+    'oneYearGains', 'compareWith', 'cashBalance', 'currentValue','lastRebalanceDate', 'nextRebalanceDate', 'monthlyContribution'
   ];
   
   allowedUpdates.forEach(field => {

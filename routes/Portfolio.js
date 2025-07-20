@@ -171,6 +171,18 @@ const cronController = require('../controllers/portfoliocroncontroller');
  *         rebalancing:
  *           type: string
  *           example: "Quarterly"
+ *         lastRebalanceDate:
+ *           type: string
+ *           format: date-time
+ *           example: "2026-02-05T00:00:00.000Z"
+ *         nextRebalanceDate:
+ *           type: string
+ *           format: date-time
+ *           example: "2026-05-05T00:00:00.000Z"
+ *         monthlyContribution:
+ *           type: number
+ *           format: integer
+ *           example: 500
  *         index:
  *           type: string
  *           example: "Nifty 50"

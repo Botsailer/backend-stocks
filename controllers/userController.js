@@ -134,7 +134,11 @@ exports.getAllPortfolios = async (req, res) => {
         createdAt: portfolio.createdAt,
         CAGRSinceInception: portfolio.CAGRSinceInception,
         oneYearGains: portfolio.oneYearGains,
-        monthlyGains: portfolio.monthlyGains
+        monthlyGains: portfolio.monthlyGains,
+        lastRebalanceDate: portfolio.lastRebalanceDate,
+        nextRebalanceDate: portfolio.nextRebalanceDate,
+        monthlyContribution: portfolio.monthlyContribution,
+        message: "Login And Subscribe to view complete details"
       }));
       return res.json(limitedPortfolios);
     }
@@ -183,6 +187,9 @@ exports.getAllPortfolios = async (req, res) => {
           CAGRSinceInception: portfolio.CAGRSinceInception,
           oneYearGains: portfolio.oneYearGains,
           monthlyGains: portfolio.monthlyGains,
+          lastRebalanceDate: portfolio.lastRebalanceDate,
+          nextRebalanceDate: portfolio.nextRebalanceDate,
+          monthlyContribution: portfolio.monthlyContribution,
           message: "Subscribe to view complete details"
         };
       }
@@ -215,6 +222,9 @@ exports.getPortfolioById = async (req, res) => {
         CAGRSinceInception: portfolio.CAGRSinceInception,
         oneYearGains: portfolio.oneYearGains,
         monthlyGains: portfolio.monthlyGains,
+        lastRebalanceDate: portfolio.lastRebalanceDate,
+        nextRebalanceDate: portfolio.nextRebalanceDate,
+        monthlyContribution: portfolio.monthlyContribution,
         message: "Subscribe to view complete details"
       };
       return res.json(limitedPortfolio);

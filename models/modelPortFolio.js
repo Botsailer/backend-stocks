@@ -63,6 +63,21 @@ const StockHoldingSchema = new Schema({
     required: true,
     min: 1
   },
+
+  lastRebalanceDate: {
+    type: Date,
+    required: false
+  },
+  nextRebalanceDate: {
+    type: Date,
+    required: false
+  },
+  monthlyContribution: {
+    type: Number,
+    required: false,
+    min: 0
+  },
+
   quantity: {
     type: Number,
     required: true,
@@ -237,6 +252,7 @@ PortfolioSchema.pre('validate', function(next) {
   }
   next();
 });
+
 
 // Calculate weight percentages before saving
 PortfolioSchema.pre('save', function(next) {
