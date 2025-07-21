@@ -64,20 +64,6 @@ const StockHoldingSchema = new Schema({
     min: 1
   },
 
-  lastRebalanceDate: {
-    type: Date,
-    required: false
-  },
-  nextRebalanceDate: {
-    type: Date,
-    required: false
-  },
-  monthlyContribution: {
-    type: Number,
-    required: false,
-    min: 0
-  },
-
   quantity: {
     type: Number,
     required: true,
@@ -195,6 +181,20 @@ const PortfolioSchema = new Schema({
     type: Number,
     required: true,
     min: 1
+  },
+    lastRebalanceDate: {
+    type: Date,
+    required: false
+  },
+  nextRebalanceDate: {
+    type: Date,
+    required: false
+  },
+  monthlyContribution: {
+    type: Number,
+    required: false,
+    min: 0,
+    default: 0
   },
   PortfolioCategory: {
     type: String,
