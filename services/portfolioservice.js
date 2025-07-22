@@ -165,6 +165,34 @@ exports.logPortfolioValue = async (portfolio) => {
   }
 };
 
+/** * Create a new portfolio with initial holdings and calculate cash balance
+ * @param {Object} portfolioData - Portfolio data including name, description, holdings, etc.
+ * @returns {Object} - Created portfolio document
+ */
+exports.updatePortfolioCurrentValue = async (portfolio, newValue) => {
+  try {
+    const oldValue = portfolio.currentValue;
+    const percentChange = oldValue > 0 ? 
+      (((newValue - oldValue) / oldValue) * 100).toFixed(2) : 0;
+    
+    logger.info(`Updating ${portfolio.name} currentValue: ${oldValue.toFixed(2)} → ${newValue.toFixed(2)} (${percentChange}%)`);
+    
+    // Update the portfolio's currentValue
+    portfolio.currentValue = newValue;
+    
+    // Save will automatically trigger gain calculations via middleware
+    const updatedPortfolio = await portfolio.save();
+    
+    logger.info(`${portfolio.name} gains updated: CAGR=${updatedPortfolio.CAGRSinceInception}, 1Y=${updatedPortfolio.oneYearGains}, 1M=${updatedPortfolio.monthlyGains}`);
+    
+    return updatedPortfolio;
+  } catch (error) {
+    logger.error(`Failed to update currentValue for ${portfolio.name}: ${error.message}`);
+    throw error;
+  }
+};
+
+
 /**
  * Get historical portfolio values with proper interval spacing
  * @param {String} portfolioId - Portfolio ID

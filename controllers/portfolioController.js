@@ -35,12 +35,9 @@ exports.createPortfolio = asyncHandler(async (req, res) => {
     rebalancing = '',
     index = '',
     details = '',
-    monthlyGains = '',
-    CAGRSinceInception = '',
-    lastRebalanceDate= '',
-    nextRebalanceDate= '',
+    lastRebalanceDate = '',
+    nextRebalanceDate = '',
     monthlyContribution = 0,
-    oneYearGains = '',
     compareWith = ''
   } = req.body;
 
@@ -80,8 +77,7 @@ exports.createPortfolio = asyncHandler(async (req, res) => {
     });
   }
 
-const cashBalance = parseFloat((minInvestment - totalCost).toFixed(2));
-  
+  const cashBalance = parseFloat((minInvestment - totalCost).toFixed(2));
   
   const portfolio = new Portfolio({
     name,
@@ -98,26 +94,22 @@ const cashBalance = parseFloat((minInvestment - totalCost).toFixed(2));
     rebalancing,
     index,
     details,
-    monthlyGains,
     lastRebalanceDate,
     nextRebalanceDate,
     monthlyContribution,
-    CAGRSinceInception,
-    oneYearGains,
     compareWith,
     cashBalance,
- currentValue: parseFloat(minInvestment.toFixed(2))
+    currentValue: parseFloat(minInvestment.toFixed(2))
   });
 
-const savedPortfolio = await portfolio.save(); 
-   const populatedPortfolio = await Portfolio.findById(savedPortfolio._id)
-res.status(201).json({
+  const savedPortfolio = await portfolio.save(); 
+  const populatedPortfolio = await Portfolio.findById(savedPortfolio._id);
+  
+  res.status(201).json({
     ...savedPortfolio.toObject(),
     holdingsValue: populatedPortfolio.holdingsValue
   });
 });
-
-
 
 exports.getPortfolioPriceHistory = asyncHandler(async (req, res) => {
   const { id } = req.params;
@@ -141,8 +133,6 @@ exports.getPortfolioPriceHistory = asyncHandler(async (req, res) => {
     res.status(500).json({ error: 'Failed to retrieve price history' });
   }
 });
-
-
 
 exports.updatePortfolio = asyncHandler(async (req, res) => {
   const portfolio = await Portfolio.findById(req.params.id);
@@ -179,12 +169,12 @@ exports.updatePortfolio = asyncHandler(async (req, res) => {
     });
   }
 
-  // Update only allowed fields
+  // Update only allowed fields (removed calculated fields)
   const allowedUpdates = [
     'name', 'description', 'subscriptionFee', 'expiryDate', 'holdings', 
     'PortfolioCategory', 'downloadLinks', 'youTubeLinks', 'timeHorizon', 
-    'rebalancing', 'index', 'details', 'monthlyGains', 'CAGRSinceInception', 
-    'oneYearGains', 'compareWith', 'cashBalance', 'currentValue','lastRebalanceDate', 'nextRebalanceDate', 'monthlyContribution'
+    'rebalancing', 'index', 'details', 'compareWith', 
+    'lastRebalanceDate', 'nextRebalanceDate', 'monthlyContribution'
   ];
   
   allowedUpdates.forEach(field => {
@@ -219,10 +209,6 @@ exports.deletePortfolio = asyncHandler(async (req, res) => {
   res.status(200).json({ message: 'Portfolio and related price logs deleted successfully' });
 });
 
-
-//public portfolio routes and return data to subscribed users 
-
-
 // CRUD operations for YouTube links
 exports.addYouTubeLink = asyncHandler(async (req, res) => {
   const portfolio = await Portfolio.findById(req.params.id);
@@ -249,7 +235,6 @@ exports.removeYouTubeLink = asyncHandler(async (req, res) => {
   res.status(200).json(portfolio);
 });
 
-// Updated to support linkType and linkDiscription
 exports.addDownloadLink = asyncHandler(async (req, res) => {
   const portfolio = await Portfolio.findById(req.params.id);
   if (!portfolio) return res.status(404).json({ error: 'Portfolio not found' });
@@ -286,8 +271,7 @@ exports.removeDownloadLink = asyncHandler(async (req, res) => {
   res.status(200).json(portfolio);
 });
 
-
-//get all youtube links for a portfolios merged together 
+// Get all YouTube links across portfolios
 exports.getAllYouTubeLinks = asyncHandler(async (req, res) => {
   const portfolios = await Portfolio.find().select('youTubeLinks');
   const allLinks = portfolios.reduce((acc, portfolio) => {
