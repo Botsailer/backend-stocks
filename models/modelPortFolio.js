@@ -238,7 +238,7 @@ const PortfolioSchema = new Schema({
 
 // Virtuals
 PortfolioSchema.virtual('holdingsValue').get(function() {
-  return this.holdings.reduce((sum, holding) => 
+  return this.holdings?.reduce((sum, holding) => 
     sum + (holding.buyPrice * holding.quantity), 0);
 });
 
