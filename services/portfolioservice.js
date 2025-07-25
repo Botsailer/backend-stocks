@@ -5,130 +5,71 @@ const PriceLog = require('../models/PriceLog');
 const winston = require('winston');
 const { default: mongoose } = require('mongoose');
 
-// Create a logger for portfolio service
+// Logger setup
 const logger = winston.createLogger({
   level: 'info',
   format: winston.format.combine(
-    winston.format.timestamp({
-      format: 'YYYY-MM-DD HH:mm:ss'
-    }),
+    winston.format.timestamp({ format: 'YYYY-MM-DD HH:mm:ss' }),
     winston.format.errors({ stack: true }),
     winston.format.splat(),
     winston.format.json()
   ),
   transports: [
-    new winston.transports.Console({
-      format: winston.format.combine(
-        winston.format.colorize(),
-        winston.format.printf(({ timestamp, level, message }) => {
-          return `${timestamp} [${level}]: ${message}`;
-        })
-      )
-    }),
+    new winston.transports.Console(),
     new winston.transports.File({ 
       filename: 'logs/portfolio-service.log',
-      maxsize: 5 * 1024 * 1024, // 5MB
-      maxFiles: 7 // Keep 7 days of logs
+      maxsize: 5 * 1024 * 1024,
+      maxFiles: 7
     })
   ]
 });
 
-/**
- * Calculate current portfolio value using live stock prices
- * @param {Object} portfolio - Portfolio document
- * @returns {Number} - Total portfolio value
- */
+// Calculate portfolio value using live prices
 exports.calculatePortfolioValue = async (portfolio) => {
   try {
     let totalValue = portfolio.cashBalance;
-    let stocksUpdated = 0;
-    let stocksFallback = 0;
-    
-    logger.info(`Calculating value for portfolio: ${portfolio.name} (ID: ${portfolio._id})`);
     
     for (const holding of portfolio.holdings) {
-      // Try to find the stock by symbol alone (don't rely on exchange field)
       const stock = await StockSymbol.findOne({ symbol: holding.symbol });
       
       if (stock && stock.currentPrice) {
-        const currentPrice = parseFloat(stock.currentPrice);
-        const holdingValue = currentPrice * holding.quantity;
-        const buyValue = holding.buyPrice * holding.quantity;
-        const priceDiff = (((currentPrice - holding.buyPrice) / holding.buyPrice) * 100).toFixed(2);
-        
-        logger.info(`${portfolio.name}: ${holding.symbol} using LIVE price ${currentPrice} (${priceDiff}% from buy price ${holding.buyPrice}) = ${holdingValue.toFixed(2)}`);
-        
-        totalValue += holdingValue;
-        stocksUpdated++;
+        totalValue += parseFloat(stock.currentPrice) * holding.quantity;
       } else {
-        const fallbackValue = holding.buyPrice * holding.quantity;
-        logger.warn(`${portfolio.name}: ${holding.symbol} NO LIVE PRICE - using buy price ${holding.buyPrice} = ${fallbackValue.toFixed(2)}`);
-        
-        totalValue += fallbackValue;
-        stocksFallback++;
+        totalValue += holding.buyPrice * holding.quantity;
       }
     }
-
-    // Log the results summary
-    if (stocksFallback > 0) {
-      logger.warn(`${portfolio.name}: ${stocksUpdated} stocks used live prices, ${stocksFallback} used fallback buy prices`);
-    } else {
-      logger.info(`${portfolio.name}: All ${stocksUpdated} stocks used live prices!`);
-    }
-
-    logger.info(`${portfolio.name} calculated value: ${totalValue.toFixed(2)} (Cash: ${portfolio.cashBalance.toFixed(2)})`);
     
-   return parseFloat(totalValue.toFixed(2));
+    return parseFloat(totalValue.toFixed(2));
   } catch (error) {
-    logger.error(`Failed to calculate portfolio value for ${portfolio.name}: ${error.message}`);
+    logger.error(`Calculate value failed: ${error.message}`);
     throw error;
   }
 };
 
-/**
- * Update the portfolio's currentValue field with latest valuation
- * @param {Object} portfolio - Portfolio document
- * @param {Number} newValue - Calculated portfolio value
- * @returns {Object} - Updated portfolio document
- */
+// Update portfolio's current value
 exports.updatePortfolioCurrentValue = async (portfolio, newValue) => {
   try {
-    const oldValue = portfolio.currentValue;
-    const percentChange = oldValue > 0 ? 
-      (((newValue - oldValue) / oldValue) * 100).toFixed(2) : 0;
-    
-    logger.info(`Updating ${portfolio.name} currentValue: ${oldValue.toFixed(2)} → ${newValue.toFixed(2)} (${percentChange}%)`);
-    
     const updatedPortfolio = await Portfolio.findByIdAndUpdate(
       portfolio._id,
       { currentValue: newValue },
       { new: true }
     );
-    
     return updatedPortfolio;
   } catch (error) {
-    logger.error(`Failed to update currentValue for ${portfolio.name}: ${error.message}`);
+    logger.error(`Update value failed: ${error.message}`);
     throw error;
   }
 };
-/**
- * Log portfolio value for historical tracking (only once per day)
- * @param {Object} portfolio - Portfolio document
- * @returns {Object} - Created or existing PriceLog document
- */
+
+// Log portfolio value with zero-based gain tracking
 exports.logPortfolioValue = async (portfolio) => {
   try {
-    // Calculate latest portfolio value
     const portfolioValue = await this.calculatePortfolioValue(portfolio);
-    
-    // Update the portfolio's currentValue field
     await this.updatePortfolioCurrentValue(portfolio, portfolioValue);
     
-    // Create a date string for today (YYYY-MM-DD format)
     const today = new Date();
-    const dateKey = today.toISOString().split('T')[0]; // Gets YYYY-MM-DD
+    const dateKey = today.toISOString().split('T')[0];
     
-    // Use upsert to either update existing or create new
     const priceLog = await PriceLog.findOneAndUpdate(
       {
         portfolio: portfolio._id,
@@ -141,8 +82,8 @@ exports.logPortfolioValue = async (portfolio) => {
       },
       {
         $set: {
-          portfolioValue: parseFloat(portfolioValue.toFixed(2)),
-          cashRemaining: parseFloat(portfolio.cashBalance.toFixed(2)),
+          portfolioValue: portfolioValue,
+          cashRemaining: portfolio.cashBalance,
           date: new Date()
         },
         $setOnInsert: {
@@ -151,68 +92,26 @@ exports.logPortfolioValue = async (portfolio) => {
       },
       {
         upsert: true,
-        new: true,
-        runValidators: true
+        new: true
       }
     );
     
-    logger.info(`Upserted PriceLog for ${portfolio.name}: ID ${priceLog._id}, Value ${portfolioValue.toFixed(2)}`);
     return priceLog;
-    
   } catch (error) {
-    logger.error(`Failed to log portfolio value for ${portfolio.name}: ${error.message}`);
+    logger.error(`Log value failed: ${error.message}`);
     throw error;
   }
 };
 
-/** * Create a new portfolio with initial holdings and calculate cash balance
- * @param {Object} portfolioData - Portfolio data including name, description, holdings, etc.
- * @returns {Object} - Created portfolio document
- */
-exports.updatePortfolioCurrentValue = async (portfolio, newValue) => {
-  try {
-    const oldValue = portfolio.currentValue;
-    const percentChange = oldValue > 0 ? 
-      (((newValue - oldValue) / oldValue) * 100).toFixed(2) : 0;
-    
-    logger.info(`Updating ${portfolio.name} currentValue: ${oldValue.toFixed(2)} → ${newValue.toFixed(2)} (${percentChange}%)`);
-    
-    // Update the portfolio's currentValue
-    portfolio.currentValue = newValue;
-    
-    // Save will automatically trigger gain calculations via middleware
-    const updatedPortfolio = await portfolio.save();
-    
-    logger.info(`${portfolio.name} gains updated: CAGR=${updatedPortfolio.CAGRSinceInception}, 1Y=${updatedPortfolio.oneYearGains}, 1M=${updatedPortfolio.monthlyGains}`);
-    
-    return updatedPortfolio;
-  } catch (error) {
-    logger.error(`Failed to update currentValue for ${portfolio.name}: ${error.message}`);
-    throw error;
-  }
-};
-
-
-/**
- * Get historical portfolio values with proper interval spacing
- * @param {String} portfolioId - Portfolio ID
- * @param {String} period - Time period ('1d', '1w', '1m', '3m', '6m', '1y')
- * @returns {Object} - Formatted historical data with proper intervals
- */
+// Get portfolio history with zero-based gains
 exports.getPortfolioHistory = async (portfolioId, period = '1m') => {
   try {
-    // Validate portfolio ID
+    // Validate inputs
     if (!mongoose.Types.ObjectId.isValid(portfolioId)) {
-      throw new Error('Invalid portfolio ID format');
+      throw new Error('Invalid portfolio ID');
     }
 
-    // Validate period
-    const validPeriods = ['1d', '1w', '1m', '3m', '6m', '1y', 'all'];
-    if (!validPeriods.includes(period)) {
-      throw new Error(`Invalid period. Must be one of: ${validPeriods.join(', ')}`);
-    }
-
-    // Define period configurations
+    // Period configuration
     const periodConfig = {
       '1d': { days: 1, maxPoints: 24, intervalHours: 1 },
       '1w': { days: 7, maxPoints: 14, intervalHours: 12 },
@@ -222,101 +121,77 @@ exports.getPortfolioHistory = async (portfolioId, period = '1m') => {
       '1y': { days: 365, maxPoints: 26, intervalDays: 14 },
       'all': { days: null, maxPoints: 100, intervalDays: 7 }
     };
-
-    const config = periodConfig[period];
     
-    // Calculate start date
+    const config = periodConfig[period] || periodConfig['1m'];
     const startDate = config.days 
-      ? new Date(Date.now() - config.days * 24 * 60 * 60 * 1000)
-      : new Date(0); // Beginning of time for 'all'
-    
-    // Get all logs in the period
+      ? new Date(Date.now() - config.days * 86400000)
+      : new Date(0);
+
+    // Fetch logs
     const allLogs = await PriceLog.find({
       portfolio: portfolioId,
       date: { $gte: startDate }
-    })
-    .sort('date')
-    .select('date portfolioValue cashRemaining');
-    
+    }).sort('date');
+
     if (allLogs.length === 0) {
-      return {
-        portfolioId,
-        period,
-        dataPoints: 0,
-        data: []
-      };
+      return { portfolioId, period, baselineValue: 0, data: [] };
     }
 
-    // Apply interval filtering for periods that need it
+    // Find baseline (earliest log in period)
+    const baselineLog = allLogs.reduce((oldest, current) => 
+      current.date < oldest.date ? current : oldest
+    );
+    const baselineValue = baselineLog.portfolioValue;
+
+    // Apply interval filtering
     let filteredLogs = allLogs;
     
     if (config.intervalDays && config.intervalDays > 1) {
-      const intervalMs = config.intervalDays * 24 * 60 * 60 * 1000;
-      filteredLogs = [];
+      const intervalMs = config.intervalDays * 86400000;
       let lastIncluded = null;
+      filteredLogs = [];
       
       for (const log of allLogs) {
-        if (!lastIncluded || (log.date.getTime() - lastIncluded.getTime()) >= intervalMs) {
+        if (!lastIncluded || (log.date - lastIncluded) >= intervalMs) {
           filteredLogs.push(log);
           lastIncluded = log.date;
         }
       }
       
       // Always include the latest log
-      const latestLog = allLogs[allLogs.length - 1];
       if (filteredLogs.length === 0 || 
-          filteredLogs[filteredLogs.length - 1]._id.toString() !== latestLog._id.toString()) {
-        filteredLogs.push(latestLog);
+          filteredLogs[filteredLogs.length-1]._id !== allLogs[allLogs.length-1]._id) {
+        filteredLogs.push(allLogs[allLogs.length-1]);
       }
     }
     
-    // Format the data with change calculations
-    const formattedData = filteredLogs.map((log, index) => {
-      const baseData = {
-        date: log.date,
-        value: parseFloat(log.portfolioValue.toFixed(2)),
-        cash: parseFloat(log.cashRemaining.toFixed(2))
-      };
-      
-      if (index > 0) {
-        const prevValue = filteredLogs[index - 1].portfolioValue;
-        const change = log.portfolioValue - prevValue;
-        const changePercent = prevValue > 0 ? (change / prevValue) * 100 : 0;
-        
-        return {
-          ...baseData,
-          change: parseFloat(change.toFixed(2)),
-          changePercent: parseFloat(changePercent.toFixed(2))
-        };
-      }
-      
-      return baseData;
-    });
-    
-    logger.info(`Retrieved ${formattedData.length} data points for portfolio ${portfolioId} (${period})`);
-    
+    // Transform to zero-based gains
+    const transformedData = filteredLogs.map(log => ({
+      date: log.date,
+      gain: parseFloat((log.portfolioValue - baselineValue).toFixed(2)),
+      value: log.portfolioValue,
+      cash: log.cashRemaining
+    }));
+
     return {
       portfolioId,
       period,
-      dataPoints: formattedData.length,
-      data: formattedData
+      baselineValue,
+      baselineDate: baselineLog.date,
+      data: transformedData
     };
     
   } catch (error) {
-    logger.error(`Failed to get portfolio history for ${portfolioId}: ${error.message}`);
+    logger.error(`Get history failed: ${error.message}`);
     throw error;
   }
 };
-/**
- * Process all portfolios and log their daily values
- * @returns {Array} - Array of results for each portfolio
- */
+
+// Process all portfolios daily
 exports.logAllPortfoliosDaily = async () => {
   try {
     const portfolios = await Portfolio.find();
     const results = [];
-    
-    logger.info(`Starting daily valuation for ${portfolios.length} portfolios`);
     
     for (const portfolio of portfolios) {
       try {
@@ -324,11 +199,9 @@ exports.logAllPortfoliosDaily = async () => {
         results.push({
           portfolio: portfolio.name,
           status: 'success',
-          logId: log._id,
           value: log.portfolioValue
         });
       } catch (error) {
-        logger.error(`Failed to process portfolio ${portfolio.name}: ${error.message}`);
         results.push({
           portfolio: portfolio.name,
           status: 'failed',
@@ -337,44 +210,28 @@ exports.logAllPortfoliosDaily = async () => {
       }
     }
     
-    // Summarize results
-    const successCount = results.filter(r => r.status === 'success').length;
-    const failedCount = results.filter(r => r.status === 'failed').length;
-    
-    logger.info(`Daily valuation complete: ${successCount} portfolios succeeded, ${failedCount} portfolios failed`);
-    
     return results;
   } catch (error) {
-    logger.error(`Failed to run daily portfolio valuations: ${error.message}`);
+    logger.error(`Daily log failed: ${error.message}`);
     throw error;
   }
 };
 
-
-/**
- * Manually recalculate a portfolio's value
- * @param {String} portfolioId - Portfolio ID
- * @returns {Object} - Updated portfolio with new value
- */
+// Manual portfolio recalculation
 exports.recalculatePortfolioValue = async (portfolioId) => {
   try {
     const portfolio = await Portfolio.findById(portfolioId);
-    
-    if (!portfolio) {
-      throw new Error(`Portfolio not found: ${portfolioId}`);
-    }
+    if (!portfolio) throw new Error('Portfolio not found');
     
     const portfolioValue = await this.calculatePortfolioValue(portfolio);
     const updatedPortfolio = await this.updatePortfolioCurrentValue(portfolio, portfolioValue);
-    
-    logger.info(`Manual recalculation for ${portfolio.name}: new value ${portfolioValue.toFixed(2)}`);
     
     return {
       portfolio: updatedPortfolio,
       calculatedValue: portfolioValue
     };
   } catch (error) {
-    logger.error(`Failed to recalculate portfolio ${portfolioId}: ${error.message}`);
+    logger.error(`Recalculation failed: ${error.message}`);
     throw error;
   }
 };
