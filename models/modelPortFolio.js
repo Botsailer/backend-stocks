@@ -324,7 +324,7 @@ PortfolioSchema.methods.calculateCAGR = function() {
 
   if (ratio <= 0) return "0%";
 
-  const cagr = (Math.pow(ratio, 1/years) - 1;
+  const cagr = (Math.pow(ratio, 1/years) - 1);
   return `${(cagr * 100).toFixed(2)}%`;
 };
 
