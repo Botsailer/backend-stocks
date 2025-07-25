@@ -18,6 +18,12 @@ const TipSchema = new Schema(
       required: true,
       trim: true,
     },
+    mpWeightage:{
+      type: Number,
+      required: false,
+      min: 0,
+      max: 100
+    },
     stockId :{
       type:String,
       required:true
@@ -59,7 +65,7 @@ const TipSchema = new Schema(
       enum: ["Active", "Closed"],
       default: "Active",
     },
-    action:String, //here action will be buy sell hold partial profit
+    action:String, 
     buyRange: String,
     targetPrice: String,
     targetPercentage:String,

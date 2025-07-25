@@ -16,6 +16,7 @@ function mapTipToCamelCase(tip) {
     buyRange: tip.buyRange,
     targetPrice: tip.targetPrice,
     targetPercentage: tip.targetPercentage,
+    mpWeightage: tip.mpWeightage,
     addMoreAt: tip.addMoreAt,
     tipUrl: tip.tipUrl,
     exitPrice: tip.exitPrice,
@@ -67,6 +68,7 @@ exports.createTip = async (req, res) => {
       exitStatusPercentage,
       horizon,
       downloadLinks,
+      mpWeightage,
       analysistConfidence
     } = req.body;
     const portfolio = await Portfolio.findById(req.params.portfolioId);
@@ -89,6 +91,7 @@ exports.createTip = async (req, res) => {
       content,
       description,
       status: status || 'Active',
+      mpWeightage,
       action,
       buyRange,
       targetPrice,
@@ -267,6 +270,7 @@ exports.createTipWithoutPortfolio = async (req, res) => {
       buyRange,
       targetPrice,
       targetPercentage,
+      mpWeightage,
       addMoreAt,
       analysistConfidence,
       tipUrl,
@@ -295,6 +299,7 @@ exports.createTipWithoutPortfolio = async (req, res) => {
       description,
       status: status || 'Active',
       action,
+      mpWeightage,
       buyRange,
       targetPrice,
       targetPercentage,
@@ -363,6 +368,7 @@ exports.updateTip = async (req, res) => {
       action,
       buyRange,
       targetPrice,
+      mpWeightage,
       targetPercentage,
       addMoreAt,
       analysistConfidence,
@@ -406,6 +412,7 @@ exports.updateTip = async (req, res) => {
     if (horizon !== undefined) updates.horizon = horizon;
     if (downloadLinks !== undefined) updates.downloadLinks = downloadLinks;
     if (analysistConfidence !== undefined) updates.analysistConfidence = analysistConfidence;
+    if (mpWeightage !== undefined) updates.mpWeightage = mpWeightage;
 
     const tip = await Tip.findByIdAndUpdate(
       req.params.id,

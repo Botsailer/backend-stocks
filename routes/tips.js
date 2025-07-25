@@ -112,6 +112,13 @@ const requireAdmin = require("../middleware/requirreAdmin");
  *           type: string
  *           description: Price at which to exit the position
  *           example: "200"
+ *         mpWeightage:
+ *           type: number
+ *           description: Waitage percentage for the tip in the portfolio
+ *           default: 0
+ *           minimum: 0
+ *           maximum: 100
+ *           example: 10
  *         exitStatus:
  *           type: string
  *           description: Final status when exiting the position
