@@ -251,14 +251,14 @@ PortfolioSchema.virtual('daysSinceCreation').get(function() {
 PortfolioSchema.pre('save', function(next) {
   // Ensure currentValue matches actual assets
   this.currentValue = this.cashBalance + this.holdingsValue;
-  
+
   // Update holding weights
   this.holdings.forEach(holding => {
     const holdingValue = holding.buyPrice * holding.quantity;
     holding.weight = this.currentValue > 0 ? 
       (holdingValue / this.currentValue) * 100 : 0;
   });
-  
+
   // Set expiry date if not provided
   if (!this.expiryDate && this.durationMonths) {
     const start = this.createdAt || new Date();
@@ -266,15 +266,15 @@ PortfolioSchema.pre('save', function(next) {
     expire.setMonth(expire.getMonth() + this.durationMonths);
     this.expiryDate = expire;
   }
-  
+
   // Update historical values (store daily snapshot)
   this.updateHistoricalValues();
-  
-  // Calculate all gains metrics
+
+  // Calculate all gains metrics based on minimum data requirements
   this.CAGRSinceInception = this.calculateCAGR();
   this.monthlyGains = this.calculatePeriodGain(30);
   this.oneYearGains = this.calculatePeriodGain(365);
-  
+
   next();
 });
 
@@ -284,7 +284,7 @@ PortfolioSchema.methods.updateHistoricalValues = function() {
   const existingEntry = this.historicalValues.find(entry => 
     entry.date.toISOString().split('T')[0] === today
   );
-  
+
   if (existingEntry) {
     existingEntry.value = this.currentValue;
   } else {
@@ -293,7 +293,7 @@ PortfolioSchema.methods.updateHistoricalValues = function() {
       value: this.currentValue
     });
   }
-  
+
   // Keep only last 2 years of data
   const twoYearsAgo = new Date();
   twoYearsAgo.setFullYear(twoYearsAgo.getFullYear() - 2);
@@ -302,35 +302,49 @@ PortfolioSchema.methods.updateHistoricalValues = function() {
   );
 };
 
-// CAGR calculation
-PortfolioSchema.methods.calculateCAGR = function() {
-  if (!this.createdAt || !this.minInvestment || this.minInvestment <= 0) {
-    return "0%";
-  }
-  
-  const days = this.daysSinceCreation;
-  if (days < 1) return "0%";
-  
-  const years = days / 365.25;
-  const ratio = this.currentValue / this.minInvestment;
-  
-  if (ratio <= 0) return "0%";
-  
-  const cagr = (Math.pow(ratio, 1/years) - 1) * 100;
-  return `${cagr.toFixed(2)}%`;
+// Minimum data requirements for return calculations
+const MINIMUM_DATA_REQUIREMENTS = {
+  7: 3,       // 1 week requires 3 days
+  30: 14,     // 1 month requires 14 days
+  90: 30,     // 3 months requires 30 days
+  180: 60,    // 6 months requires 60 days
+  365: 90,    // 1 year requires 90 days
+  1095: 548,  // 3 years requires 1.5 years (548 days)
+  'cagr': 730 // CAGR requires 2 years (730 days)
 };
 
-// Period gain calculation
-PortfolioSchema.methods.calculatePeriodGain = function(days) {
+// CAGR calculation
+PortfolioSchema.methods.calculateCAGR = function() {
+  const minDays = MINIMUM_DATA_REQUIREMENTS.cagr;
+  if (this.daysSinceCreation < minDays) return "0%";
+  if (!this.minInvestment || this.minInvestment <= 0) return "0%";
+
+  const years = this.daysSinceCreation / 365.25;
+  const ratio = this.currentValue / this.minInvestment;
+
+  if (ratio <= 0) return "0%";
+
+  const cagr = (Math.pow(ratio, 1/years) - 1;
+  return `${(cagr * 100).toFixed(2)}%`;
+};
+
+// Period gain calculation with minimum data requirements
+PortfolioSchema.methods.calculatePeriodGain = function(periodDays) {
+  const minDays = MINIMUM_DATA_REQUIREMENTS[periodDays] || 1;
+  
+  // Return 0% if minimum data not met
+  if (this.daysSinceCreation < minDays) return "0%";
   if (this.historicalValues.length < 2) return "0%";
-  
+
+  // Use portfolio's actual age if less than requested period
+  const effectiveDays = Math.min(periodDays, this.daysSinceCreation);
   const targetDate = new Date();
-  targetDate.setDate(targetDate.getDate() - days);
-  
-  // Find closest historical value to target date
+  targetDate.setDate(targetDate.getDate() - effectiveDays);
+
+  // Find closest historical record to target date
   let closestRecord = null;
   let minDiff = Infinity;
-  
+
   this.historicalValues.forEach(entry => {
     const diff = Math.abs(entry.date - targetDate);
     if (diff < minDiff) {
@@ -338,9 +352,9 @@ PortfolioSchema.methods.calculatePeriodGain = function(days) {
       closestRecord = entry;
     }
   });
-  
+
   if (!closestRecord || closestRecord.value <= 0) return "0%";
-  
+
   const gainPercent = ((this.currentValue - closestRecord.value) / closestRecord.value) * 100;
   return `${gainPercent.toFixed(2)}%`;
 };
@@ -349,7 +363,7 @@ PortfolioSchema.methods.calculatePeriodGain = function(days) {
 PortfolioSchema.statics.initializeGains = async function() {
   const portfolios = await this.find();
   const results = [];
-  
+
   for (const portfolio of portfolios) {
     try {
       portfolio.CAGRSinceInception = portfolio.calculateCAGR();
@@ -361,7 +375,7 @@ PortfolioSchema.statics.initializeGains = async function() {
       results.push({ id: portfolio._id, status: 'error', error: error.message });
     }
   }
-  
+
   return results;
 };
 
