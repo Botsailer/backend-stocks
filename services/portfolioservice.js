@@ -68,16 +68,15 @@ exports.logPortfolioValue = async (portfolio) => {
     await this.updatePortfolioCurrentValue(portfolio, portfolioValue);
     
     const today = new Date();
-    const dateKey = today.toISOString().split('T')[0];
+    const startOfDay = new Date(today.getFullYear(), today.getMonth(), today.getDate());
+    const endOfDay = new Date(startOfDay.getTime() + 24 * 60 * 60 * 1000 - 1);
     
     const priceLog = await PriceLog.findOneAndUpdate(
       {
         portfolio: portfolio._id,
-        $expr: {
-          $eq: [
-            { $dateToString: { format: "%Y-%m-%d", date: "$date" } },
-            dateKey
-          ]
+        date: {
+          $gte: startOfDay,
+          $lt: endOfDay
         }
       },
       {
