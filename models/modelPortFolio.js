@@ -27,9 +27,11 @@ const StockHoldingSchema = new Schema({
     type: Number,
     required: false,
     min: 0,
-    default: 0
+    default: 0,
+    //to fix: 2 decimal places
+    set: v => Math.round(v * 100) / 100
   },
-  sector: {
+   sector: {
     type: String,
     required: true,
     trim: true
