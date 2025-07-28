@@ -82,6 +82,53 @@ exports.updateUser = async (req, res) => {
   }
 };
 
+exports.updateUserPAN = async (req, res) => {
+  try {
+    const { userId, pandetails, reason } = req.body;
+    
+    if (!req.user.isAdmin) {
+      return res.status(403).json({ error: 'Admin access required' });
+    }
+    
+    if (!pandetails || !pandetails.trim()) {
+      return res.status(400).json({ error: 'PAN details are required' });
+    }
+    
+    const panCardRegex = /^[A-Z]{5}[0-9]{4}[A-Z]{1}$/;
+    if (!panCardRegex.test(pandetails.trim())) {
+      return res.status(400).json({ 
+        error: 'Invalid PAN card format. Must be AAAAA9999A (5 letters, 4 digits, 1 letter)' 
+      });
+    }
+    
+    const updatedUser = await User.findByIdAndUpdate(
+      userId,
+      { 
+        $set: { 
+          pandetails: pandetails.trim().toUpperCase(),
+          panUpdatedAt: new Date()
+        }
+      },
+      { new: true, runValidators: true }
+    ).select('-password -refreshToken -tokenVersion');
+    
+    if (!updatedUser) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+    
+    res.json({
+      message: 'User PAN updated successfully by admin',
+      user: updatedUser,
+      updatedBy: req.user.username,
+      reason: reason || 'Admin update'
+    });
+    
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+};
+
+
 // DELETE /admin/users/:id
 exports.deleteUser = async (req, res) => {
   try {

@@ -13,8 +13,10 @@ const userSchema = new mongoose.Schema({
   mainUserId: { type: String, default: null },
   fullName: { type: String, default: null },
   dateofBirth: { type: Date, default: null },
+  adharcard: { type: String, default: null },
   phone: { type: String, default: null },
- pandetails: { 
+  address: { type: String, default: null },
+  pandetails: { 
     type: String, 
     default: null,
     
@@ -25,6 +27,9 @@ const userSchema = new mongoose.Schema({
       message: 'PAN card number must be in format AAAAA9999A (5 letters, 4 digits, 1 letter)'
     }
   },
+    panUpdatedByUser: { type: Boolean, default: false },
+  panUpdatedAt: { type: Date, default: null },
+  
   // NEW for token invalidation
   changedPasswordAt: { type: Date, default: Date.now },
   tokenVersion:      { type: Number, default: 0 },

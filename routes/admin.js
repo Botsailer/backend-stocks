@@ -344,6 +344,115 @@ router.post(
   userCtl.createUser
 );
 
+
+// exports.updateUserPAN = async (req, res) => {
+//   try {
+//     const { userId, pandetails, reason } = req.body;
+    
+//     if (!req.user.isAdmin) {
+//       return res.status(403).json({ error: 'Admin access required' });
+//     }
+    
+//     if (!pandetails || !pandetails.trim()) {
+//       return res.status(400).json({ error: 'PAN details are required' });
+//     }
+    
+//     const panCardRegex = /^[A-Z]{5}[0-9]{4}[A-Z]{1}$/;
+//     if (!panCardRegex.test(pandetails.trim())) {
+//       return res.status(400).json({ 
+//         error: 'Invalid PAN card format. Must be AAAAA9999A (5 letters, 4 digits, 1 letter)' 
+//       });
+//     }
+    
+//     const updatedUser = await User.findByIdAndUpdate(
+//       userId,
+//       { 
+//         $set: { 
+//           pandetails: pandetails.trim().toUpperCase(),
+//           panUpdatedAt: new Date()
+//         }
+//       },
+//       { new: true, runValidators: true }
+//     ).select('-password -refreshToken -tokenVersion');
+    
+//     if (!updatedUser) {
+//       return res.status(404).json({ error: 'User not found' });
+//     }
+    
+//     res.json({
+//       message: 'User PAN updated successfully by admin',
+//       user: updatedUser,
+//       updatedBy: req.user.username,
+//       reason: reason || 'Admin update'
+//     });
+    
+//   } catch (err) {
+//     res.status(500).json({ error: err.message });
+//   }
+// };
+
+//updateUserPAN endpoint
+
+/** * @swagger
+ * /admin/users/{id}/pan:
+ *   put:
+ *     tags: [AdminUsers]
+ *     summary: Update a user's PAN details
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema:
+ *           type: string
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [pandetails]
+ *             properties:
+ *               pandetails:
+ *                 type: string
+ *                 description: New PAN card number in format AAAAA9999A
+ *               reason:
+ *                 type: string
+ *                 description: Reason for PAN update
+ *     responses:
+ *       200:
+ *         description: User PAN updated successfully
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 message:
+ *                   type: string
+ *                   example: "User PAN updated successfully by admin"
+ *                 user:
+ *                   $ref: '#/components/schemas/User'
+ *                 updatedBy:
+ *                   type: string
+ *                   example: "admin_username"
+ *                 reason:
+ *                   type: string
+ *                   example: "Admin update"
+ *       400:
+ *         description: Validation error or missing fields
+ *       403:
+ *         description: Admin access required
+ *       404:
+ *         description: User not found
+ */
+router.put(
+  '/users/:id/pan',
+  passport.authenticate('jwt', { session: false }),
+  requireAdmin,
+  userCtl.updateUserPAN
+);
+
 /**
  * @swagger
  * /admin/users/{id}:

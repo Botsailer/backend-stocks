@@ -13,7 +13,7 @@ exports.getProfile = async (req, res) => {
     
     if (!user) return res.status(404).json({ error: 'User not found' });
 
-    const requiredFields = ['fullName', 'dateofBirth', 'phone'];
+    const requiredFields = ['fullName', 'dateofBirth', 'phone', 'pandetails', 'address', 'adharcard'];
     const isComplete = requiredFields.every(field => user[field] && user[field] !== null);
     const hasActiveSubscription = await Subscription.exists({
       user: user._id,
@@ -26,19 +26,24 @@ exports.getProfile = async (req, res) => {
       ...user.toObject(),
       profileComplete: isComplete,
       forceComplete: forceComplete,
-      missingFields: !isComplete ? requiredFields.filter(field => !user[field] || user[field] === null) : []
+      missingFields: !isComplete ? requiredFields.filter(field => !user[field] || user[field] === null) : [],
+      panUpdateInfo: {
+        canUpdatePAN: !user.panUpdatedByUser || user.isAdmin,
+        lastUpdated: user.panUpdatedAt,
+        updatedByUser: user.panUpdatedByUser
+      }
     });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
 };
-
 exports.updateProfile = async (req, res) => {
   try {
     const userId = req.user._id;
     const updates = req.body;
+    const isAdmin = req.user.isAdmin || false; // Check if user is admin
     
-    const restrictedFields = ['password', 'refreshToken', 'tokenVersion', 'provider', 'providerId', 'emailVerified', 'changedPasswordAt'];
+    const restrictedFields = ['password', 'refreshToken', 'tokenVersion', 'provider', 'providerId', 'emailVerified', 'changedPasswordAt', 'panUpdatedByUser', 'panUpdatedAt'];
     restrictedFields.forEach(field => delete updates[field]);
 
     if (updates.username) {
@@ -62,6 +67,7 @@ exports.updateProfile = async (req, res) => {
       updates.emailVerified = false;
     }
 
+    // PAN UPDATE LOGIC - Check if user is trying to update PAN
     if (updates.pandetails && updates.pandetails.trim() !== '') {
       const panCardRegex = /^[A-Z]{5}[0-9]{4}[A-Z]{1}$/;
       if (!panCardRegex.test(updates.pandetails.trim())) {
@@ -69,7 +75,24 @@ exports.updateProfile = async (req, res) => {
           error: 'Invalid PAN card format. Must be AAAAA9999A (5 letters, 4 digits, 1 letter)' 
         });
       }
+      
+      // Get current user data to check PAN update status
+      const currentUser = await User.findById(userId);
+      
+      // Check if user has already updated PAN and is not an admin
+      if (currentUser.panUpdatedByUser && !isAdmin) {
+        return res.status(403).json({ 
+          error: 'PAN card can only be updated once. Contact admin for further changes.' 
+        });
+      }
+      
       updates.pandetails = updates.pandetails.trim().toUpperCase();
+      
+      // If this is the first time user is setting PAN (and they're not admin), mark it
+      if (!currentUser.panUpdatedByUser && !isAdmin) {
+        updates.panUpdatedByUser = true;
+        updates.panUpdatedAt = new Date();
+      }
     }
 
     const updatedUser = await User.findByIdAndUpdate(

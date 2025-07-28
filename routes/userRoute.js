@@ -60,6 +60,15 @@ const optionalAuth = (req, res, next) => {
  *         profileComplete:
  *           type: boolean
  *           example: true
+ *         pandetails:
+ *           type: string
+ *           example: "ABCDE1234F"
+ *         adharcard:
+ *           type: string
+ *           example: "1234-5678-9012"
+ *         address:
+ *           type: string
+ *           example: "123 Main St, Anytown, USA"
  *         forceComplete:
  *           type: boolean
  *           example: false
