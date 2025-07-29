@@ -16,6 +16,60 @@ function generateShortReceipt(prefix, userId) {
   return `${prefix}_${timestamp}_${userIdShort}`;
 }
 
+// Validate and sanitize name for Razorpay eMandate
+function validateAndSanitizeName(name) {
+  if (!name || typeof name !== 'string') {
+    throw new Error("Name is required");
+  }
+
+  // Remove extra spaces and trim
+  let sanitizedName = name.trim().replace(/\s+/g, ' ');
+  
+  // Remove special characters except spaces, hyphens, and apostrophes
+  sanitizedName = sanitizedName.replace(/[^a-zA-Z\s\-'\.]/g, '');
+  
+  // Ensure name is between 4 and 120 characters
+  if (sanitizedName.length < 4) {
+    // If name is too short, pad with last name or use a default
+    sanitizedName = sanitizedName + " User";
+  }
+  
+  if (sanitizedName.length > 120) {
+    sanitizedName = sanitizedName.substring(0, 120).trim();
+  }
+
+  // Ensure no leading/trailing special characters
+  sanitizedName = sanitizedName.replace(/^[\-'\.\s]+|[\-'\.\s]+$/g, '');
+  
+  // Final validation
+  if (sanitizedName.length < 4 || sanitizedName.length > 120) {
+    throw new Error("Invalid name format after sanitization");
+  }
+
+  return sanitizedName;
+}
+
+// Validate phone number for Razorpay
+function validatePhoneNumber(phone) {
+  if (!phone || typeof phone !== 'string') {
+    return "";
+  }
+
+  // Remove all non-digits
+  const digits = phone.replace(/\D/g, '');
+  
+  // Check if it's a valid Indian mobile number
+  if (digits.length === 10 && digits.match(/^[6-9]/)) {
+    return digits;
+  } else if (digits.length === 12 && digits.startsWith('91') && digits.substring(2).match(/^[6-9]/)) {
+    return digits.substring(2);
+  } else if (digits.length === 13 && digits.startsWith('091')) {
+    return digits.substring(3);
+  }
+  
+  return ""; // Return empty string if invalid
+}
+
 async function getRazorpayInstance() {
   try {
     const paymentConfig = await getPaymentConfig();
@@ -198,7 +252,6 @@ exports.checkoutCart = async (req, res) => {
   }
 };
 
-
 exports.verifyPayment = async (req, res) => {
   try {
     const { paymentId, orderId, signature } = req.body;
@@ -321,7 +374,6 @@ exports.verifyPayment = async (req, res) => {
   }
 };
 
-
 function calculateEndDate(subscriptionType) {
   const now = new Date();
   switch (subscriptionType) {
@@ -335,8 +387,6 @@ function calculateEndDate(subscriptionType) {
       return new Date(now.setMonth(now.getMonth() + 1));
   }
 }
-
-
 
 exports.verifyEmandate = async (req, res) => {
   try {
@@ -384,7 +434,6 @@ exports.verifyEmandate = async (req, res) => {
     return res.status(500).json({ error: "eMandate authentication failed" });
   }
 };
-
 
 exports.razorpayWebhook = async (req, res) => {
   try {
@@ -490,19 +539,36 @@ exports.getHistory = async (req, res) => {
   }
 };
 
-async function createSubscriptionPlan(amountInPaisa) {
+async function createSubscriptionPlan(amountInPaisa, planId = null) {
   const razorpay = await getRazorpayInstance();
 
-  // Check if plan already exists
-  const existingPlans = await razorpay.plans.all();
-  const existingPlan = existingPlans.items.find(
-    plan => plan.item.amount === amountInPaisa &&
-      plan.period === "monthly" &&
-      plan.interval === 1
-  );
+  // If planId is provided, try to fetch existing plan
+  if (planId) {
+    try {
+      const existingPlan = await razorpay.plans.fetch(planId);
+      if (existingPlan && existingPlan.item.amount === amountInPaisa) {
+        return existingPlan;
+      }
+    } catch (error) {
+      console.log("Plan not found, creating new one");
+    }
+  }
 
-  if (existingPlan) return existingPlan;
+  // Check if plan already exists with same amount
+  try {
+    const existingPlans = await razorpay.plans.all({ count: 100 });
+    const existingPlan = existingPlans.items.find(
+      plan => plan.item.amount === amountInPaisa &&
+        plan.period === "monthly" &&
+        plan.interval === 1
+    );
 
+    if (existingPlan) return existingPlan;
+  } catch (error) {
+    console.log("Error fetching existing plans:", error);
+  }
+
+  // Create new plan
   return await razorpay.plans.create({
     period: "monthly",
     interval: 1,
@@ -517,6 +583,76 @@ async function createSubscriptionPlan(amountInPaisa) {
       total_months: "12",
     },
   });
+}
+
+// Enhanced customer creation with better error handling
+async function createOrFetchCustomer(razorpay, user) {
+  try {
+    const sanitizedName = validateAndSanitizeName(user.name || user.username || 'User');
+    const validatedPhone = validatePhoneNumber(user.phone || user.mobile || '');
+    
+    // First try to find existing customer by email
+    try {
+      const existingCustomers = await razorpay.customers.all({ 
+        email: user.email,
+        count: 1 
+      });
+      
+      if (existingCustomers.items && existingCustomers.items.length > 0) {
+        const existingCustomer = existingCustomers.items[0];
+        console.log("Found existing customer:", existingCustomer.id);
+        return existingCustomer;
+      }
+    } catch (error) {
+      console.log("No existing customer found, creating new one");
+    }
+
+    // Create new customer with validated data
+    const customerData = {
+      name: sanitizedName,
+      email: user.email,
+    };
+
+    // Only add contact if we have a valid phone number
+    if (validatedPhone) {
+      customerData.contact = validatedPhone;
+    }
+
+    console.log("Creating customer with data:", customerData);
+    
+    const customer = await razorpay.customers.create(customerData);
+    console.log("Customer created successfully:", customer.id);
+    
+    return customer;
+  } catch (error) {
+    console.error("Customer creation error:", error);
+    
+    // If error is related to name format, try with a simpler name
+    if (error.error?.description?.includes('name') || error.error?.field === 'name') {
+      try {
+        console.log("Retrying customer creation with simplified name");
+        const simpleName = (user.name || user.username || 'User').replace(/[^a-zA-Z\s]/g, '').trim();
+        const finalName = simpleName.length >= 4 ? simpleName : 'User Account';
+        
+        const customerData = {
+          name: finalName,
+          email: user.email,
+        };
+
+        const validatedPhone = validatePhoneNumber(user.phone || user.mobile || '');
+        if (validatedPhone) {
+          customerData.contact = validatedPhone;
+        }
+
+        return await razorpay.customers.create(customerData);
+      } catch (retryError) {
+        console.error("Retry customer creation failed:", retryError);
+        throw retryError;
+      }
+    }
+    
+    throw error;
+  }
 }
 
 exports.createEmandate = async (req, res) => {
@@ -542,12 +678,16 @@ exports.createEmandate = async (req, res) => {
       if (!product) return res.status(404).json({ error: "Portfolio not found" });
 
       const yearlyPlan = product.subscriptionFee.find(fee => fee.type === "quarterly");
-      if (!yearlyPlan) return res.status(400).json({ error: "No yearly plan available" });
+      if (!yearlyPlan) return res.status(400).json({ error: "No quarterly plan available for eMandate" });
       yearlyAmount = yearlyPlan.price;
     } else if (productType === "Bundle") {
       product = await Bundle.findById(productId);
       if (!product) return res.status(404).json({ error: "Bundle not found" });
-      yearlyAmount = product.quarterlyPrice * 12;
+      
+      if (!product.quarterlyPrice || product.quarterlyPrice <= 0) {
+        return res.status(400).json({ error: "No quarterly pricing available for this bundle" });
+      }
+      yearlyAmount = product.quarterlyPrice * 4; // Quarterly * 4 = yearly
     } else {
       return res.status(400).json({ error: "Invalid product type" });
     }
@@ -556,46 +696,52 @@ exports.createEmandate = async (req, res) => {
       return res.status(400).json({ error: "Invalid subscription fee" });
     }
 
-    const monthlyAmount = yearlyAmount / 12;
+    const monthlyAmount = Math.round(yearlyAmount / 12);
+    console.log(`Creating eMandate: Yearly amount: ${yearlyAmount}, Monthly amount: ${monthlyAmount}`);
+
     const razorpay = await getRazorpayInstance();
 
-    // Find or create customer
-    let customer;
-    try {
-      const existingCustomers = await razorpay.customers.all({ email: req.user.email });
-      customer = existingCustomers.items?.[0] || await razorpay.customers.create({
-        name: req.user.name,
-        email: req.user.email,
-        contact: req.user.phone || "",
-      });
-    } catch (error) {
-      customer = await razorpay.customers.create({
-        name: req.user.name,
-        email: req.user.email,
-        contact: req.user.phone || "",
-      });
-    }
+    // Create or fetch customer with enhanced error handling
+    const customer = await createOrFetchCustomer(razorpay, req.user);
 
+    // Create subscription plan
     const plan = await createSubscriptionPlan(monthlyAmount * 100);
+    console.log("Plan created/fetched:", plan.id);
+
     const commitmentEndDate = new Date();
     commitmentEndDate.setFullYear(commitmentEndDate.getFullYear() + 1);
 
-    const razorPaySubscription = await razorpay.subscriptions.create({
+    // Create Razorpay subscription
+    const subscriptionData = {
       plan_id: plan.id,
       customer_id: customer.id,
       quantity: 1,
       total_count: 12,
-      start_at: Math.floor(Date.now() / 1000) + 300,
-      expire_by: Math.floor(commitmentEndDate / 1000),
+      start_at: Math.floor(Date.now() / 1000) + 300, // Start 5 minutes from now
+      expire_by: Math.floor(commitmentEndDate.getTime() / 1000),
       notes: {
         subscription_type: "yearly_monthly_billing",
         commitment_period: "12_months",
+        user_id: req.user._id.toString(),
+        product_type: productType,
+        product_id: productId,
       },
-    });
+    };
 
-    // Create subscription record
+    console.log("Creating Razorpay subscription with data:", subscriptionData);
+
+    const razorPaySubscription = await razorpay.subscriptions.create(subscriptionData);
+    console.log("Razorpay subscription created:", razorPaySubscription.id);
+
+    // Create subscription record(s) in database
     if (productType === "Bundle") {
       const bundle = await Bundle.findById(productId).populate("portfolios");
+      if (!bundle || !bundle.portfolios || bundle.portfolios.length === 0) {
+        return res.status(400).json({ error: "Bundle has no portfolios" });
+      }
+
+      const amountPerPortfolio = monthlyAmount / bundle.portfolios.length;
+
       for (const portfolio of bundle.portfolios) {
         await Subscription.findOneAndUpdate(
           {
@@ -607,10 +753,12 @@ exports.createEmandate = async (req, res) => {
           {
             subscriptionType: "yearlyEmandate",
             commitmentEndDate,
-            monthlyAmount: monthlyAmount / bundle.portfolios.length,
+            monthlyAmount: Math.round(amountPerPortfolio),
             eMandateId: razorPaySubscription.id,
+            isActive: false, // Will be activated when eMandate is authenticated
+            planType: "quarterly",
           },
-          { upsert: true }
+          { upsert: true, new: true }
         );
       }
     } else {
@@ -626,31 +774,48 @@ exports.createEmandate = async (req, res) => {
           commitmentEndDate,
           monthlyAmount,
           eMandateId: razorPaySubscription.id,
+          isActive: false, // Will be activated when eMandate is authenticated
+          planType: "quarterly",
         },
-        { upsert: true }
+        { upsert: true, new: true }
       );
     }
 
     res.status(201).json({
+      success: true,
       commitmentEndDate,
       setupUrl: razorPaySubscription.short_url,
       subscriptionId: razorPaySubscription.id,
       amount: monthlyAmount,
+      yearlyAmount,
       customer_id: customer.id,
-      currency: razorPaySubscription.currency,
+      currency: razorPaySubscription.currency || "INR",
       planType: "quarterly",
+      message: "eMandate created successfully. Please complete the authentication.",
     });
   } catch (err) {
     console.error("Create eMandate error:", err);
 
+    // Enhanced error handling
     if (err.error?.description) {
+      if (err.error.description.includes('name')) {
+        return res.status(400).json({ 
+          error: "Invalid name format. Please ensure your name contains only letters and is at least 4 characters long.",
+          details: err.error.description 
+        });
+      }
       return res.status(400).json({ error: err.error.description });
     }
 
-    res.status(500).json({ error: "Failed to create eMandate" });
+    if (err.message?.includes('name')) {
+      return res.status(400).json({ 
+        error: "Invalid name format. Please update your profile with a valid name (4-120 characters, letters only)." 
+      });
+    }
+
+    res.status(500).json({ error: err.message || "Failed to create eMandate" });
   }
 };
-
 
 exports.cancelSubscription = async (req, res) => {
   try {
