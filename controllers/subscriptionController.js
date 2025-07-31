@@ -1,184 +1,192 @@
-// controllers/subscriptionController.js
-
 const Razorpay = require("razorpay");
 const crypto = require("crypto");
+const mongoose = require("mongoose");
 const Subscription = require("../models/subscription");
 const Portfolio = require("../models/modelPortFolio");
 const Cart = require("../models/carts");
 const PaymentHistory = require("../models/paymenthistory");
 const Bundle = require("../models/bundle");
+const User = require("../models/user");
 const { getPaymentConfig } = require("../utils/configSettings");
-const { config } = require("dotenv");
+const logger = async () => {
+  const winston = require("winston");
+  return winston.createLogger({
+    level: "info",
+    format: winston.format.combine(
+      winston.format.timestamp({ format: "YYYY-MM-DD HH:mm:ss" }),
+      winston.format.errors({ stack: true }),
+      winston.format.splat(),
+      winston.format.json()
+    ),
+    transports: [
+      new winston.transports.Console(),
+      new winston.transports.File({
+        filename: "logs/subscription-service.log",
+        maxsize: 5 * 1024 * 1024,
+        maxFiles: 7
+      })
+    ]
+  });
+};
 
-function generateShortReceipt(prefix, userId) {
+// Utility functions
+const generateShortReceipt = (prefix, userId) => {
   const timestamp = Date.now().toString().slice(-8);
   const userIdShort = userId.toString().slice(-8);
   return `${prefix}_${timestamp}_${userIdShort}`;
-}
+};
 
-// Validate and sanitize name for Razorpay eMandate
-function validateAndSanitizeName(name) {
-  if (!name || typeof name !== 'string') {
-    throw new Error("Name is required");
-  }
-
-  // Remove extra spaces and trim
-  let sanitizedName = name.trim().replace(/\s+/g, ' ');
-  
-  // Remove special characters except spaces, hyphens, and apostrophes
-  sanitizedName = sanitizedName.replace(/[^a-zA-Z\s\-'\.]/g, '');
-  
-  // Ensure name is between 4 and 120 characters
-  if (sanitizedName.length < 4) {
-    // If name is too short, pad with last name or use a default
-    sanitizedName = sanitizedName + " User";
-  }
-  
-  if (sanitizedName.length > 120) {
-    sanitizedName = sanitizedName.substring(0, 120).trim();
-  }
-
-  // Ensure no leading/trailing special characters
+const validateAndSanitizeName = (name) => {
+  if (!name || typeof name !== 'string') return "User Account";
+  let sanitizedName = name.trim().replace(/\s+/g, ' ').replace(/[^a-zA-Z\s\-'\.]/g, '');
+  if (sanitizedName.length < 4) sanitizedName += " User";
+  if (sanitizedName.length > 120) sanitizedName = sanitizedName.substring(0, 120).trim();
   sanitizedName = sanitizedName.replace(/^[\-'\.\s]+|[\-'\.\s]+$/g, '');
-  
-  // Final validation
-  if (sanitizedName.length < 4 || sanitizedName.length > 120) {
-    throw new Error("Invalid name format after sanitization");
-  }
+  return sanitizedName.length >= 4 ? sanitizedName : "User Account";
+};
 
-  return sanitizedName;
-}
-
-// Validate phone number for Razorpay
-function validatePhoneNumber(phone) {
-  if (!phone || typeof phone !== 'string') {
-    return "";
-  }
-
-  // Remove all non-digits
+const validatePhoneNumber = (phone) => {
+  if (!phone || typeof phone !== 'string') return "";
   const digits = phone.replace(/\D/g, '');
-  
-  // Check if it's a valid Indian mobile number
-  if (digits.length === 10 && digits.match(/^[6-9]/)) {
-    return digits;
-  } else if (digits.length === 12 && digits.startsWith('91') && digits.substring(2).match(/^[6-9]/)) {
+  if (digits.length === 10 && /^[6-9]/.test(digits)) return digits;
+  if (digits.length === 12 && digits.startsWith('91') && /^[6-9]/.test(digits.substring(2))) 
     return digits.substring(2);
-  } else if (digits.length === 13 && digits.startsWith('091')) {
-    return digits.substring(3);
-  }
-  
-  return ""; // Return empty string if invalid
-}
+  if (digits.length === 13 && digits.startsWith('091')) return digits.substring(3);
+  return "";
+};
 
-async function getRazorpayInstance() {
+const getRazorpayInstance = async () => {
   try {
     const paymentConfig = await getPaymentConfig();
-
     if (!paymentConfig.key_id || !paymentConfig.key_secret) {
       throw new Error("Razorpay credentials not configured");
     }
-
     return new Razorpay({
       key_id: paymentConfig.key_id,
       key_secret: paymentConfig.key_secret,
     });
   } catch (error) {
-    console.error("Error creating Razorpay instance:", error);
+    logger.error("Error creating Razorpay instance", error);
     throw error;
   }
-}
+};
 
-async function calculateCartAmount(cart, planType = "monthly") {
-  let total = 0;
-  for (const item of cart.items) {
-    const portfolio = await Portfolio.findById(item.portfolio);
-    if (!portfolio) throw new Error("Portfolio not found");
-
-    const plan = portfolio.subscriptionFee.find((fee) => fee.type === planType);
-    if (!plan) {
-      throw new Error(
-        `${planType} plan not found for portfolio: ${portfolio.name}`
-      );
-    }
-
-    total += plan.price * item.quantity;
+const calculateEndDate = (planType) => {
+  const endDate = new Date();
+  switch (planType) {
+    case 'monthly': endDate.setMonth(endDate.getMonth() + 1); break;
+    case 'quarterly': endDate.setMonth(endDate.getMonth() + 3); break;
+    case 'yearly': endDate.setFullYear(endDate.getFullYear() + 1); break;
+    default: endDate.setMonth(endDate.getMonth() + 1);
   }
-  return total;
-}
+  return endDate;
+};
 
-// Check if user is already subscribed to a product
-async function isUserSubscribed(userId, productType, productId) {
-  const subscription = await Subscription.findOne({
+const isUserSubscribed = async (userId, productType, productId) => {
+  const now = new Date();
+  return !!await Subscription.findOne({
     user: userId,
     productType,
     productId,
-    isActive: true
+    isActive: true,
+    $or: [
+      { subscriptionType: "yearlyEmandate" },
+      { subscriptionType: "regular", expiryDate: { $gt: now } }
+    ]
   });
+};
 
-  return !!subscription;
-}
+const getProductInfo = async (productType, productId, planType) => {
+  let product, amount;
+  if (productType === "Portfolio") {
+    product = await Portfolio.findById(productId);
+    if (!product) throw new Error("Portfolio not found");
+    const subscriptionPlan = product.subscriptionFee.find(fee => fee.type === planType);
+    if (!subscriptionPlan) throw new Error(`No ${planType} plan available`);
+    amount = subscriptionPlan.price;
+  } else if (productType === "Bundle") {
+    product = await Bundle.findById(productId);
+    if (!product) throw new Error("Bundle not found");
+    switch (planType) {
+      case "monthly": amount = product.monthlyPrice; break;
+      case "quarterly": amount = product.quarterlyPrice; break;
+      case "yearly": amount = product.yearlyPrice; break;
+      default: throw new Error("Invalid plan type");
+    }
+  } else {
+    throw new Error("Invalid product type");
+  }
+  if (!amount || amount <= 0) throw new Error("Invalid subscription fee");
+  return { product, amount };
+};
 
-// Create payment order for a single product
+const createOrFetchCustomer = async (razorpay, user) => {
+  try {
+    const sanitizedName = validateAndSanitizeName(user.fullName || user.username || 'User');
+    const validatedPhone = validatePhoneNumber(user.phone || user.mobile || '');
+    
+    try {
+      const existingCustomers = await razorpay.customers.all({ email: user.email, count: 1 });
+      if (existingCustomers.items?.length > 0) return existingCustomers.items[0];
+    } catch (error) { /* Continue to create */ }
+
+    const customerData = { name: sanitizedName, email: user.email };
+    if (validatedPhone) customerData.contact = validatedPhone;
+    return await razorpay.customers.create(customerData);
+  } catch (error) {
+    const simpleName = (user.fullName || user.username || 'User').replace(/[^a-zA-Z\s]/g, '').trim();
+    const finalName = simpleName.length >= 4 ? simpleName : 'User Account';
+    return await razorpay.customers.create({
+      name: finalName,
+      email: user.email,
+      contact: validatePhoneNumber(user.phone || user.mobile || '') || undefined
+    });
+  }
+};
+
+const createSubscriptionPlan = async (amountInPaisa) => {
+  const razorpay = await getRazorpayInstance();
+  try {
+    const existingPlans = await razorpay.plans.all({ count: 100 });
+    const existingPlan = existingPlans.items.find(
+      plan => plan.item.amount === amountInPaisa && plan.period === "monthly" && plan.interval === 1
+    );
+    if (existingPlan) return existingPlan;
+  } catch (error) {
+    logger.warn("Error fetching existing plans", error);
+  }
+  return razorpay.plans.create({
+    period: "monthly",
+    interval: 1,
+    item: {
+      name: "Yearly Subscription Plan",
+      amount: amountInPaisa,
+      currency: "INR",
+      description: "Monthly billing for yearly subscription",
+    },
+    notes: { commitment: "yearly", total_months: "12" },
+  });
+};
+
+// Controller functions
 exports.createOrder = async (req, res) => {
   try {
     const { productType, productId, planType = "monthly" } = req.body;
-
     if (!productType || !productId) {
-      return res.status(400).json({ error: "productType and productId are required" });
+      return res.status(400).json({ error: "Missing required fields" });
     }
 
-    // Check if user is already subscribed
     if (await isUserSubscribed(req.user._id, productType, productId)) {
-      return res.status(409).json({
-        error: `You are already subscribed to this ${productType.toLowerCase()}`
-      });
+      return res.status(409).json({ error: "Already subscribed to this product" });
     }
 
-    let product;
-    let amount;
-
-    if (productType === "Portfolio") {
-      product = await Portfolio.findById(productId);
-      if (!product) return res.status(404).json({ error: "Portfolio not found" });
-
-      const subscriptionPlan = product.subscriptionFee.find(
-        fee => fee.type === planType
-      );
-      if (!subscriptionPlan) {
-        return res.status(400).json({ error: `No ${planType} plan available` });
-      }
-      amount = subscriptionPlan.price;
-    } else if (productType === "Bundle") {
-      product = await Bundle.findById(productId);
-      if (!product) return res.status(404).json({ error: "Bundle not found" });
-
-      switch (planType) {
-        case "monthly": amount = product.monthlyPrice; break;
-        case "quarterly": amount = product.quarterlyPrice; break;
-        case "yearly": amount = product.yearlyPrice; break;
-        default: return res.status(400).json({ error: "Invalid plan type" });
-      }
-    } else {
-      return res.status(400).json({ error: "Invalid product type" });
-    }
-
-    if (!amount || amount <= 0) {
-      return res.status(400).json({ error: "Invalid subscription fee" });
-    }
-
+    const { amount } = await getProductInfo(productType, productId, planType);
     const razorpay = await getRazorpayInstance();
-    const receipt = generateShortReceipt("ord", req.user._id);
-
     const order = await razorpay.orders.create({
       amount: Math.round(amount * 100),
       currency: "INR",
-      receipt,
-      notes: {
-        userId: req.user._id.toString(),
-        productType,
-        productId,
-        planType,
-      },
+      receipt: generateShortReceipt("ord", req.user._id),
+      notes: { userId: req.user._id.toString(), productType, productId, planType },
     });
 
     res.status(201).json({
@@ -188,51 +196,42 @@ exports.createOrder = async (req, res) => {
       planType,
     });
   } catch (err) {
-    console.error("Create order error:", err);
-
-    if (err.error?.description) {
-      return res.status(400).json({ error: err.error.description });
-    }
-
-    res.status(500).json({ error: err.message || "Failed to create order" });
+    logger.error("Create order error", err);
+    res.status(500).json({ error: err.message || "Order creation failed" });
   }
 };
 
 exports.checkoutCart = async (req, res) => {
   try {
     const { planType = "monthly" } = req.body;
-
     const cart = await Cart.findOne({ user: req.user._id });
-    if (!cart || cart.items.length === 0) {
+    if (!cart?.items?.length) {
       return res.status(400).json({ error: "Cart is empty" });
     }
 
-    // Check subscriptions for all cart items
     for (const item of cart.items) {
       if (await isUserSubscribed(req.user._id, "Portfolio", item.portfolio)) {
-        return res.status(409).json({
-          error: `You are already subscribed to portfolio: ${item.portfolio}`
-        });
+        return res.status(409).json({ error: `Already subscribed to portfolio: ${item.portfolio}` });
       }
     }
 
-    const amount = await calculateCartAmount(cart, planType);
-    if (amount <= 0) {
-      return res.status(400).json({ error: "Invalid cart amount" });
+    let total = 0;
+    for (const item of cart.items) {
+      const portfolio = await Portfolio.findById(item.portfolio);
+      if (!portfolio) throw new Error(`Portfolio ${item.portfolio} not found`);
+      const plan = portfolio.subscriptionFee.find(fee => fee.type === planType);
+      if (!plan) throw new Error(`${planType} plan not found`);
+      total += plan.price * item.quantity;
     }
 
+    if (total <= 0) return res.status(400).json({ error: "Invalid cart amount" });
+    
     const razorpay = await getRazorpayInstance();
-    const receipt = generateShortReceipt("cart", req.user._id);
-
     const order = await razorpay.orders.create({
-      amount: Math.round(amount * 100),
+      amount: Math.round(total * 100),
       currency: "INR",
-      receipt,
-      notes: {
-        userId: req.user._id.toString(),
-        cartCheckout: true,
-        planType,
-      },
+      receipt: generateShortReceipt("cart", req.user._id),
+      notes: { userId: req.user._id.toString(), cartCheckout: true, planType },
     });
 
     res.status(201).json({
@@ -242,13 +241,8 @@ exports.checkoutCart = async (req, res) => {
       planType,
     });
   } catch (err) {
-    console.error("Checkout cart error:", err);
-
-    if (err.error?.description) {
-      return res.status(400).json({ error: err.error.description });
-    }
-
-    res.status(500).json({ error: err.message || "Failed to checkout cart" });
+    logger.error("Checkout cart error", err);
+    res.status(500).json({ error: err.message || "Cart checkout failed" });
   }
 };
 
@@ -256,11 +250,10 @@ exports.verifyPayment = async (req, res) => {
   try {
     const { paymentId, orderId, signature } = req.body;
     if (!paymentId || !orderId || !signature) {
-      return res.status(400).json({ error: "Missing required payment details" });
+      return res.status(400).json({ error: "Missing payment details" });
     }
 
     const { key_secret } = await getPaymentConfig();
-
     const expectedSignature = crypto
       .createHmac("sha256", key_secret)
       .update(`${orderId}|${paymentId}`)
@@ -273,548 +266,418 @@ exports.verifyPayment = async (req, res) => {
     const razorpay = await getRazorpayInstance();
     const order = await razorpay.orders.fetch(orderId);
     const notes = order.notes || {};
+    const { productType, productId, planType = "monthly", cartCheckout } = notes;
+    const userId = req.user._id;
+    const amount = order.amount / 100;
+    const expiryDate = calculateEndDate(planType);
 
-    const { productType, productId, planType = "monthly" } = notes;
-
-    if (!productType || !productId) {
-      return res.status(400).json({ error: "Invalid order notes: missing product info" });
-    }
-
-    const subscriptionType = planType;
-
-    let product = null;
-    let portfolios = [];
-    let amount = 0;
-
-    if (productType === "Bundle") {
-      const bundle = await Bundle.findById(productId).populate("portfolios");
-      if (!bundle) return res.status(404).json({ error: "Bundle not found" });
-
-      product = bundle;
-      portfolios = bundle.portfolios || [];
-
-      if (portfolios.length === 0) {
-        return res.status(400).json({ error: "Bundle has no portfolios" });
-      }
-
-      switch (subscriptionType) {
-        case "monthly":
-          amount = bundle.monthlyPrice;
-          break;
-        case "quarterly":
-          amount = bundle.quarterlyPrice;
-          break;
-        case "yearly":
-          amount = bundle.yearlyPrice;
-          break;
-        default:
-          return res.status(400).json({ error: "Invalid subscription type" });
-      }
-    } else if (productType === "Portfolio") {
-      const portfolio = await Portfolio.findById(productId);
-      if (!portfolio) return res.status(404).json({ error: "Portfolio not found" });
-
-      product = portfolio;
-      portfolios = [portfolio];
-
-      const plan = portfolio.subscriptionFee.find(f => f.type === subscriptionType);
-      if (!plan) return res.status(400).json({ error: "Invalid plan type" });
-      amount = plan.price;
-    } else {
-      return res.status(400).json({ error: "Invalid product type" });
-    }
-
-    if (!amount || amount <= 0) {
-      return res.status(400).json({ error: `Invalid price for ${subscriptionType} subscription` });
-    }
-
-    const userId = req.user.id;
-
-    const paymentHistory = new PaymentHistory({
+    await PaymentHistory.create({
       user: userId,
       subscription: productId,
-      portfolio: portfolios[0]._id,
-      amount, paymentId,
+      amount,
+      paymentId,
       orderId,
       signature,
       status: "VERIFIED",
     });
 
-    await paymentHistory.save();
-
-    const subscription = new Subscription({
-      user: userId,
-      productType,
-      productId,
-      portfolio: portfolios[0]._id,
-      isActive: true,
-      subscriptionType: subscriptionType === "yearly" ? "yearlyEmandate" : "regular",
-      monthlyAmount: subscriptionType === "yearly" ? amount / 12 : amount,
-      commitmentEndDate: subscriptionType === "yearly" ? calculateEndDate("yearly") : null,
-    });
-
-    await subscription.recordPayment(new Date());
-
-    return res.json({
-      success: true,
-      message: "Payment verified and subscription activated successfully",
-      subscription: {
-        id: subscription._id,
-        productType,
-        productId,
-        portfolioCount: portfolios.length,
-        subscriptionType,
-        amount,
-        isActive: true
-      }
-    });
-  } catch (error) {
-    console.error("Verify payment error:", error);
-    return res.status(500).json({ error: "Payment verification failed" });
-  }
-};
-
-function calculateEndDate(subscriptionType) {
-  const now = new Date();
-  switch (subscriptionType) {
-    case 'monthly':
-      return new Date(now.setMonth(now.getMonth() + 1));
-    case 'quarterly':
-      return new Date(now.setMonth(now.getMonth() + 3));
-    case 'yearly':
-      return new Date(now.setFullYear(now.getFullYear() + 1));
-    default:
-      return new Date(now.setMonth(now.getMonth() + 1));
-  }
-}
-
-exports.verifyEmandate = async (req, res) => {
-  try {
-    const { subscription_id, signature } = req.body;
-
-    const { key_secret } = await getPaymentConfig();
-    const expectedSignature = crypto
-      .createHmac("sha256", key_secret)
-      .update(subscription_id)
-      .digest("hex");
-
-    if (expectedSignature !== signature) {
-      return res.status(400).json({ error: "Invalid signature" });
-    }
-
-    const razorpay = await getRazorpayInstance();
-    const subscription = await razorpay.subscriptions.fetch(subscription_id);
-    const customer = await razorpay.customers.fetch(subscription.customer_id);
-
-    if (customer.email !== req.user.email) {
-      return res.status(403).json({ error: "Unauthorized eMandate verification" });
-    }
-
-    if (subscription.status === "authenticated") {
-      await Subscription.updateMany(
-        { eMandateId: subscription.id },
-        {
-          isActive: true,
-          lastPaidAt: new Date(),
-        }
-      );
-
-      return res.json({
-        success: true,
-        message: "eMandate authenticated successfully",
-      });
-    }
-
-    return res.json({
-      success: false,
-      message: "eMandate not authenticated yet",
-    });
-  } catch (error) {
-    console.error("eMandate authentication error:", error);
-    return res.status(500).json({ error: "eMandate authentication failed" });
-  }
-};
-
-exports.razorpayWebhook = async (req, res) => {
-  try {
-    const paymentConfig = await getPaymentConfig();
-    const signature = req.headers["x-razorpay-signature"];
-
-    // Validate webhook signature
-    const expectedSignature = crypto
-      .createHmac("sha256", paymentConfig.RAZORPAY_KEY_ID)
-      .update(req.rawBody)
-      .digest("hex");
-
-    if (signature !== expectedSignature) {
-      return res.status(400).json({ error: "Invalid webhook signature" });
-    }
-
-    const event = req.body.event;
-    const payment = req.body.payload?.payment?.entity;
-
-    switch (event) {
-      case "payment.captured":
-        const orderId = payment.order_id;
-        const razorpay = await getRazorpayInstance();
-        const order = await razorpay.orders.fetch(orderId);
-
-        if (order.notes?.cartCheckout) {
-          const cart = await Cart.findOne({ user: order.notes.userId });
-          if (cart) {
-            for (const item of cart.items) {
-              await Subscription.findOneAndUpdate(
-                {
-                  user: order.notes.userId,
-                  productType: "Portfolio",
-                  productId: item.portfolio,
-                },
-                {
-                  isActive: true,
-                  lastPaidAt: new Date(),
-                  missedCycles: 0,
-                },
-                { upsert: true }
-              );
-            }
-            cart.items = [];
-            await cart.save();
-          }
-        } else {
+    if (cartCheckout) {
+      const cart = await Cart.findOne({ user: userId });
+      if (cart) {
+        for (const item of cart.items) {
           await Subscription.findOneAndUpdate(
+            { user: userId, productType: "Portfolio", productId: item.portfolio },
             {
-              user: order.notes.userId,
-              productType: order.notes.productType,
-              productId: order.notes.productId,
-            },
-            {
+              user: userId,
+              productType: "Portfolio",
+              productId: item.portfolio,
+              portfolio: item.portfolio,
               isActive: true,
-              lastPaidAt: new Date(),
-              missedCycles: 0,
+              subscriptionType: "regular",
+              planType,
+              expiryDate,
+              lastPaidAt: new Date()
             },
-            { upsert: true }
+            { upsert: true, new: true }
           );
         }
-
-        await PaymentHistory.create({
-          user: order.notes.userId,
-          orderId,
-          paymentId: payment.id,
-          amount: payment.amount,
-          currency: payment.currency,
-          status: payment.status,
-        });
-        break;
-
-      // Handle other subscription events
-      case "subscription.activated":
-      case "subscription.charged":
-      case "subscription.cancelled":
-      case "subscription.completed":
-      case "subscription.paused":
-      case "subscription.resumed":
-        console.log(`Handled ${event} event`);
-        break;
-
-      default:
-        console.log(`Unhandled Razorpay event: ${event}`);
+        await Cart.findOneAndUpdate({ user: userId }, { $set: { items: [] } });
+      }
+      return res.json({ success: true, message: "Cart payment verified" });
     }
 
-    res.status(200).json({ status: "ok" });
-  } catch (err) {
-    console.error("Webhook error:", err);
-    res.status(400).json({ error: "Webhook processing failed" });
+    if (productType === "Bundle") {
+      const bundle = await Bundle.findById(productId).populate("portfolios");
+      if (!bundle?.portfolios?.length) {
+        return res.status(400).json({ error: "Bundle has no portfolios" });
+      }
+
+      for (const portfolio of bundle.portfolios) {
+        await Subscription.findOneAndUpdate(
+          { user: userId, productType: "Portfolio", productId: portfolio._id },
+          {
+            user: userId,
+            productType: "Portfolio",
+            productId: portfolio._id,
+            portfolio: portfolio._id,
+            isActive: true,
+            subscriptionType: "regular",
+            planType,
+            expiryDate,
+            lastPaidAt: new Date()
+          },
+          { upsert: true, new: true }
+        );
+      }
+      return res.json({ success: true, message: "Bundle payment verified" });
+    } 
+    
+    if (productType === "Portfolio") {
+      await Subscription.findOneAndUpdate(
+        { user: userId, productType, productId },
+        {
+          user: userId,
+          productType,
+          productId,
+          portfolio: productId,
+          isActive: true,
+          subscriptionType: "regular",
+          planType,
+          expiryDate,
+          lastPaidAt: new Date()
+        },
+        { upsert: true, new: true }
+      );
+      return res.json({ success: true, message: "Payment verified" });
+    }
+    
+    return res.status(400).json({ error: "Invalid product type" });
+  } catch (error) {
+    logger.error("Payment verification error", error);
+    res.status(500).json({ error: "Payment verification failed" });
   }
 };
-
-exports.getHistory = async (req, res) => {
-  try {
-    const payments = await PaymentHistory.find({ user: req.user._id })
-      .sort("-createdAt")
-      .lean();
-    res.json(payments);
-  } catch (err) {
-    console.error("Get history error:", err);
-    res.status(500).json({ error: "Failed to get payment history" });
-  }
-};
-
-async function createSubscriptionPlan(amountInPaisa, planId = null) {
-  const razorpay = await getRazorpayInstance();
-
-  // If planId is provided, try to fetch existing plan
-  if (planId) {
-    try {
-      const existingPlan = await razorpay.plans.fetch(planId);
-      if (existingPlan && existingPlan.item.amount === amountInPaisa) {
-        return existingPlan;
-      }
-    } catch (error) {
-      console.log("Plan not found, creating new one");
-    }
-  }
-
-  // Check if plan already exists with same amount
-  try {
-    const existingPlans = await razorpay.plans.all({ count: 100 });
-    const existingPlan = existingPlans.items.find(
-      plan => plan.item.amount === amountInPaisa &&
-        plan.period === "monthly" &&
-        plan.interval === 1
-    );
-
-    if (existingPlan) return existingPlan;
-  } catch (error) {
-    console.log("Error fetching existing plans:", error);
-  }
-
-  // Create new plan
-  return await razorpay.plans.create({
-    period: "monthly",
-    interval: 1,
-    item: {
-      name: "Yearly Subscription Plan",
-      amount: amountInPaisa,
-      currency: "INR",
-      description: "Monthly billing for yearly subscription",
-    },
-    notes: {
-      commitment: "yearly",
-      total_months: "12",
-    },
-  });
-}
-
-// Enhanced customer creation with better error handling
-async function createOrFetchCustomer(razorpay, user) {
-  try {
-    const sanitizedName = validateAndSanitizeName(user.name || user.username || 'User');
-    const validatedPhone = validatePhoneNumber(user.phone || user.mobile || '');
-    
-    // First try to find existing customer by email
-    try {
-      const existingCustomers = await razorpay.customers.all({ 
-        email: user.email,
-        count: 1 
-      });
-      
-      if (existingCustomers.items && existingCustomers.items.length > 0) {
-        const existingCustomer = existingCustomers.items[0];
-        console.log("Found existing customer:", existingCustomer.id);
-        return existingCustomer;
-      }
-    } catch (error) {
-      console.log("No existing customer found, creating new one");
-    }
-
-    // Create new customer with validated data
-    const customerData = {
-      name: sanitizedName,
-      email: user.email,
-    };
-
-    // Only add contact if we have a valid phone number
-    if (validatedPhone) {
-      customerData.contact = validatedPhone;
-    }
-
-    console.log("Creating customer with data:", customerData);
-    
-    const customer = await razorpay.customers.create(customerData);
-    console.log("Customer created successfully:", customer.id);
-    
-    return customer;
-  } catch (error) {
-    console.error("Customer creation error:", error);
-    
-    // If error is related to name format, try with a simpler name
-    if (error.error?.description?.includes('name') || error.error?.field === 'name') {
-      try {
-        console.log("Retrying customer creation with simplified name");
-        const simpleName = (user.name || user.username || 'User').replace(/[^a-zA-Z\s]/g, '').trim();
-        const finalName = simpleName.length >= 4 ? simpleName : 'User Account';
-        
-        const customerData = {
-          name: finalName,
-          email: user.email,
-        };
-
-        const validatedPhone = validatePhoneNumber(user.phone || user.mobile || '');
-        if (validatedPhone) {
-          customerData.contact = validatedPhone;
-        }
-
-        return await razorpay.customers.create(customerData);
-      } catch (retryError) {
-        console.error("Retry customer creation failed:", retryError);
-        throw retryError;
-      }
-    }
-    
-    throw error;
-  }
-}
 
 exports.createEmandate = async (req, res) => {
   try {
     const { productType, productId } = req.body;
-
+    const userId = req.user._id;
     if (!productType || !productId) {
-      return res.status(400).json({ error: "productType and productId are required" });
+      return res.status(400).json({ error: "Missing required fields" });
     }
 
-    // Check if user is already subscribed
-    if (await isUserSubscribed(req.user._id, productType, productId)) {
-      return res.status(409).json({
-        error: `You are already subscribed to this ${productType.toLowerCase()}`
-      });
+    if (await isUserSubscribed(userId, productType, productId)) {
+      return res.status(409).json({ error: "Already subscribed to this product" });
     }
 
-    let product;
-    let yearlyAmount;
-
+    let product, yearlyAmount;
     if (productType === "Portfolio") {
       product = await Portfolio.findById(productId);
-      if (!product) return res.status(404).json({ error: "Portfolio not found" });
-
-      const yearlyPlan = product.subscriptionFee.find(fee => fee.type === "quarterly");
-      if (!yearlyPlan) return res.status(400).json({ error: "No quarterly plan available for eMandate" });
+      if (!product) throw new Error("Portfolio not found");
+      const yearlyPlan = product.subscriptionFee.find(fee => fee.type === "yearly");
+      if (!yearlyPlan) throw new Error("No yearly plan available");
       yearlyAmount = yearlyPlan.price;
     } else if (productType === "Bundle") {
-      product = await Bundle.findById(productId);
-      if (!product) return res.status(404).json({ error: "Bundle not found" });
-      
-      if (!product.quarterlyPrice || product.quarterlyPrice <= 0) {
-        return res.status(400).json({ error: "No quarterly pricing available for this bundle" });
-      }
-      yearlyAmount = product.quarterlyPrice * 4; // Quarterly * 4 = yearly
+      product = await Bundle.findById(productId).populate("portfolios");
+      if (!product) throw new Error("Bundle not found");
+      if (!product.yearlyPrice) throw new Error("No yearly pricing available");
+      yearlyAmount = product.yearlyPrice;
     } else {
-      return res.status(400).json({ error: "Invalid product type" });
+      throw new Error("Invalid product type");
     }
 
-    if (!yearlyAmount || yearlyAmount <= 0) {
-      return res.status(400).json({ error: "Invalid subscription fee" });
-    }
-
+    if (!yearlyAmount || yearlyAmount <= 0) throw new Error("Invalid subscription fee");
     const monthlyAmount = Math.round(yearlyAmount / 12);
-    console.log(`Creating eMandate: Yearly amount: ${yearlyAmount}, Monthly amount: ${monthlyAmount}`);
 
     const razorpay = await getRazorpayInstance();
-
-    // Create or fetch customer with enhanced error handling
     const customer = await createOrFetchCustomer(razorpay, req.user);
-
-    // Create subscription plan
     const plan = await createSubscriptionPlan(monthlyAmount * 100);
-    console.log("Plan created/fetched:", plan.id);
 
+    const startDate = new Date();
     const commitmentEndDate = new Date();
-    commitmentEndDate.setFullYear(commitmentEndDate.getFullYear() + 1);
+    commitmentEndDate.setFullYear(startDate.getFullYear() + 1);
 
-    // Create Razorpay subscription
     const subscriptionData = {
       plan_id: plan.id,
       customer_id: customer.id,
       quantity: 1,
       total_count: 12,
-      start_at: Math.floor(Date.now() / 1000) + 300, // Start 5 minutes from now
+      start_at: Math.floor(startDate.getTime() / 1000) + 300,
       expire_by: Math.floor(commitmentEndDate.getTime() / 1000),
       notes: {
         subscription_type: "yearly_monthly_billing",
         commitment_period: "12_months",
-        user_id: req.user._id.toString(),
+        user_id: userId.toString(),
         product_type: productType,
         product_id: productId,
+        created_at: new Date().toISOString()
       },
     };
 
-    console.log("Creating Razorpay subscription with data:", subscriptionData);
-
     const razorPaySubscription = await razorpay.subscriptions.create(subscriptionData);
-    console.log("Razorpay subscription created:", razorPaySubscription.id);
 
-    // Create subscription record(s) in database
-    if (productType === "Bundle") {
-      const bundle = await Bundle.findById(productId).populate("portfolios");
-      if (!bundle || !bundle.portfolios || bundle.portfolios.length === 0) {
-        return res.status(400).json({ error: "Bundle has no portfolios" });
-      }
-
-      const amountPerPortfolio = monthlyAmount / bundle.portfolios.length;
-
-      for (const portfolio of bundle.portfolios) {
+    try {
+      if (productType === "Bundle" && product.portfolios?.length) {
+        const monthlyPerPortfolio = Math.round(monthlyAmount / product.portfolios.length);
+        for (const portfolio of product.portfolios) {
+          await Subscription.findOneAndUpdate(
+            { user: userId, productType: "Portfolio", productId: portfolio._id },
+            {
+              user: userId,
+              productType: "Portfolio",
+              productId: portfolio._id,
+              portfolio: portfolio._id,
+              subscriptionType: "yearlyEmandate",
+              commitmentEndDate,
+              monthlyAmount: monthlyPerPortfolio,
+              eMandateId: razorPaySubscription.id,
+              isActive: false,
+              planType: "yearly",
+              bundleId: productId,
+              bundleCategory: product.category,
+              status: "pending_authentication"
+            },
+            { upsert: true, new: true }
+          );
+        }
+      } else {
         await Subscription.findOneAndUpdate(
+          { user: userId, productType, productId },
           {
-            user: req.user._id,
-            productType: "Portfolio",
-            productId: portfolio._id,
-            portfolio: portfolio._id,
-          },
-          {
+            user: userId,
+            productType,
+            productId,
+            portfolio: productType === "Portfolio" ? productId : null,
             subscriptionType: "yearlyEmandate",
             commitmentEndDate,
-            monthlyAmount: Math.round(amountPerPortfolio),
+            monthlyAmount,
             eMandateId: razorPaySubscription.id,
-            isActive: false, // Will be activated when eMandate is authenticated
-            planType: "quarterly",
+            isActive: false,
+            planType: "yearly",
+            status: "pending_authentication"
           },
           { upsert: true, new: true }
         );
       }
-    } else {
-      await Subscription.findOneAndUpdate(
-        {
-          user: req.user._id,
-          productType,
-          productId,
-          portfolio: productId,
-        },
-        {
-          subscriptionType: "yearlyEmandate",
-          commitmentEndDate,
-          monthlyAmount,
-          eMandateId: razorPaySubscription.id,
-          isActive: false, // Will be activated when eMandate is authenticated
-          planType: "quarterly",
-        },
-        { upsert: true, new: true }
-      );
+    } catch (dbError) {
+      try { await razorpay.subscriptions.cancel(razorPaySubscription.id); } 
+      catch (cancelError) { logger.error("Failed to clean up subscription", cancelError); }
+      throw dbError;
     }
 
     res.status(201).json({
       success: true,
-      commitmentEndDate,
+      commitmentEndDate: commitmentEndDate.toISOString().split('T')[0],
       setupUrl: razorPaySubscription.short_url,
       subscriptionId: razorPaySubscription.id,
       amount: monthlyAmount,
       yearlyAmount,
-      customer_id: customer.id,
-      currency: razorPaySubscription.currency || "INR",
-      planType: "quarterly",
-      message: "eMandate created successfully. Please complete the authentication.",
+      customerId: customer.id,
+      currency: "INR",
+      nextSteps: "Complete authentication via Razorpay",
+      status: "pending_authentication"
     });
   } catch (err) {
-    console.error("Create eMandate error:", err);
-
-    // Enhanced error handling
-    if (err.error?.description) {
-      if (err.error.description.includes('name')) {
-        return res.status(400).json({ 
-          error: "Invalid name format. Please ensure your name contains only letters and is at least 4 characters long.",
-          details: err.error.description 
-        });
-      }
-      return res.status(400).json({ error: err.error.description });
-    }
-
-    if (err.message?.includes('name')) {
-      return res.status(400).json({ 
-        error: "Invalid name format. Please update your profile with a valid name (4-120 characters, letters only)." 
-      });
-    }
-
-    res.status(500).json({ error: err.message || "Failed to create eMandate" });
+    logger.error("eMandate creation failed", err);
+    res.status(500).json({ error: err.message || "eMandate creation failed" });
   }
+};
+
+exports.verifyEmandate = async (req, res) => {
+  try {
+    const { subscription_id } = req.body;
+    if (!subscription_id) return res.status(400).json({ error: "Subscription ID required" });
+
+    const razorpay = await getRazorpayInstance();
+    const userId = req.user._id;
+
+    // Try fetching subscription status with retry logic
+    let razorpaySubscription;
+    let status;
+    let retryCount = 0;
+    const MAX_RETRIES = 3;
+    const RETRY_DELAY = 2000; // 2 seconds
+    
+    do {
+      try {
+        razorpaySubscription = await razorpay.subscriptions.fetch(subscription_id);
+        status = razorpaySubscription.status;
+        
+        // Break early if we have final status
+        if (status !== "pending") break;
+        
+        // Wait before retrying
+        await new Promise(resolve => setTimeout(resolve, RETRY_DELAY));
+        retryCount++;
+      } catch (error) {
+        logger.error("Razorpay fetch error", error);
+        return res.status(500).json({ error: "Failed to verify subscription" });
+      }
+    } while (status === "pending" && retryCount < MAX_RETRIES);
+
+    // Verify user ownership
+    if (!razorpaySubscription.notes?.user_id || 
+        razorpaySubscription.notes.user_id !== userId.toString()) {
+      return res.status(403).json({ error: "Unauthorized operation" });
+    }
+
+    const existingSubscriptions = await Subscription.find({ 
+      user: userId, 
+      eMandateId: subscription_id 
+    });
+    
+    if (!existingSubscriptions.length) {
+      return res.status(404).json({ error: "No subscriptions found" });
+    }
+
+    // Handle different status cases
+    let updateData = {};
+    let shouldActivate = false;
+    let responseMessage = "";
+    let activationCount = 0;
+
+    switch (status) {
+      case "authenticated":
+      case "active":
+        // Activate all subscriptions
+        updateData = { 
+          isActive: true, 
+          lastPaidAt: new Date(), 
+          missedCycles: 0,
+          status: "active"
+        };
+        
+        const updateResult = await Subscription.updateMany(
+          { eMandateId: subscription_id, user: userId },
+          updateData
+        );
+        
+        activationCount = updateResult.modifiedCount;
+        shouldActivate = true;
+        responseMessage = `eMandate ${status === "authenticated" ? "authenticated" : "active"}. Activated ${activationCount} subscriptions.`;
+        break;
+        
+      case "pending":
+        // Still pending after retries
+        responseMessage = "Authentication still pending. Please try again later.";
+        break;
+        
+      case "halted":
+      case "cancelled":
+      case "expired":
+        // Deactivate subscriptions
+        await Subscription.updateMany(
+          { eMandateId: subscription_id, user: userId },
+          { isActive: false, status }
+        );
+        responseMessage = `Subscription ${status}.`;
+        break;
+        
+      default:
+        responseMessage = `Subscription in ${status} state.`;
+    }
+
+    // Update user premium status if needed
+    if (shouldActivate && existingSubscriptions.some(sub => sub.bundleCategory === "premium")) {
+      await User.findByIdAndUpdate(userId, { hasPremium: true });
+    }
+
+    res.json({
+      success: shouldActivate,
+      message: responseMessage,
+      subscriptionStatus: status,
+      activatedSubscriptions: activationCount,
+      requiresAction: status === "pending"
+    });
+  } catch (error) {
+    logger.error("eMandate verification failed", error);
+    res.status(500).json({ error: "eMandate verification failed" });
+  }
+};
+exports.getUserSubscriptions = async (req, res) => {
+  try {
+    const subscriptions = await Subscription.find({ user: req.user._id })
+      .populate('productId')
+      .populate('portfolio')
+      .sort({ createdAt: -1 });
+
+ await Promise.all(subscriptions.map(async (sub) => {
+      await checkSubscriptionExpiry(sub);
+    }));
+
+    const groupedSubscriptions = {};
+    const individualSubscriptions = [];
+
+    subscriptions.forEach(sub => {
+      if (sub.eMandateId && sub.subscriptionType === 'yearlyEmandate') {
+        if (!groupedSubscriptions[sub.eMandateId]) {
+          groupedSubscriptions[sub.eMandateId] = {
+            eMandateId: sub.eMandateId,
+            subscriptionType: sub.subscriptionType,
+            isActive: sub.isActive,
+            commitmentEndDate: sub.commitmentEndDate,
+            monthlyAmount: 0,
+            portfolios: [],
+            bundleId: sub.bundleId,
+            bundleCategory: sub.bundleCategory
+          };
+        }
+        groupedSubscriptions[sub.eMandateId].monthlyAmount += sub.monthlyAmount || 0;
+        groupedSubscriptions[sub.eMandateId].portfolios.push(sub);
+      } else {
+        individualSubscriptions.push(sub);
+      }
+    });
+
+    res.json({
+      success: true,
+      bundleSubscriptions: Object.values(groupedSubscriptions),
+      individualSubscriptions,
+      totalSubscriptions: subscriptions.length
+    });
+  } catch (error) {
+    logger.error("Fetch subscriptions error", error);
+    res.status(500).json({ error: "Failed to fetch subscriptions" });
+  }
+};
+
+const checkSubscriptionExpiry = async (subscription) => {
+  const now = new Date();
+  
+  // Regular subscriptions (one-time payments)
+  if (subscription.subscriptionType === "regular") {
+    if (subscription.expiryDate < now) {
+      await Subscription.findByIdAndUpdate(subscription._id, { isActive: false });
+      return true;
+    }
+    return false;
+  }
+  
+  // eMandate subscriptions (yearly commitment)
+  if (subscription.subscriptionType === "yearlyEmandate") {
+    // Commitment period ended
+    if (subscription.commitmentEndDate < now) {
+      await Subscription.findByIdAndUpdate(subscription._id, { isActive: false });
+      return true;
+    }
+    
+    // Check payment status (if we have a Razorpay ID)
+    if (subscription.eMandateId) {
+      try {
+        const razorpay = await getRazorpayInstance();
+        const razorpaySub = await razorpay.subscriptions.fetch(subscription.eMandateId);
+        
+        if (["cancelled", "halted", "expired"].includes(razorpaySub.status)) {
+          await Subscription.findByIdAndUpdate(subscription._id, { isActive: false });
+          return true;
+        }
+      } catch (error) {
+        logger.error("Razorpay status check failed", error);
+      }
+    }
+  }
+  
+  return false;
 };
 
 exports.cancelSubscription = async (req, res) => {
@@ -824,21 +687,14 @@ exports.cancelSubscription = async (req, res) => {
       _id: req.params.subscriptionId,
     });
 
-    if (!subscription) {
-      return res.status(404).json({ error: "Subscription not found" });
-    }
+    if (!subscription) return res.status(404).json({ error: "Subscription not found" });
 
-    // Check if subscription can be cancelled
     if (subscription.subscriptionType === "yearlyEmandate") {
       const now = new Date();
       if (subscription.commitmentEndDate && now < subscription.commitmentEndDate) {
-        return res.status(400).json({
-          error: "Cannot cancel during yearly commitment period",
-          commitmentEndDate: subscription.commitmentEndDate,
-        });
+        return res.status(400).json({ error: "Cannot cancel during commitment period" });
       }
 
-      // Cancel Razorpay subscription
       if (subscription.eMandateId) {
         try {
           const razorpay = await getRazorpayInstance();
@@ -846,26 +702,148 @@ exports.cancelSubscription = async (req, res) => {
             cancel_at_cycle_end: false,
           });
         } catch (error) {
-          console.error("Error cancelling Razorpay subscription:", error);
+          logger.error("Razorpay cancellation error", error);
         }
       }
     }
 
-    // Cancel all subscriptions with the same eMandateId
-    await Subscription.updateMany(
+    const updateResult = await Subscription.updateMany(
       {
         user: req.user._id,
-        eMandateId: subscription.eMandateId
+        $or: [{ eMandateId: subscription.eMandateId }, { _id: subscription._id }]
       },
       { isActive: false }
     );
 
+    if (subscription.bundleCategory === "premium") {
+      const hasActivePremium = await Subscription.exists({
+        user: req.user._id,
+        bundleCategory: "premium",
+        isActive: true
+      });
+      if (!hasActivePremium) await User.findByIdAndUpdate(req.user._id, { hasPremium: false });
+    }
+
     res.json({
       success: true,
-      message: "Subscription cancelled successfully",
+      message: "Subscription cancelled",
+      cancelledSubscriptions: updateResult.modifiedCount
     });
   } catch (err) {
-    console.error("Cancel subscription error:", err);
+    logger.error("Cancel subscription error", err);
     res.status(500).json({ error: "Failed to cancel subscription" });
+  }
+};
+
+exports.cleanupOrphanedSubscriptions = async (req, res) => {
+  try {
+    const userId = req.user._id;
+    const orphanedSubscriptions = await Subscription.find({
+      user: userId,
+      isActive: false,
+      lastPaidAt: null,
+      eMandateId: { $exists: false },
+      createdAt: { $lt: new Date(Date.now() - 24 * 60 * 60 * 1000) }
+    });
+
+    if (!orphanedSubscriptions.length) {
+      return res.json({ success: true, message: "No orphaned subscriptions" });
+    }
+    
+    const deleteResult = await Subscription.deleteMany({
+      _id: { $in: orphanedSubscriptions.map(s => s._id) }
+    });
+
+    res.json({
+      success: true,
+      deletedCount: deleteResult.deletedCount,
+      message: `Cleaned up ${deleteResult.deletedCount} subscriptions`
+    });
+  } catch (error) {
+    logger.error("Cleanup error", error);
+    res.status(500).json({ error: "Cleanup failed" });
+  }
+};
+
+exports.getHistory = async (req, res) => {
+  try {
+    const paymentHistory = await PaymentHistory.find({ user: req.user._id })
+      .sort({ createdAt: -1 })
+      .populate('subscription')
+      .populate('user', 'fullName email');
+    res.json({ success: true, paymentHistory });
+  } catch (error) {
+    logger.error("Payment history error", error);
+    res.status(500).json({ error: "Failed to get history" });
+  }
+};
+
+exports.razorpayWebhook = async (req, res) => {
+  try {
+    const { event, payload } = req.body;
+    const razorpay = await getRazorpayInstance();
+
+    if (event === "subscription.activated") {
+      const subscriptionId = payload.subscription.id;
+      const razorpaySubscription = await razorpay.subscriptions.fetch(subscriptionId);
+      const userId = razorpaySubscription.notes?.user_id;
+      
+      if (!userId) return res.status(400).json({ error: "User ID missing" });
+
+      await Subscription.updateMany(
+        { eMandateId: subscriptionId, user: userId },
+        { 
+          isActive: true, 
+          lastPaidAt: new Date(),
+          missedCycles: 0 
+        }
+      );
+
+      const subscriptions = await Subscription.find({ eMandateId: subscriptionId, user: userId });
+      if (subscriptions.some(sub => sub.bundleCategory === "premium")) {
+        await User.findByIdAndUpdate(userId, { hasPremium: true });
+      }
+    } 
+    else if (event === "subscription.charged") {
+      const { subscription_id, payment_id, amount } = payload;
+      const subscriptions = await Subscription.find({ eMandateId: subscription_id });
+      
+      if (subscriptions.length) {
+        const userId = subscriptions[0].user;
+        const paymentAmount = amount / 100 / subscriptions.length;
+        
+        await Promise.all(subscriptions.map(sub => 
+          PaymentHistory.create({
+            user: userId,
+            subscription: sub._id,
+            amount: paymentAmount,
+            paymentId: payment_id,
+            status: "completed"
+          })
+        ));
+        
+        await Subscription.updateMany(
+          { eMandateId: subscription_id, user: userId },
+          { lastPaidAt: new Date(), $inc: { paymentsCount: 1 } }
+        );
+      }
+    }
+    else if (event === "subscription.cancelled") {
+      const subscriptionId = payload.subscription.id;
+      const subscriptions = await Subscription.find({ eMandateId: subscriptionId });
+      
+      if (subscriptions.length) {
+        const userId = subscriptions[0].user;
+        await Subscription.updateMany(
+          { eMandateId: subscriptionId, user: userId },
+          { isActive: false }
+        );
+      }
+    }
+
+    res.status(200).json({ success: true, message: "Webhook processed" });
+  } catch (error) {
+    logger.error("Webhook processing error", error);
+    res.status(500).json({ error: "Webhook processing failed" });
   }
 };

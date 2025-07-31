@@ -3,10 +3,11 @@ const mongoose = require('mongoose');
 const { Schema } = mongoose;
 
 /**
- * Records a daily snapshot of an entire portfolio’s performance:
+ * Records a daily snapshot of an entire portfolio's performance:
  * - portfolio: ObjectId of the Portfolio
  * - date: timestamp of the snapshot
- * - portfolioValue: total value across all holdings (baseSum + net change)
+ * - dateOnly: date without time (for unique daily constraint)
+ * - portfolioValue: total value across all holdings
  * - cashRemaining: updated cash buffer after threshold enforcement
  */
 const PriceLogSchema = new Schema({
@@ -20,6 +21,10 @@ const PriceLogSchema = new Schema({
     required: true,
     default: () => new Date()
   },
+  dateOnly: {
+    type: Date,
+    required: true
+  },
   portfolioValue: {
     type: Number,
     required: true,
@@ -29,38 +34,42 @@ const PriceLogSchema = new Schema({
     type: Number,
     required: true,
     min: 0
+  },
+  updateCount: {
+    type: Number,
+    default: 0,
+    min: 0
   }
 }, { timestamps: true });
 
+// Indexes
 PriceLogSchema.index({ portfolio: 1, date: 1 });  // For time-based queries
 PriceLogSchema.index({ date: 1 });                // For global historical analysis
 
+// Unique constraint: one log per portfolio per day
 PriceLogSchema.index(
   { 
     portfolio: 1, 
     dateOnly: 1 
   }, 
   { 
-    unique: true,
-    sparse: true
+    unique: true
   }
 );
 
-PriceLogSchema.virtual('dateOnly').get(function() {
-  if (this.date) {
-    const d = new Date(this.date);
-    return new Date(d.getFullYear(), d.getMonth(), d.getDate());
-  }
-  return null;
-});
-
-// Pre-save middleware to set dateOnly field
+// Pre-save middleware to automatically set dateOnly
 PriceLogSchema.pre('save', function(next) {
-  if (this.date) {
+  if (this.date && !this.dateOnly) {
     const d = new Date(this.date);
     this.dateOnly = new Date(d.getFullYear(), d.getMonth(), d.getDate());
   }
   next();
 });
+
+// Static method to get start of day
+PriceLogSchema.statics.getStartOfDay = function(date = new Date()) {
+  const d = new Date(date);
+  return new Date(d.getFullYear(), d.getMonth(), d.getDate());
+};
 
 module.exports = mongoose.model('PriceLog', PriceLogSchema);

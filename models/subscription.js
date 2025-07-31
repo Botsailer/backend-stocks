@@ -89,6 +89,12 @@ const SubscriptionSchema = new Schema(
       ref: "Portfolio",
       required: true,
     },
+     bundleCategory: {
+      type: String,
+      enum: ["basic", "premium"],
+      default: null
+    }
+  ,
     lastPaidAt: {
       type: Date,
       default: null,

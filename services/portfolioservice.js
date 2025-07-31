@@ -61,43 +61,109 @@ exports.updatePortfolioCurrentValue = async (portfolio, newValue) => {
   }
 };
 
-// Log portfolio value with zero-based gain tracking
 exports.logPortfolioValue = async (portfolio) => {
   try {
     const portfolioValue = await this.calculatePortfolioValue(portfolio);
     await this.updatePortfolioCurrentValue(portfolio, portfolioValue);
     
-    const today = new Date();
-    const startOfDay = new Date(today.getFullYear(), today.getMonth(), today.getDate());
-    const endOfDay = new Date(startOfDay.getTime() + 24 * 60 * 60 * 1000 - 1);
+    const now = new Date();
+    const startOfDay = PriceLog.getStartOfDay(now);
     
+    // Check if record already exists today
+    const existingLog = await PriceLog.findOne({
+      portfolio: portfolio._id,
+      dateOnly: startOfDay
+    });
+    
+    const isUpdate = !!existingLog;
+    const previousValue = existingLog ? existingLog.portfolioValue : null;
+    
+    // Use findOneAndUpdate with upsert to ensure only ONE record per day
     const priceLog = await PriceLog.findOneAndUpdate(
       {
         portfolio: portfolio._id,
-        date: {
-          $gte: startOfDay,
-          $lt: endOfDay
-        }
+        dateOnly: startOfDay
       },
       {
         $set: {
           portfolioValue: portfolioValue,
           cashRemaining: portfolio.cashBalance,
-          date: new Date()
+          date: now, // Always update to latest time
+          dateOnly: startOfDay
         },
-        $setOnInsert: {
-          portfolio: portfolio._id
+        $inc: {
+          updateCount: 1 // Track how many times updated today
         }
       },
       {
         upsert: true,
-        new: true
+        new: true,
+        runValidators: true,
+        setDefaultsOnInsert: true
       }
     );
     
-    return priceLog;
+    // Enhanced logging
+    if (isUpdate) {
+      const valueChange = portfolioValue - previousValue;
+      const changeSymbol = valueChange > 0 ? '📈' : valueChange < 0 ? '📉' : '➡️';
+      logger.info(
+        `🔄 Portfolio "${portfolio.name}" UPDATED: ₹${portfolioValue} ` +
+        `(${changeSymbol} ${valueChange >= 0 ? '+' : ''}${valueChange.toFixed(2)} from earlier today)`
+      );
+    } else {
+      logger.info(`📊 Portfolio "${portfolio.name}" LOGGED: ₹${portfolioValue} (new daily record)`);
+    }
+    
+    return {
+      log: priceLog,
+      isUpdate,
+      previousValue,
+      valueChange: isUpdate ? portfolioValue - previousValue : 0
+    };
+    
   } catch (error) {
-    logger.error(`Log value failed: ${error.message}`);
+    logger.error(`Log value failed for portfolio ${portfolio._id}: ${error.message}`);
+    throw error;
+  }
+};
+
+// Enhanced daily logging with detailed results
+exports.logAllPortfoliosDaily = async () => {
+  try {
+    const portfolios = await Portfolio.find();
+    const results = [];
+    let totalCreated = 0;
+    let totalUpdated = 0;
+    
+    for (const portfolio of portfolios) {
+      try {
+        const result = await this.logPortfolioValue(portfolio);
+        
+        if (result.isUpdate) totalUpdated++;
+        else totalCreated++;
+        
+        results.push({
+          portfolio: portfolio.name,
+          status: 'success',
+          value: result.log.portfolioValue,
+          action: result.isUpdate ? 'updated' : 'created',
+          valueChange: result.valueChange
+        });
+      } catch (error) {
+        results.push({
+          portfolio: portfolio.name,
+          status: 'failed',
+          error: error.message
+        });
+      }
+    }
+    
+    logger.info(`📋 Daily Summary: ${totalCreated} new records, ${totalUpdated} updates`);
+    
+    return results;
+  } catch (error) {
+    logger.error(`Daily log failed: ${error.message}`);
     throw error;
   }
 };
@@ -186,35 +252,6 @@ exports.getPortfolioHistory = async (portfolioId, period = '1m') => {
   }
 };
 
-// Process all portfolios daily
-exports.logAllPortfoliosDaily = async () => {
-  try {
-    const portfolios = await Portfolio.find();
-    const results = [];
-    
-    for (const portfolio of portfolios) {
-      try {
-        const log = await this.logPortfolioValue(portfolio);
-        results.push({
-          portfolio: portfolio.name,
-          status: 'success',
-          value: log.portfolioValue
-        });
-      } catch (error) {
-        results.push({
-          portfolio: portfolio.name,
-          status: 'failed',
-          error: error.message
-        });
-      }
-    }
-    
-    return results;
-  } catch (error) {
-    logger.error(`Daily log failed: ${error.message}`);
-    throw error;
-  }
-};
 
 // Manual portfolio recalculation
 exports.recalculatePortfolioValue = async (portfolioId) => {
