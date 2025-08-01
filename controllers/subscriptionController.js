@@ -358,6 +358,8 @@ exports.verifyPayment = async (req, res) => {
   }
 };
 
+
+
 exports.createEmandate = async (req, res) => {
   try {
     const { productType, productId } = req.body;
@@ -366,10 +368,12 @@ exports.createEmandate = async (req, res) => {
       return res.status(400).json({ error: "Missing required fields" });
     }
 
+    // Check existing subscriptions
     if (await isUserSubscribed(userId, productType, productId)) {
       return res.status(409).json({ error: "Already subscribed to this product" });
     }
 
+    // Get product and pricing
     let product, yearlyAmount;
     if (productType === "Portfolio") {
       product = await Portfolio.findById(productId);
@@ -389,20 +393,25 @@ exports.createEmandate = async (req, res) => {
     if (!yearlyAmount || yearlyAmount <= 0) throw new Error("Invalid subscription fee");
     const monthlyAmount = Math.round(yearlyAmount / 12);
 
+    // Create Razorpay customer
     const razorpay = await getRazorpayInstance();
     const customer = await createOrFetchCustomer(razorpay, req.user);
+
+    // Create or fetch subscription plan
     const plan = await createSubscriptionPlan(monthlyAmount * 100);
 
+    // Calculate dates (FIX: Reduced start time to 60 seconds)
     const startDate = new Date();
     const commitmentEndDate = new Date();
     commitmentEndDate.setFullYear(startDate.getFullYear() + 1);
 
+    // Create subscription data
     const subscriptionData = {
       plan_id: plan.id,
       customer_id: customer.id,
       quantity: 1,
       total_count: 12,
-      start_at: Math.floor(startDate.getTime() / 1000) + 300,
+      start_at: Math.floor(Date.now() / 1000) + 60, // 60 seconds from now
       expire_by: Math.floor(commitmentEndDate.getTime() / 1000),
       notes: {
         subscription_type: "yearly_monthly_billing",
@@ -414,9 +423,11 @@ exports.createEmandate = async (req, res) => {
       },
     };
 
+    // Create Razorpay subscription
     const razorPaySubscription = await razorpay.subscriptions.create(subscriptionData);
 
     try {
+      // Create database subscriptions
       if (productType === "Bundle" && product.portfolios?.length) {
         const monthlyPerPortfolio = Math.round(monthlyAmount / product.portfolios.length);
         for (const portfolio of product.portfolios) {
@@ -460,6 +471,7 @@ exports.createEmandate = async (req, res) => {
         );
       }
     } catch (dbError) {
+      // Cleanup on error
       try { await razorpay.subscriptions.cancel(razorPaySubscription.id); } 
       catch (cancelError) { logger.error("Failed to clean up subscription", cancelError); }
       throw dbError;
@@ -491,11 +503,11 @@ exports.verifyEmandate = async (req, res) => {
     const razorpay = await getRazorpayInstance();
     const userId = req.user._id;
 
-    // Try fetching subscription status with retry logic
+    // Fetch subscription status with retry logic
     let razorpaySubscription;
     let status;
     let retryCount = 0;
-    const MAX_RETRIES = 3;
+    const MAX_RETRIES = 5;
     const RETRY_DELAY = 2000; // 2 seconds
     
     do {
@@ -503,17 +515,15 @@ exports.verifyEmandate = async (req, res) => {
         razorpaySubscription = await razorpay.subscriptions.fetch(subscription_id);
         status = razorpaySubscription.status;
         
-        // Break early if we have final status
-        if (status !== "pending") break;
+        if (status !== "pending" && status !== "created") break;
         
-        // Wait before retrying
         await new Promise(resolve => setTimeout(resolve, RETRY_DELAY));
         retryCount++;
       } catch (error) {
         logger.error("Razorpay fetch error", error);
         return res.status(500).json({ error: "Failed to verify subscription" });
       }
-    } while (status === "pending" && retryCount < MAX_RETRIES);
+    } while (retryCount < MAX_RETRIES);
 
     // Verify user ownership
     if (!razorpaySubscription.notes?.user_id || 
@@ -521,6 +531,7 @@ exports.verifyEmandate = async (req, res) => {
       return res.status(403).json({ error: "Unauthorized operation" });
     }
 
+    // Get database subscriptions
     const existingSubscriptions = await Subscription.find({ 
       user: userId, 
       eMandateId: subscription_id 
@@ -539,11 +550,9 @@ exports.verifyEmandate = async (req, res) => {
     switch (status) {
       case "authenticated":
       case "active":
-        // Activate all subscriptions
         updateData = { 
           isActive: true, 
           lastPaidAt: new Date(), 
-          missedCycles: 0,
           status: "active"
         };
         
@@ -557,15 +566,17 @@ exports.verifyEmandate = async (req, res) => {
         responseMessage = `eMandate ${status === "authenticated" ? "authenticated" : "active"}. Activated ${activationCount} subscriptions.`;
         break;
         
+      case "created":
+        responseMessage = "Subscription created. Awaiting authentication.";
+        break;
+        
       case "pending":
-        // Still pending after retries
         responseMessage = "Authentication still pending. Please try again later.";
         break;
         
       case "halted":
       case "cancelled":
       case "expired":
-        // Deactivate subscriptions
         await Subscription.updateMany(
           { eMandateId: subscription_id, user: userId },
           { isActive: false, status }
@@ -587,13 +598,85 @@ exports.verifyEmandate = async (req, res) => {
       message: responseMessage,
       subscriptionStatus: status,
       activatedSubscriptions: activationCount,
-      requiresAction: status === "pending"
+      requiresAction: status === "pending" || status === "created"
     });
   } catch (error) {
     logger.error("eMandate verification failed", error);
     res.status(500).json({ error: "eMandate verification failed" });
   }
 };
+
+exports.razorpayWebhook = async (req, res) => {
+  try {
+    const { event, payload } = req.body;
+    const razorpay = await getRazorpayInstance();
+
+    if (event === "subscription.activated") {
+      const subscriptionId = payload.subscription.id;
+      const razorpaySubscription = await razorpay.subscriptions.fetch(subscriptionId);
+      const userId = razorpaySubscription.notes?.user_id;
+      
+      if (!userId) return res.status(400).json({ error: "User ID missing" });
+
+      await Subscription.updateMany(
+        { eMandateId: subscriptionId, user: userId },
+        { 
+          isActive: true, 
+          lastPaidAt: new Date(),
+          status: "active"
+        }
+      );
+
+      const subscriptions = await Subscription.find({ eMandateId: subscriptionId, user: userId });
+      if (subscriptions.some(sub => sub.bundleCategory === "premium")) {
+        await User.findByIdAndUpdate(userId, { hasPremium: true });
+      }
+    } 
+    else if (event === "subscription.charged") {
+      const { subscription_id, payment_id, amount } = payload;
+      
+      // Prevent duplicate processing
+      const existingPayment = await PaymentHistory.findOne({ paymentId: payment_id });
+      if (existingPayment) return res.status(200).end();
+      
+      const subscriptions = await Subscription.find({ eMandateId: subscription_id });
+      
+      if (subscriptions.length) {
+        const userId = subscriptions[0].user;
+        const paymentAmount = amount / 100 / subscriptions.length;
+        
+        await Promise.all(subscriptions.map(sub => 
+          PaymentHistory.create({
+            user: userId,
+            subscription: sub._id,
+            amount: paymentAmount,
+            paymentId: payment_id,
+            status: "completed"
+          })
+        ));
+        
+        await Subscription.updateMany(
+          { eMandateId: subscription_id, user: userId },
+          { lastPaidAt: new Date(), $inc: { paymentsCount: 1 } }
+        );
+      }
+    }
+    else if (event === "subscription.cancelled") {
+      const subscriptionId = payload.subscription.id;
+      await Subscription.updateMany(
+        { eMandateId: subscriptionId },
+        { isActive: false, status: "cancelled" }
+      );
+    }
+
+    res.status(200).end();
+  } catch (error) {
+    logger.error("Webhook processing error", error);
+    res.status(500).json({ error: "Webhook processing failed" });
+  }
+};
+
+
 exports.getUserSubscriptions = async (req, res) => {
   try {
     const subscriptions = await Subscription.find({ user: req.user._id })
@@ -601,9 +684,7 @@ exports.getUserSubscriptions = async (req, res) => {
       .populate('portfolio')
       .sort({ createdAt: -1 });
 
- await Promise.all(subscriptions.map(async (sub) => {
-      await checkSubscriptionExpiry(sub);
-    }));
+
 
     const groupedSubscriptions = {};
     const individualSubscriptions = [];
