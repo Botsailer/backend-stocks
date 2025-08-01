@@ -445,7 +445,7 @@ exports.createEmandate = async (req, res) => {
               isActive: false,
               planType: "yearly",
               bundleId: productId,
-              bundleCategory: product.category,
+              Category: product.category,
               status: "pending_authentication"
             },
             { upsert: true, new: true }
@@ -589,7 +589,7 @@ exports.verifyEmandate = async (req, res) => {
     }
 
     // Update user premium status if needed
-    if (shouldActivate && existingSubscriptions.some(sub => sub.bundleCategory === "premium")) {
+    if (shouldActivate && existingSubscriptions.some(sub => sub.Category === "premium")) {
       await User.findByIdAndUpdate(userId, { hasPremium: true });
     }
 
@@ -628,7 +628,7 @@ exports.razorpayWebhook = async (req, res) => {
       );
 
       const subscriptions = await Subscription.find({ eMandateId: subscriptionId, user: userId });
-      if (subscriptions.some(sub => sub.bundleCategory === "premium")) {
+      if (subscriptions.some(sub => sub.Category === "premium")) {
         await User.findByIdAndUpdate(userId, { hasPremium: true });
       }
     } 
@@ -674,7 +674,7 @@ exports.razorpayWebhook = async (req, res) => {
     logger.error("Webhook processing error", error);
     res.status(500).json({ error: "Webhook processing failed" });
   }
-};
+};  
 
 
 exports.getUserSubscriptions = async (req, res) => {
@@ -700,7 +700,7 @@ exports.getUserSubscriptions = async (req, res) => {
             monthlyAmount: 0,
             portfolios: [],
             bundleId: sub.bundleId,
-            bundleCategory: sub.bundleCategory
+            Category: sub.Category
           };
         }
         groupedSubscriptions[sub.eMandateId].monthlyAmount += sub.monthlyAmount || 0;
@@ -796,10 +796,10 @@ exports.cancelSubscription = async (req, res) => {
       { isActive: false }
     );
 
-    if (subscription.bundleCategory === "premium") {
+    if (subscription.Category === "premium") {
       const hasActivePremium = await Subscription.exists({
         user: req.user._id,
-        bundleCategory: "premium",
+        Category: "premium",
         isActive: true
       });
       if (!hasActivePremium) await User.findByIdAndUpdate(req.user._id, { hasPremium: false });
@@ -881,7 +881,7 @@ exports.razorpayWebhook = async (req, res) => {
       );
 
       const subscriptions = await Subscription.find({ eMandateId: subscriptionId, user: userId });
-      if (subscriptions.some(sub => sub.bundleCategory === "premium")) {
+      if (subscriptions.some(sub => sub.Category === "premium")) {
         await User.findByIdAndUpdate(userId, { hasPremium: true });
       }
     } 

@@ -89,7 +89,7 @@ const SubscriptionSchema = new Schema(
       ref: "Portfolio",
       required: true,
     },
-     bundleCategory: {
+     Category: {
       type: String,
       enum: ["basic", "premium"],
       default: null

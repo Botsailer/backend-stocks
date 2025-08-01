@@ -6,6 +6,51 @@ const PaymentHistory = require('../models/paymenthistory');
 const Tip = require('../models/portfolioTips');
 const Bundle = require('../models/bundle');
 
+// Helper: Get user's accessible portfolios and premium status
+const getUserAccessInfo = async (userId) => {
+  const portfolioSubs = await Subscription.find({
+    user: userId,
+    productType: 'Portfolio',
+    isActive: true
+  });
+
+  const bundleSubs = await Subscription.find({
+    user: userId,
+    productType: 'Bundle',
+    isActive: true
+  }).populate('productId', 'portfolios');
+
+  const accessiblePortfolioIds = new Set();
+  let hasPremiumAccess = false;
+
+  // Process portfolio subscriptions
+  portfolioSubs.forEach(sub => {
+    accessiblePortfolioIds.add(sub.productId.toString());
+    if (sub.Category === 'premium') {
+      hasPremiumAccess = true;
+    }
+  });
+
+  // Process bundle subscriptions
+  bundleSubs.forEach(sub => {
+    const bundle = sub.productId;
+    if (bundle?.portfolios) {
+      bundle.portfolios.forEach(pId => 
+        accessiblePortfolioIds.add(pId.toString())
+      );
+    }
+    if (sub.Category === 'premium') {
+      hasPremiumAccess = true;
+    }
+  });
+
+  return {
+    hasPremiumAccess,
+    accessiblePortfolioIds: Array.from(accessiblePortfolioIds)
+  };
+};
+
+// User Profile Endpoints
 exports.getProfile = async (req, res) => {
   try {
     const user = await User.findById(req.user._id)
@@ -15,6 +60,7 @@ exports.getProfile = async (req, res) => {
 
     const requiredFields = ['fullName', 'dateofBirth', 'phone', 'pandetails', 'address', 'adharcard'];
     const isComplete = requiredFields.every(field => user[field] && user[field] !== null);
+    
     const hasActiveSubscription = await Subscription.exists({
       user: user._id,
       isActive: true
@@ -37,13 +83,16 @@ exports.getProfile = async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 };
+
 exports.updateProfile = async (req, res) => {
   try {
     const userId = req.user._id;
     const updates = req.body;
-    const isAdmin = req.user.isAdmin || false; // Check if user is admin
+    const isAdmin = req.user.isAdmin || false;
     
-    const restrictedFields = ['password', 'refreshToken', 'tokenVersion', 'provider', 'providerId', 'emailVerified', 'changedPasswordAt', 'panUpdatedByUser', 'panUpdatedAt'];
+    const restrictedFields = ['password', 'refreshToken', 'tokenVersion', 'provider', 
+                             'providerId', 'emailVerified', 'changedPasswordAt', 
+                             'panUpdatedByUser', 'panUpdatedAt'];
     restrictedFields.forEach(field => delete updates[field]);
 
     if (updates.username) {
@@ -67,28 +116,24 @@ exports.updateProfile = async (req, res) => {
       updates.emailVerified = false;
     }
 
-    // PAN UPDATE LOGIC - Check if user is trying to update PAN
     if (updates.pandetails && updates.pandetails.trim() !== '') {
       const panCardRegex = /^[A-Z]{5}[0-9]{4}[A-Z]{1}$/;
       if (!panCardRegex.test(updates.pandetails.trim())) {
         return res.status(400).json({ 
-          error: 'Invalid PAN card format. Must be AAAAA9999A (5 letters, 4 digits, 1 letter)' 
+          error: 'Invalid PAN card format. Must be AAAAA9999A' 
         });
       }
       
-      // Get current user data to check PAN update status
       const currentUser = await User.findById(userId);
       
-      // Check if user has already updated PAN and is not an admin
       if (currentUser.panUpdatedByUser && !isAdmin) {
         return res.status(403).json({ 
-          error: 'PAN card can only be updated once. Contact admin for further changes.' 
+          error: 'PAN card can only be updated once' 
         });
       }
       
       updates.pandetails = updates.pandetails.trim().toUpperCase();
       
-      // If this is the first time user is setting PAN (and they're not admin), mark it
       if (!currentUser.panUpdatedByUser && !isAdmin) {
         updates.panUpdatedByUser = true;
         updates.panUpdatedAt = new Date();
@@ -124,6 +169,7 @@ exports.updateProfile = async (req, res) => {
   }
 };
 
+// Portfolio Endpoints
 exports.getAllPortfolios = async (req, res) => {
   try {
     const { startDate, endDate, category } = req.query;
@@ -139,83 +185,47 @@ exports.getAllPortfolios = async (req, res) => {
     
     if (category) {
       if (!['basic', 'premium'].includes(category)) {
-        return res.status(400).json({ error: 'Invalid category. Use "basic" or "premium"' });
+        return res.status(400).json({ error: 'Invalid category' });
       }
       query.category = category;
     }
 
     const portfolios = await Portfolio.find(query).sort('name');
     
+    // For unauthenticated users
     if (!user) {
-      const limitedPortfolios = portfolios.map(portfolio => ({
-        _id: portfolio._id,
-        name: portfolio.name,
-        description: portfolio.description,
-        subscriptionFee: portfolio.subscriptionFee,
-        minInvestment: portfolio.minInvestment,
-        durationMonths: portfolio.durationMonths,
-        createdAt: portfolio.createdAt,
-        CAGRSinceInception: portfolio.CAGRSinceInception,
-        oneYearGains: portfolio.oneYearGains,
-        monthlyGains: portfolio.monthlyGains,
-        lastRebalanceDate: portfolio.lastRebalanceDate,
-        nextRebalanceDate: portfolio.nextRebalanceDate,
-        monthlyContribution: portfolio.monthlyContribution,
-        message: "Login And Subscribe to view complete details"
+      const limitedPortfolios = portfolios.map(p => ({
+        _id: p._id,
+        name: p.name,
+        description: p.description,
+        subscriptionFee: p.subscriptionFee,
+        minInvestment: p.minInvestment,
+        durationMonths: p.durationMonths,
+        createdAt: p.createdAt,
+        message: "Login to view details"
       }));
       return res.json(limitedPortfolios);
     }
     
-    let subscribedPortfolioIds = [];
+    // Get access information
+    const { accessiblePortfolioIds } = await getUserAccessInfo(user._id);
     
-    const directSubscriptions = await Subscription.find({
-      user: user._id,
-      productType: 'Portfolio',
-      isActive: true
-    });
-    subscribedPortfolioIds = directSubscriptions.map(sub => sub.productId.toString());
-    
-    const bundleSubscriptions = await Subscription.find({
-      user: user._id,
-      productType: 'Bundle',
-      isActive: true
-    });
-    
-    if (bundleSubscriptions.length > 0) {
-      const bundleIds = bundleSubscriptions.map(sub => sub.productId);
-      const bundles = await Bundle.find({ _id: { $in: bundleIds } });
+    const processedPortfolios = portfolios.map(p => {
+      const isAccessible = user.isAdmin || 
+        accessiblePortfolioIds.includes(p._id.toString());
       
-      bundles.forEach(bundle => {
-        bundle.portfolios.forEach(portfolioId => {
-          subscribedPortfolioIds.push(portfolioId.toString());
-        });
-      });
-    }
-    
-    const processedPortfolios = portfolios.map(portfolio => {
-      const portfolioObj = portfolio.toObject();
-      const isSubscribed = subscribedPortfolioIds.includes(portfolio._id.toString()) || user.isAdmin;
+      if (isAccessible) return p;
       
-      if (isSubscribed) {
-        return portfolioObj;
-      } else {
-        return {
-          _id: portfolio._id,
-          name: portfolio.name,
-          description: portfolio.description,
-          subscriptionFee: portfolio.subscriptionFee,
-          minInvestment: portfolio.minInvestment,
-          durationMonths: portfolio.durationMonths,
-          createdAt: portfolio.createdAt,
-          CAGRSinceInception: portfolio.CAGRSinceInception,
-          oneYearGains: portfolio.oneYearGains,
-          monthlyGains: portfolio.monthlyGains,
-          lastRebalanceDate: portfolio.lastRebalanceDate,
-          nextRebalanceDate: portfolio.nextRebalanceDate,
-          monthlyContribution: portfolio.monthlyContribution,
-          message: "Subscribe to view complete details"
-        };
-      }
+      return {
+        _id: p._id,
+        name: p.name,
+        description: p.description,
+        subscriptionFee: p.subscriptionFee,
+        minInvestment: p.minInvestment,
+        durationMonths: p.durationMonths,
+        createdAt: p.createdAt,
+        message: "Subscribe to view complete details"
+      };
     });
     
     res.json(processedPortfolios);
@@ -227,14 +237,13 @@ exports.getAllPortfolios = async (req, res) => {
 exports.getPortfolioById = async (req, res) => {
   try {
     const portfolio = await Portfolio.findById(req.params.id);
-    if (!portfolio) {
-      return res.status(404).json({ error: 'Portfolio not found' });
-    }
+    if (!portfolio) return res.status(404).json({ error: 'Portfolio not found' });
     
     const user = req.user;
     
+    // For unauthenticated users
     if (!user) {
-      const limitedPortfolio = {
+      return res.json({
         _id: portfolio._id,
         name: portfolio.name,
         description: portfolio.description,
@@ -242,54 +251,20 @@ exports.getPortfolioById = async (req, res) => {
         minInvestment: portfolio.minInvestment,
         durationMonths: portfolio.durationMonths,
         createdAt: portfolio.createdAt,
-        CAGRSinceInception: portfolio.CAGRSinceInception,
-        oneYearGains: portfolio.oneYearGains,
-        monthlyGains: portfolio.monthlyGains,
-        lastRebalanceDate: portfolio.lastRebalanceDate,
-        nextRebalanceDate: portfolio.nextRebalanceDate,
-        monthlyContribution: portfolio.monthlyContribution,
-        message: "Subscribe to view complete details"
-      };
-      return res.json(limitedPortfolio);
-    }
-    
-    if (user.isAdmin) {
-      return res.json(portfolio);
-    }
-    
-    const directSubscription = await Subscription.findOne({
-      user: user._id,
-      productType: 'Portfolio',
-      productId: portfolio._id,
-      isActive: true
-    });
-    
-    if (directSubscription) {
-      return res.json(portfolio);
-    }
-    
-    const bundleSubscriptions = await Subscription.find({
-      user: user._id,
-      productType: 'Bundle',
-      isActive: true
-    });
-    
-    let hasAccess = false;
-    if (bundleSubscriptions.length > 0) {
-      const bundleIds = bundleSubscriptions.map(sub => sub.productId);
-      const count = await Bundle.countDocuments({
-        _id: { $in: bundleIds },
-        portfolios: portfolio._id
+        message: "Login to view details"
       });
-      
-      hasAccess = count > 0;
     }
     
-    if (hasAccess) {
-      return res.json(portfolio);
-    }
+    // For admins
+    if (user.isAdmin) return res.json(portfolio);
     
-    const limitedPortfolio = {
+    // Get access information
+    const { accessiblePortfolioIds } = await getUserAccessInfo(user._id);
+    const isAccessible = accessiblePortfolioIds.includes(portfolio._id.toString());
+    
+    if (isAccessible) return res.json(portfolio);
+    
+    return res.json({
       _id: portfolio._id,
       name: portfolio.name,
       description: portfolio.description,
@@ -297,13 +272,8 @@ exports.getPortfolioById = async (req, res) => {
       minInvestment: portfolio.minInvestment,
       durationMonths: portfolio.durationMonths,
       createdAt: portfolio.createdAt,
-      CAGRSinceInception: portfolio.CAGRSinceInception,
-      oneYearGains: portfolio.oneYearGains,
-      monthlyGains: portfolio.monthlyGains,
       message: "Subscribe to view complete details"
-    };
-    
-    res.json(limitedPortfolio);
+    });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -320,34 +290,38 @@ exports.getUserSubscriptions = async (req, res) => {
   }
 };
 
+// Tips Endpoints
 exports.getTips = async (req, res) => {
   try {
     const { startDate, endDate, category, status, action, stockId } = req.query;
     const user = req.user;
     const query = { portfolio: { $exists: false } };
     
+    // Date filtering
     if (startDate || endDate) {
       query.createdAt = {};
       if (startDate) query.createdAt.$gte = new Date(startDate);
       if (endDate) query.createdAt.$lte = new Date(`${endDate}T23:59:59.999Z`);
     }
 
+    // Category filtering
     if (category) {
       if (!['basic', 'premium'].includes(category)) {
-        return res.status(400).json({ error: 'Invalid category. Use "basic" or "premium"' });
+        return res.status(400).json({ error: 'Invalid category' });
       }
       query.category = category;
     }
     
+    // Additional filters
     if (status) query.status = status;
     if (action) query.action = action;
     if (stockId) query.stockId = stockId;
 
-    const tips = await Tip.find(query)
-      .sort('-createdAt');
+    const tips = await Tip.find(query).sort('-createdAt');
     
+    // For unauthenticated users
     if (!user) {
-      const limitedTips = tips.map(tip => ({
+      return res.json(tips.map(tip => ({
         _id: tip._id,
         title: tip.title,
         stockId: tip.stockId,
@@ -355,44 +329,34 @@ exports.getTips = async (req, res) => {
         createdAt: tip.createdAt,
         status: tip.status,
         action: tip.action,
-        message: "Login and subscribe to view details"
-      }));
-      return res.json(limitedTips);
+        message: "Login to view details"
+      }))); 
     }
     
-    let hasPremiumAccess = user.isAdmin;
-    
-    if (!hasPremiumAccess) {
-      const bundleSubscriptions = await Subscription.find({
-        user: user._id,
-        productType: 'Bundle',
-        isActive: true
-      });
-      
-      hasPremiumAccess = bundleSubscriptions.some(sub => 
-        sub.bundle && sub.bundle.category === 'premium'
-      );
-    }
-    
+    // For admins - full access
+    if (user.isAdmin) return res.json(tips);
+
+    // Get access information
+    const { hasPremiumAccess } = await getUserAccessInfo(user._id);
+
     const processedTips = tips.map(tip => {
-      const tipObj = tip.toObject();
+      // Always show basic tips
+      if (tip.category === 'basic') return tip;
       
-      if (user.isAdmin) return tipObj;
+      // Show premium tips if user has access
+      if (tip.category === 'premium' && hasPremiumAccess) return tip;
       
-      if (tip.category === 'premium' && !hasPremiumAccess) {
-        return {
-          _id: tip._id,
-          title: tip.title,
-          stockId: tip.stockId,
-          category: 'premium',
-          createdAt: tip.createdAt,
-          status: tip.status,
-          action: tip.action,
-          message: "Upgrade to premium to view this content"
-        };
-      }
-      
-      return tipObj;
+      // Restricted premium tip
+      return {
+        _id: tip._id,
+        title: tip.title,
+        stockId: tip.stockId,
+        category: 'premium',
+        createdAt: tip.createdAt,
+        status: tip.status,
+        action: tip.action,
+        message: "Upgrade to premium to view this content"
+      };
     });
 
     res.json(processedTips);
@@ -405,24 +369,27 @@ exports.getTipsWithPortfolio = async (req, res) => {
   try {
     const { startDate, endDate, category, portfolioId, status, action, stockId } = req.query;
     const user = req.user;
-    
-    // Fix: Only get tips that have a portfolio (not null)
     const query = { portfolio: { $ne: null } };
     
+    // Date filtering
     if (startDate || endDate) {
       query.createdAt = {};
       if (startDate) query.createdAt.$gte = new Date(startDate);
       if (endDate) query.createdAt.$lte = new Date(`${endDate}T23:59:59.999Z`);
     }
 
+    // Category filtering
     if (category) {
       if (!['basic', 'premium'].includes(category)) {
-        return res.status(400).json({ error: 'Invalid category. Use "basic" or "premium"' });
+        return res.status(400).json({ error: 'Invalid category' });
       }
       query.category = category;
     }
     
+    // Portfolio filtering
     if (portfolioId) query.portfolio = portfolioId;
+    
+    // Additional filters
     if (status) query.status = status;
     if (action) query.action = action;
     if (stockId) query.stockId = stockId;
@@ -431,217 +398,136 @@ exports.getTipsWithPortfolio = async (req, res) => {
       .populate('portfolio', 'name')
       .sort('-createdAt');
     
+    // For unauthenticated users
     if (!user) {
-      const limitedTips = tips.map(tip => ({
+      return res.json(tips.map(tip => ({
         _id: tip._id,
         title: tip.title,
         stockId: tip.stockId,
         category: tip.category,
-        portfolio: tip.portfolio ? { _id: tip.portfolio._id, name: tip.portfolio.name } : null,
+        portfolio: tip.portfolio ? { 
+          _id: tip.portfolio._id, 
+          name: tip.portfolio.name 
+        } : null,
         createdAt: tip.createdAt,
         status: tip.status,
         action: tip.action,
-        message: "Login and subscribe to view details"
-      }));
-      return res.json(limitedTips);
+        message: "Login to view details"
+      }))); 
     }
     
-    const portfolioSubscriptions = await Subscription.find({
-      user: user._id,
-      productType: 'Portfolio',
-      isActive: true
-    });
-    const subscribedPortfolioIds = portfolioSubscriptions.map(sub => sub.productId.toString());
-    
-    const bundleSubscriptions = await Subscription.find({
-      user: user._id,
-      productType: 'Bundle',
-      isActive: true
-    });
-    
-    let bundlePortfolioIds = [];
-    let hasBasicAccess = false;
-    let hasPremiumAccess = false;
-    
-    if (bundleSubscriptions.length > 0) {
-      const bundleIds = bundleSubscriptions.map(sub => sub.productId);
-      const bundles = await Bundle.find({ _id: { $in: bundleIds } });
-      
-      bundles.forEach(bundle => {
-        // Check subscription types
-        if (bundle.category === 'basic') hasBasicAccess = true;
-        if (bundle.category === 'premium') hasPremiumAccess = true;
-        
-        // Get portfolio IDs
-        bundle.portfolios.forEach(pId => {
-          bundlePortfolioIds.push(pId.toString());
-        });
-      });
-    }
-    
-    const accessiblePortfolioIds = [...new Set([...subscribedPortfolioIds, ...bundlePortfolioIds])];
+    // Get access information
+    const { accessiblePortfolioIds } = await getUserAccessInfo(user._id);
 
     const processedTips = tips.map(tip => {
-      const tipObj = tip.toObject();
+      // Admin access
+      if (user.isAdmin) return tip;
       
-      if (user.isAdmin) return tipObj;
+      // Portfolio tip access
+      const isAccessible = tip.portfolio && 
+        accessiblePortfolioIds.includes(tip.portfolio._id.toString());
       
-      // Handle case where portfolio is null (shouldn't happen with current query, but safety check)
-      if (!tip.portfolio) {
-        return {
-          _id: tip._id,
-          title: tip.title,
-          stockId: tip.stockId,
-          category: tip.category,
-          portfolio: null,
-          status: tip.status,
-          action: tip.action,
-          createdAt: tip.createdAt,
-          message: "Subscribe to basic or premium to view this content"
-        };
-      }
+      if (isAccessible) return tip;
       
-      // For portfolio tips, access is based on portfolio subscription
-      const hasPortfolioAccess = accessiblePortfolioIds.includes(tip.portfolio._id.toString());
-      
-      if (hasPortfolioAccess) {
-        return tipObj;
-      } else {
-        return {
-          _id: tip._id,
-          title: tip.title,
-          stockId: tip.stockId,
-          category: tip.category,
-          portfolio: { _id: tip.portfolio._id, name: tip.portfolio.name },
-          status: tip.status,
-          action: tip.action,
-          createdAt: tip.createdAt,
-          message: "Subscribe to this portfolio to view details"
-        };
-      }
+      return {
+        _id: tip._id,
+        title: tip.title,
+        stockId: tip.stockId,
+        category: tip.category,
+        portfolio: tip.portfolio ? { 
+          _id: tip.portfolio._id, 
+          name: tip.portfolio.name 
+        } : null,
+        createdAt: tip.createdAt,
+        status: tip.status,
+        action: tip.action,
+        message: "Subscribe to this portfolio to view details"
+      };
     });
 
     res.json(processedTips);
   } catch (err) {
-    console.log(err);
     res.status(500).json({ error: err.message });
   }
 };
 
-
-
 exports.getTipById = async (req, res) => {
   try {
-    const tip = await Tip.findById(req.params.id).populate('portfolio', 'name');
-    if (!tip) {
-      return res.status(404).json({ error: 'Tip not found' });
-    }
+    const tip = await Tip.findById(req.params.id)
+      .populate('portfolio', 'name');
+    
+    if (!tip) return res.status(404).json({ error: 'Tip not found' });
     
     const user = req.user;
     
-    // For unauthenticated users - return limited info
+    // For unauthenticated users
     if (!user) {
       return res.json({
         _id: tip._id,
         title: tip.title,
         stockId: tip.stockId,
         category: tip.category,
-        portfolio: tip.portfolio ? { _id: tip.portfolio._id, name: tip.portfolio.name } : null,
+        portfolio: tip.portfolio ? { 
+          _id: tip.portfolio._id, 
+          name: tip.portfolio.name 
+        } : null,
         createdAt: tip.createdAt,
         status: tip.status,
         action: tip.action,
-        message: "Login and subscribe to view details"
+        message: "Login to view details"
       });
     }
     
-    // Admin has full access
-    if (user.isAdmin) {
-      return res.json(tip);
-    }
+    // Admin access
+    if (user.isAdmin) return res.json(tip);
     
-    // Check access based on whether it's a portfolio tip or regular tip
+    // Get access information
+    const { hasPremiumAccess, accessiblePortfolioIds } = await getUserAccessInfo(user._id);
+    
+    // Portfolio tip access
     if (tip.portfolio) {
-      // Portfolio-specific tip - check subscription to that portfolio
+      const isAccessible = accessiblePortfolioIds.includes(tip.portfolio._id.toString());
       
-      // 1. Direct portfolio subscription
-      const directSubscription = await Subscription.findOne({
-        user: user._id,
-        productType: 'Portfolio',
-        productId: tip.portfolio._id,
-        isActive: true
-      });
+      if (isAccessible) return res.json(tip);
       
-      if (directSubscription) {
-        return res.json(tip);
-      }
-      
-      // 2. Bundle subscription that includes this portfolio
-      const bundleSubscriptions = await Subscription.find({
-        user: user._id,
-        productType: 'Bundle',
-        isActive: true
-      });
-      
-      if (bundleSubscriptions.length > 0) {
-        const bundleIds = bundleSubscriptions.map(sub => sub.productId);
-        const hasAccessThroughBundle = await Bundle.countDocuments({
-          _id: { $in: bundleIds },
-          portfolios: tip.portfolio._id
-        });
-        
-        if (hasAccessThroughBundle > 0) {
-          return res.json(tip);
-        }
-      }
-      
-      // No access to this portfolio tip
       return res.json({
         _id: tip._id,
         title: tip.title,
         stockId: tip.stockId,
         category: tip.category,
-        portfolio: { _id: tip.portfolio._id, name: tip.portfolio.name },
+        portfolio: tip.portfolio ? { 
+          _id: tip.portfolio._id, 
+          name: tip.portfolio.name 
+        } : null,
+        createdAt: tip.createdAt,
         status: tip.status,
         action: tip.action,
-        createdAt: tip.createdAt,
         message: "Subscribe to this portfolio to view details"
       });
-    } else {
-      // General tip (not portfolio-specific) - USE SAME LOGIC AS getTips
-      
-      // Get bundle subscriptions and check for premium access
-      const bundleSubscriptions = await Subscription.find({
-        user: user._id,
-        productType: 'Bundle',
-        isActive: true
-      });
-      
-      // Check for premium access (same as getTips function)
-      let hasPremiumAccess = bundleSubscriptions.some(sub => 
-        sub.bundle && sub.bundle.category === 'premium'
-      );
-      
-      if (tip.category === 'premium' && !hasPremiumAccess) {
-        return res.json({
-          _id: tip._id,
-          title: tip.title,
-          stockId: tip.stockId,
-          category: 'premium',
-          createdAt: tip.createdAt,
-          status: tip.status,
-          action: tip.action,
-          message: "Upgrade to premium to view this content"
-        });
-      }
-          return res.json(tip);
     }
+    
+    // General tip access
+    if (tip.category === 'premium' && !hasPremiumAccess) {
+      return res.json({
+        _id: tip._id,
+        title: tip.title,
+        stockId: tip.stockId,
+        category: 'premium',
+        createdAt: tip.createdAt,
+        status: tip.status,
+        action: tip.action,
+        message: "Upgrade to premium to view this content"
+      });
+    }
+    
+    // Basic tip or premium with access
+    return res.json(tip);
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
 };
 
-
-
+// Payment and Cart Endpoints
 exports.getUserPaymentHistory = async (req, res) => {
   try {
     const payments = await PaymentHistory.find({ user: req.user._id })
