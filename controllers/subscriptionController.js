@@ -8,26 +8,28 @@ const PaymentHistory = require("../models/paymenthistory");
 const Bundle = require("../models/bundle");
 const User = require("../models/user");
 const { getPaymentConfig } = require("../utils/configSettings");
-const logger = async () => {
-  const winston = require("winston");
-  return winston.createLogger({
-    level: "info",
-    format: winston.format.combine(
-      winston.format.timestamp({ format: "YYYY-MM-DD HH:mm:ss" }),
-      winston.format.errors({ stack: true }),
-      winston.format.splat(),
-      winston.format.json()
-    ),
-    transports: [
-      new winston.transports.Console(),
-      new winston.transports.File({
-        filename: "logs/subscription-service.log",
-        maxsize: 5 * 1024 * 1024,
-        maxFiles: 7
-      })
-    ]
-  });
-};
+
+const winston = require("winston");
+
+const logger = winston.createLogger({
+  level: "info",
+  format: winston.format.combine(
+    winston.format.timestamp({ format: "YYYY-MM-DD HH:mm:ss" }),
+    winston.format.errors({ stack: true }),
+    winston.format.splat(),
+    winston.format.json()
+  ),
+  transports: [
+    new winston.transports.Console(),
+    new winston.transports.File({
+      filename: "logs/subscription-service.log",
+      maxsize: 5 * 1024 * 1024,
+      maxFiles: 7
+    })
+  ]
+});
+
+
 
 // Utility functions
 const generateShortReceipt = (prefix, userId) => {
