@@ -90,12 +90,8 @@ SubscriptionSchema.index({
 }, { unique: true, background: true });
 
 // Optional: Add a sparse index for razorpay subscriptions
-SubscriptionSchema.index({ 
-  user: 1, 
-  razorpaySubscriptionId: 1 
-}, { 
-  unique: true, 
-  sparse: true,  // Allow null values
-  background: true 
-});
+SubscriptionSchema.index(
+  { user: 1, razorpaySubscriptionId: 1 },
+  { unique: true, sparse: true, background: true }
+);
 module.exports = mongoose.model("Subscription", SubscriptionSchema);

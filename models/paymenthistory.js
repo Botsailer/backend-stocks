@@ -1,56 +1,66 @@
 const mongoose = require('mongoose');
 const { Schema } = mongoose;
 
-/**
- * models/PaymentHistory.js
- * ---
- * Tracks each Razorpay payment order and verification lifecycle.
- */
 const PaymentHistorySchema = new Schema({
-    user: {
-        type: Schema.Types.ObjectId,
-        ref: 'User',
-        required: true,
-        description: 'User who initiated the payment',
-    },
-    portfolio: {
-        type: Schema.Types.ObjectId,
-        ref: 'Portfolio',
-        required: true,
-        description: 'Portfolio being subscribed to',
-    },
-    subscription: {
-        type: Schema.Types.ObjectId,
-        ref: 'Subscription',
-        required: true,
-        description: 'Associated subscription document',
-    },
-    orderId: {
-        type: String,
-        required: true,
-        description: 'Razorpay order ID',
-    },
-    paymentId: {
-        type: String,
-        default: null,
-        description: 'Razorpay payment ID if successful',
-    },
-    signature: {
-        type: String,
-        default: null,
-        description: 'Razorpay payment signature used for verification',
-    },
-    amount: {
-        type: Number,
-        required: true,
-        description: 'Amount paid in paise (INR subunit)',
-    },
-    status: {
-        type: String,
-        enum: ['CREATED', 'PAID', 'FAILED', 'VERIFIED'],
-        default: 'CREATED',
-        description: 'Lifecycle state of the payment',
-    }
-}, { timestamps: true });
+  user: {
+    type: Schema.Types.ObjectId,
+    ref: 'User',
+    required: true,
+    index: true
+  },
+  subscription: {
+    type: Schema.Types.ObjectId,
+    ref: 'Subscription',
+    required: false,  // 🔧 FIXED: Changed from true to false
+    index: true
+  },
+  portfolio: {
+    type: Schema.Types.ObjectId,
+    ref: 'Portfolio',
+    index: true
+  },
+  amount: {
+    type: Number,
+    required: true,
+    min: 0
+  },
+  paymentId: {
+    type: String,
+    required: true,
+    unique: true,  // Prevent duplicate payments
+    index: true
+  },
+  orderId: {
+    type: String,
+    index: true
+  },
+  signature: {
+    type: String
+  },
+  status: {
+    type: String,
+    enum: ['PENDING', 'VERIFIED', 'FAILED', 'completed', 'refunded'],
+    default: 'PENDING',
+    index: true
+  },
+  // Additional fields for better tracking
+  paymentMethod: {
+    type: String,
+    enum: ['card', 'netbanking', 'wallet', 'upi', 'emandate'],
+    default: 'card'
+  },
+  description: {
+    type: String,
+    default: ''
+  }
+}, { 
+  timestamps: true,
+  toJSON: { virtuals: true }
+});
+
+// Indexes for better query performance
+PaymentHistorySchema.index({ user: 1, status: 1 });
+PaymentHistorySchema.index({ user: 1, createdAt: -1 });
+PaymentHistorySchema.index({ paymentId: 1, status: 1 });
 
 module.exports = mongoose.model('PaymentHistory', PaymentHistorySchema);

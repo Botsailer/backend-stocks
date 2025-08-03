@@ -19,6 +19,7 @@ app.set('views', __dirname + '/views');
 
 //verify smtp config  by transporter.verify
 const emailService = require('./services/emailServices');
+const { startSubscriptionCleanupJob } = require('./services/subscriptioncron');
 emailService.verifySmtpConfig()
   .then(() => console.log('SMTP configuration verified successfully'))
   .catch(err => console.error('SMTP configuration error:', err));
@@ -67,8 +68,11 @@ app.post("/api/contactus", (req, res) => {
     });
 });
 
-    app.listen(config.server.port, () =>{
+    app.listen(config.server.port, async () =>{
       console.log(`Auth service running on port ${config.server.port}`),
+    
+     // dbAdapter.cleanupDuplicateSubscriptions();
+     await startSubscriptionCleanupJob();
       console.log(`swagger docs available at http://${config.server.host}:${config.server.port}/api-docs`)
     if (process.env.NODE_ENV === 'production') {
       console.log('Production environment detected. Initializing scheduled jobs.');

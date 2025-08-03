@@ -70,7 +70,7 @@ const cleanupDuplicateSubscriptions = async () => {
 
     // Remove duplicates, keeping the most recent active one
     for (const duplicate of duplicates) {
-      const subscriptions = await Subscription.find({
+      const subscriptions = await subscription.find({
         _id: { $in: duplicate.docs }
       }).sort({ 
         status: -1,      // Active first
@@ -82,7 +82,7 @@ const cleanupDuplicateSubscriptions = async () => {
       const toKeep = subscriptions[0];
       const toRemove = subscriptions.slice(1).map(sub => sub._id);
       
-      await Subscription.deleteMany({ _id: { $in: toRemove } });
+      await subscription.deleteMany({ _id: { $in: toRemove } });
       
       console.log(`Kept subscription ${toKeep._id}, removed ${toRemove.length} duplicates`);
     }
