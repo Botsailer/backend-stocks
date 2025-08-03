@@ -22,7 +22,6 @@ const SubscriptionSchema = new Schema({
   portfolio: {
     type: Schema.Types.ObjectId,
     ref: "Portfolio",
-    required: true
   },
   
   // Subscription details

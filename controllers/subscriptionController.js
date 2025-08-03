@@ -558,252 +558,226 @@ exports.createEmandate = async (req, res) => {
  */
 exports.verifyPayment = async (req, res) => {
   const session = await mongoose.startSession();
-  
   try {
     const { paymentId, orderId, signature } = req.body;
     if (!paymentId || !orderId || !signature) {
-      return res.status(400).json({ 
-        success: false, 
-        error: "Missing payment details" 
-      });
+      return res.status(400).json({ success: false, error: "Missing payment details" });
     }
 
-    // Check for duplicate payment processing first
-    const existingPayment = await PaymentHistory.findOne({ paymentId });
-    if (existingPayment) {
-      return res.status(409).json({ 
-        success: false, 
-        error: "Payment already processed" 
-      });
+    // Prevent duplicate processing
+    if (await PaymentHistory.findOne({ paymentId })) {
+      return res.status(409).json({ success: false, error: "Payment already processed" });
     }
 
     // Verify signature
     const { key_secret } = await getPaymentConfig();
-    const expectedSignature = crypto
+    const expected = crypto
       .createHmac("sha256", key_secret)
       .update(`${orderId}|${paymentId}`)
       .digest("hex");
-      
-    if (expectedSignature !== signature) {
-      return res.status(400).json({ 
-        success: false, 
-        error: "Invalid payment signature" 
-      });
+    if (expected !== signature) {
+      return res.status(400).json({ success: false, error: "Invalid payment signature" });
     }
 
-    // Fetch order details
+    // Fetch order
     const razorpay = await getRazorpayInstance();
     const order = await razorpay.orders.fetch(orderId);
     if (!order) {
-      return res.status(404).json({ 
-        success: false, 
-        error: "Order not found" 
-      });
+      return res.status(404).json({ success: false, error: "Order not found" });
     }
 
+    // Extract note fields
     const notes = order.notes || {};
-    const { productType, productId, planType = "monthly", category, isRenewal, existingSubscriptionId } = notes;
+    const { productType, productId, planType = "monthly", isRenewal, existingSubscriptionId } = notes;
     const userId = req.user._id;
-    const amount = order.amount / 100;
+    const paidAmount = order.amount / 100;
 
+    // Compute expiry and compensation
     let expiryDate = calculateEndDate(planType);
     let compensationDays = 0;
-
-    // ✨ ENHANCED: Apply compensation for renewal
-    if (isRenewal === 'true' && existingSubscriptionId) {
-      const existingSubscription = await Subscription.findById(existingSubscriptionId);
-      if (existingSubscription && existingSubscription.expiresAt > new Date()) {
-        const compensation = calculateCompensatedEndDate(planType, existingSubscription.expiresAt);
-        expiryDate = compensation.endDate;
-        compensationDays = compensation.compensationDays;
+    if (isRenewal === "true" && existingSubscriptionId) {
+      const existing = await Subscription.findById(existingSubscriptionId);
+      if (existing && existing.expiresAt > new Date()) {
+        const comp = calculateCompensatedEndDate(planType, existing.expiresAt);
+        expiryDate = comp.endDate;
+        compensationDays = comp.compensationDays;
       }
     }
 
-    // Process payment with atomic transaction
     let responseData = {};
+
     await session.withTransaction(async () => {
       if (productType === "Bundle") {
         const bundle = await Bundle.findById(productId).populate("portfolios");
-        if (!bundle || !bundle.portfolios.length) {
-          throw new Error("Bundle not found or has no portfolios");
-        }
+        if (!bundle) throw new Error("Bundle not found");
 
-        const amountPerPortfolio = amount / bundle.portfolios.length;
-        
-        // If renewal, cancel existing subscriptions first
-        if (isRenewal === 'true') {
-          await Subscription.updateMany(
+        // If bundle has portfolios, distribute per-portfolio
+        const portfolios = bundle.portfolios || [];
+        if (portfolios.length > 0) {
+          const amountPer = paidAmount / portfolios.length;
+          // Cancel old if renewal
+          if (isRenewal === "true" && existingSubscriptionId) {
+            await Subscription.updateMany(
+              { user: userId, productType: "Portfolio", productId: { $in: portfolios.map(p => p._id) }, status: "active" },
+              { status: "cancelled", cancelledAt: new Date(), cancelReason: "Renewed" },
+              { session }
+            );
+          }
+          // Upsert subscriptions & histories
+          for (let i = 0; i < portfolios.length; i++) {
+            const port = portfolios[i];
+            await Subscription.findOneAndUpdate(
+              { user: userId, productType: "Portfolio", productId: port._id, type: "one_time" },
+              {
+                user: userId,
+                productType: "Portfolio",
+                productId: port._id,
+                portfolio: port._id,
+                type: "one_time",
+                status: "active",
+                amount: amountPer,
+                category: bundle.category,
+                planType,
+                expiresAt: expiryDate,
+                paymentId,
+                orderId,
+                isRenewal: isRenewal === "true",
+                compensationDays,
+                previousSubscriptionId: existingSubscriptionId || null
+              },
+              { upsert: true, new: true, session }
+            );
+            await PaymentHistory.create([{
+              user: userId,
+              subscription: null,
+              portfolio: port._id,
+              amount: amountPer,
+              paymentId: `${paymentId}_port_${i}`,
+              orderId,
+              signature,
+              status: "VERIFIED",
+              description: `Bundle payment - ${bundle.name}`
+            }], { session });
+          }
+        } else {
+          // No portfolios: single bundle subscription record
+          if (isRenewal === "true" && existingSubscriptionId) {
+            await Subscription.findByIdAndUpdate(
+              existingSubscriptionId,
+              { status: "cancelled", cancelledAt: new Date(), cancelReason: "Renewed" },
+              { session }
+            );
+          }
+          const sub = await Subscription.findOneAndUpdate(
+            { user: userId, productType: "Bundle", productId, type: "one_time" },
             {
               user: userId,
-              productType: "Portfolio",
-              productId: { $in: bundle.portfolios.map(p => p._id) },
-              status: "active"
-            },
-            { status: "cancelled", cancelledAt: new Date(), cancelReason: "Renewed" },
-            { session }
-          );
-        }
-
-        // Create subscriptions for each portfolio in bundle
-        for (let i = 0; i < bundle.portfolios.length; i++) {
-          const portfolio = bundle.portfolios[i];
-          
-          await Subscription.findOneAndUpdate(
-            { 
-              user: userId, 
-              productType: "Portfolio", 
-              productId: portfolio._id, 
-              type: "one_time" 
-            },
-            {
-              user: userId,
-              productType: "Portfolio",
-              productId: portfolio._id,
-              portfolio: portfolio._id,
+              productType: "Bundle",
+              productId,
+              bundleId: productId,
               type: "one_time",
               status: "active",
-              amount: amountPerPortfolio,
-              category: portfolio.PortfolioCategory ? portfolio.PortfolioCategory.toLowerCase() : category,
+              amount: paidAmount,
+              category: bundle.category,
               planType,
               expiresAt: expiryDate,
               paymentId,
               orderId,
-              bundleId: productId,
-              lastPaymentAt: new Date(),
-              isRenewal: isRenewal === 'true',
-              compensationDays: compensationDays,
+              isRenewal: isRenewal === "true",
+              compensationDays,
               previousSubscriptionId: existingSubscriptionId || null
             },
             { upsert: true, new: true, session }
           );
-
-          // Create unique payment history for each portfolio
           await PaymentHistory.create([{
             user: userId,
-            subscription: null,
-            portfolio: portfolio._id,
-            amount: amountPerPortfolio,
-            paymentId: `${paymentId}_portfolio_${i}`,
+            subscription: sub._id,
+            portfolio: null,
+            amount: paidAmount,
+            paymentId,
             orderId,
             signature,
             status: "VERIFIED",
-            description: `Bundle payment - Portfolio ${i + 1}/${bundle.portfolios.length}${isRenewal === 'true' ? ' (Renewal)' : ''}`
+            description: `Bundle (${bundle.name}) payment`
           }], { session });
         }
 
         responseData = {
-          success: true, 
-          message: `Bundle payment verified successfully${isRenewal === 'true' ? ' (Renewal)' : ''}`,
-          portfoliosActivated: bundle.portfolios.length,
-          category,
-          isRenewal: isRenewal === 'true',
-          compensationDays: compensationDays,
+          success: true,
+          message: `Bundle payment verified${isRenewal === "true" ? " (Renewal)" : ""}`,
+          category: bundle.category,
+          isRenewal: isRenewal === "true",
+          compensationDays,
           newExpiryDate: expiryDate
         };
-        
       } else {
-        // If renewal, cancel existing subscription first
-        if (isRenewal === 'true' && existingSubscriptionId) {
+        // Single portfolio
+        if (isRenewal === "true" && existingSubscriptionId) {
           await Subscription.findByIdAndUpdate(
             existingSubscriptionId,
-            { 
-              status: "cancelled", 
-              cancelledAt: new Date(), 
-              cancelReason: "Renewed" 
-            },
+            { status: "cancelled", cancelledAt: new Date(), cancelReason: "Renewed" },
             { session }
           );
         }
-
-        const newSubscription = await Subscription.findOneAndUpdate(
-          { 
-            user: userId, 
-            productType, 
-            productId, 
-            type: "one_time" 
-          },
+        const newSub = await Subscription.findOneAndUpdate(
+          { user: userId, productType: "Portfolio", productId, type: "one_time" },
           {
             user: userId,
-            productType,
+            productType: "Portfolio",
             productId,
             portfolio: productId,
             type: "one_time",
             status: "active",
-            amount,
-            category,
+            amount: paidAmount,
+            category: notes.category,
             planType,
             expiresAt: expiryDate,
             paymentId,
             orderId,
-            lastPaymentAt: new Date(),
-            isRenewal: isRenewal === 'true',
-            compensationDays: compensationDays,
+            isRenewal: isRenewal === "true",
+            compensationDays,
             previousSubscriptionId: existingSubscriptionId || null
           },
           { upsert: true, new: true, session }
         );
-
-        // Create payment history
         await PaymentHistory.create([{
           user: userId,
-          subscription: newSubscription._id,
+          subscription: newSub._id,
           portfolio: productId,
-          amount,
+          amount: paidAmount,
           paymentId,
           orderId,
           signature,
           status: "VERIFIED",
-          description: `Single portfolio payment${isRenewal === 'true' ? ' (Renewal)' : ''}`
+          description: `Portfolio payment${isRenewal === "true" ? " (Renewal)" : ""}`
         }], { session });
 
         responseData = {
-          success: true, 
-          message: `Portfolio payment verified successfully${isRenewal === 'true' ? ' (Renewal)' : ''}`,
-          subscriptionId: newSubscription._id,
-          category,
-          isRenewal: isRenewal === 'true',
-          compensationDays: compensationDays,
+          success: true,
+          message: `Portfolio payment verified${isRenewal === "true" ? " (Renewal)" : ""}`,
+          subscriptionId: newSub._id,
+          category: notes.category,
+          isRenewal: isRenewal === "true",
+          compensationDays,
           newExpiryDate: expiryDate
         };
-
-        // ✨ NEW: Send renewal confirmation email for single portfolio
-        if (isRenewal === 'true') {
-          try {
-            const user = await User.findById(userId);
-            const portfolio = await Portfolio.findById(productId);
-            await sendRenewalConfirmationEmail(user, newSubscription, portfolio, compensationDays);
-          } catch (emailError) {
-            logger.error("Failed to send renewal confirmation email", emailError);
-          }
-        }
       }
     });
-
     await session.endSession();
 
-    // Update premium status after successful payment
-    await updateUserPremiumStatus(userId);
-
-    res.json(responseData);
-
-  } catch(error) {
+    // Update user premium flag
+    await updateUserPremiumStatus(req.user._id);
+    return res.json(responseData);
+  } catch (error) {
     await session.endSession();
-    
-    logger.error("Error in verifyPayment", error);
-    
+    logger.error("Error in verifyPayment:", error);
     if (error.code === 11000) {
-      return res.status(409).json({ 
-        success: false, 
-        error: "Subscription already exists. Payment may have been processed already." 
-      });
+      return res.status(409).json({ success: false, error: "Duplicate subscription" });
     }
-    
-    res.status(500).json({ 
-      success: false, 
-      error: error.message || "Payment verification failed" 
-    });
+    return res.status(500).json({ success: false, error: error.message || "Payment verification failed" });
   }
 };
+
 
 /**
  * Verify eMandate subscription
@@ -813,130 +787,92 @@ exports.verifyEmandate = async (req, res) => {
   try {
     const { subscription_id } = req.body;
     if (!subscription_id) {
-      return res.status(400).json({ 
-        success: false, 
-        error: "Subscription ID required" 
-      });
+      return res.status(400).json({ success: false, error: "Subscription ID required" });
     }
 
     const razorpay = await getRazorpayInstance();
-    const razorpaySubscription = await razorpay.subscriptions.fetch(subscription_id);
+    const rSub = await razorpay.subscriptions.fetch(subscription_id);
     const userId = req.user._id;
-    
-    // Verify user ownership
-    if (!razorpaySubscription || !razorpaySubscription.notes || 
-        razorpaySubscription.notes.user_id !== userId.toString()) {
-      return res.status(403).json({ 
-        success: false, 
-        error: "Unauthorized access" 
-      });
+
+    // Ownership & existence check
+    if (!rSub || !rSub.notes || rSub.notes.user_id !== userId.toString()) {
+      return res.status(403).json({ success: false, error: "Unauthorized access" });
+    }
+    const existingSubs = await Subscription.find({ razorpaySubscriptionId: subscription_id });
+    if (!existingSubs.length) {
+      return res.status(404).json({ success: false, error: "No matching subscriptions" });
     }
 
-    // Get database subscriptions
-    const existingSubscriptions = await Subscription.find({ 
-      razorpaySubscriptionId: subscription_id 
-    });
-    
-    if (!existingSubscriptions.length) {
-      return res.status(404).json({ 
-        success: false, 
-        error: "No subscriptions found for this ID" 
-      });
-    }
+    const status = rSub.status;
+    const isRenewal = rSub.notes.isRenewal === "true";
+    const existingId = rSub.notes.existingSubscriptionId;
+    let activatedCount = 0;
 
-    const status = razorpaySubscription.status;
-    const isRenewal = razorpaySubscription.notes.isRenewal === 'true';
-    const existingSubscriptionId = razorpaySubscription.notes.existingSubscriptionId;
-    
-    let shouldActivate = false;
-    let responseMessage = "";
-    let activationCount = 0;
-
-    // Handle different subscription statuses
     if (["authenticated", "active"].includes(status)) {
-      const session = await mongoose.startSession();
-      
-      await session.withTransaction(async () => {
-        // If renewal, cancel existing subscriptions first
-        if (isRenewal && existingSubscriptionId) {
+      const session2 = await mongoose.startSession();
+      await session2.withTransaction(async () => {
+        // Cancel old if renewal
+        if (isRenewal && existingId) {
           await Subscription.findByIdAndUpdate(
-            existingSubscriptionId,
-            { 
-              status: "cancelled", 
-              cancelledAt: new Date(), 
-              cancelReason: "Renewed via eMandate" 
-            },
-            { session }
+            existingId,
+            { status: "cancelled", cancelledAt: new Date(), cancelReason: "Renewed via eMandate" },
+            { session: session2 }
           );
         }
 
-        // Activate new subscriptions
-        const updateResult = await Subscription.updateMany(
+        const update = await Subscription.updateMany(
           { razorpaySubscriptionId: subscription_id, user: userId },
-          { 
-            status: "active", 
-            lastPaymentAt: new Date() 
-          },
-          { session }
+          { status: "active", lastPaymentAt: new Date() },
+          { session: session2 }
         );
-        
-        activationCount = updateResult.modifiedCount;
+        activatedCount = update.modifiedCount;
       });
-      
-      await session.endSession();
-      
-      shouldActivate = true;
-      responseMessage = `eMandate ${status}. Activated ${activationCount} subscriptions.${isRenewal ? ' (Renewal)' : ''}`;
-      
-      // Update premium status
-      await updateUserPremiumStatus(userId);
+      await session2.endSession();
 
-      // ✨ NEW: Send renewal confirmation emails
+      // Renewal emails
       if (isRenewal) {
-        try {
-          const user = await User.findById(userId);
-          for (const subscription of existingSubscriptions) {
-            const portfolio = await Portfolio.findById(subscription.portfolio);
-            if (portfolio) {
-              await sendRenewalConfirmationEmail(user, subscription, portfolio, subscription.compensationDays || 0);
-            }
-          }
-        } catch (emailError) {
-          logger.error("Failed to send renewal confirmation emails", emailError);
+        const user = await User.findById(userId);
+        for (const sub of existingSubs) {
+          const portfolio = sub.productType === "Portfolio" ? await Portfolio.findById(sub.portfolio) : null;
+          await sendRenewalConfirmationEmail(user, sub, portfolio, sub.compensationDays || 0);
         }
       }
-      
-    } else if (["halted", "cancelled", "expired"].includes(status)) {
+
+      await updateUserPremiumStatus(userId);
+      return res.json({
+        success: true,
+        message: `eMandate ${status}. Activated ${activatedCount} subscriptions${isRenewal ? " (Renewal)" : ""}`,
+        subscriptionStatus: status,
+        activatedSubscriptions: activatedCount,
+        isRenewal,
+        requiresAction: ["pending", "created"].includes(status)
+      });
+    }
+
+    // Cancelled/expired
+    if (["halted", "cancelled", "expired"].includes(status)) {
       await Subscription.updateMany(
         { razorpaySubscriptionId: subscription_id, user: userId },
         { status: "cancelled" }
       );
-      responseMessage = `Subscription ${status}.`;
-      
-      // Update premium status
       await updateUserPremiumStatus(userId);
-    } else {
-      responseMessage = `Subscription in ${status} state.`;
+      return res.json({ success: false, message: `Subscription ${status}.`, subscriptionStatus: status });
     }
 
-    res.json({
-      success: shouldActivate,
-      message: responseMessage,
+    // Other states
+    return res.json({
+      success: false,
+      message: `Subscription in ${status} state.`,
       subscriptionStatus: status,
-      activatedSubscriptions: activationCount,
-      isRenewal: isRenewal,
+      activatedSubscriptions: activatedCount,
+      isRenewal,
       requiresAction: ["pending", "created"].includes(status)
     });
-
-  } catch(error) {
-    logger.error("Error in verifyEmandate", error);
-    res.status(500).json({ 
-      success: false, 
-      error: error.message || "eMandate verification failed" 
-    });
+  } catch (error) {
+    logger.error("Error in verifyEmandate:", error);
+    return res.status(500).json({ success: false, error: error.message || "eMandate verification failed" });
   }
 };
-
 /**
  * Get user subscriptions
  * ✨ ENHANCED: Shows renewal eligibility information
