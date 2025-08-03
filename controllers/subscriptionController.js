@@ -1060,8 +1060,7 @@ exports.cancelSubscription = async (req, res) => {
       },
       { status: "cancelled" }
     );
-
-    // Update premium status
+    
     await updateUserPremiumStatus(req.user._id);
 
     res.json({ 

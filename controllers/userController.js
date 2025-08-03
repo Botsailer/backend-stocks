@@ -39,32 +39,45 @@ const updateUserPremiumStatus = async (userId) => {
 const getUserAccessInfo = async (userId) => {
   try {
     const now = new Date();
+    console.log(`[ACCESS] Getting access info for user: ${userId}`);
     
-    // Get all active subscriptions for the user
     const allSubscriptions = await Subscription.find({
       user: userId,
       status: 'active',
       expiresAt: { $gt: now }
-    }).populate('productId');
+    })
+    .populate('productId')
+    .populate('portfolio');
+
+    console.log(`[ACCESS] Found ${allSubscriptions.length} active subscriptions`);
 
     const accessiblePortfolioIds = new Set();
     let hasPremiumAccess = false;
 
-    allSubscriptions.forEach(sub => {
-      // Check for premium access (case-insensitive)
-      if (sub.category && sub.category.toLowerCase() === 'premium') {
+    allSubscriptions.forEach((sub) => {
+      // Check for premium access
+      if (sub.category?.toLowerCase() === 'premium') {
         hasPremiumAccess = true;
       }
 
-      // Add portfolio access
+      // Portfolio subscriptions
       if (sub.productType === 'Portfolio') {
-        accessiblePortfolioIds.add(sub.productId.toString());
+        // Priority 1: Portfolio field
+        if (sub.portfolio?._id) {
+          accessiblePortfolioIds.add(sub.portfolio._id.toString());
+        } 
+        // Priority 2: ProductId field (portfolio document)
+        else if (sub.productId?._id) {
+          accessiblePortfolioIds.add(sub.productId._id.toString());
+        }
       }
       
-      // Handle bundle subscriptions
-      if (sub.productType === 'Bundle' && sub.productId && sub.productId.portfolios) {
-        sub.productId.portfolios.forEach(portfolioId => {
-          accessiblePortfolioIds.add(portfolioId.toString());
+      // Bundle subscriptions
+      if (sub.productType === 'Bundle' && sub.productId?.portfolios) {
+        sub.productId.portfolios.forEach(portfolio => {
+          if (portfolio?._id) {
+            accessiblePortfolioIds.add(portfolio._id.toString());
+          }
         });
       }
     });
@@ -73,15 +86,15 @@ const getUserAccessInfo = async (userId) => {
       hasPremiumAccess,
       accessiblePortfolioIds: Array.from(accessiblePortfolioIds)
     };
+    
   } catch (error) {
-    console.error('Error in getUserAccessInfo:', error);
+    console.error('[ACCESS] Error in getUserAccessInfo:', error);
     return {
       hasPremiumAccess: false,
       accessiblePortfolioIds: []
     };
   }
 };
-
 
 // User Profile Endpoints
 exports.getProfile = async (req, res) => {
@@ -217,10 +230,10 @@ exports.getAllPortfolios = async (req, res) => {
     }
     
     if (category) {
-      if (!['basic', 'premium'].includes(category)) {
+      if (!['basic', 'premium'].includes(category.toLowerCase())) {
         return res.status(400).json({ error: 'Invalid category' });
       }
-      query.PortfolioCategory = { $regex: new RegExp(`^${category}$`, 'i') }; // Case-insensitive match
+      query.PortfolioCategory = { $regex: new RegExp(`^${category}$`, 'i') };
     }
 
     const portfolios = await Portfolio.find(query).sort('name');
@@ -242,15 +255,25 @@ exports.getAllPortfolios = async (req, res) => {
     }
     
     // For admins - full access
-    if (user.isAdmin) return res.json(portfolios);
+    if (user.isAdmin) {
+      console.log('[PORTFOLIO] Admin access granted');
+      return res.json(portfolios);
+    }
     
-    // Get access information
+    // Get access information with logging
+    console.log(`[PORTFOLIO] Getting access info for user: ${user._id}`);
     const { accessiblePortfolioIds } = await getUserAccessInfo(user._id);
+    console.log(`[PORTFOLIO] User accessible portfolio IDs:`, accessiblePortfolioIds);
     
     const processedPortfolios = portfolios.map(p => {
-      const isAccessible = accessiblePortfolioIds.includes(p._id.toString());
+      const portfolioIdString = p._id.toString();
+      const isAccessible = accessiblePortfolioIds.includes(portfolioIdString);
       
-      if (isAccessible) return p;
+      console.log(`[PORTFOLIO] Checking portfolio ${portfolioIdString} (${p.name}): accessible=${isAccessible}`);
+      
+      if (isAccessible) {
+        return p;
+      }
       
       return {
         _id: p._id,
