@@ -32,6 +32,12 @@ async function createAdmin(data) {
   return savedAdmin;
 }
 
+async function disconnect() {
+  await mongoose.disconnect();
+  console.log('Disconnected from database');
+  child.unref(); // Allow the child process to exit independently
+}
+
 async function findUser(query) {
   return User.findOne(query);
 }
@@ -95,4 +101,4 @@ const cleanupDuplicateSubscriptions = async () => {
 
 
 
-module.exports = { connect, createAdmin, createUser, findUser, updateUser, findBannedUser, cleanupDuplicateSubscriptions };
+module.exports = { connect, disconnect,createAdmin, createUser, findUser, updateUser, findBannedUser, cleanupDuplicateSubscriptions };
