@@ -185,13 +185,13 @@ cron.schedule('30 2 * * *', () => {  // 8:00 AM IST (2:30 UTC)
       console.error('❌ Morning update failed:', err));
 }, { timezone: "UTC" });
 
-cron.schedule('30 10 * * *', () => {  // 4:00 PM IST (10:30 UTC)
-  console.log('🚀 Starting evening update (4:00 PM IST)');
+cron.schedule('0 10 * * *', () => {  // 4:00 PM IST (10:30 UTC)
+  console.log('🚀 Starting afternoon update (4:00 PM IST)');
   priceUpdater.executeUpdate()
     .then(result => 
-      console.log(`✅ Evening update: ${result.message || 'Completed without results'}`))
+      console.log(`✅ Afternoon update: ${result.message || 'Completed without results'}`))
     .catch(err => 
-      console.error('❌ Evening update failed:', err));
+      console.error('❌ Afternoon update failed:', err));
 }, { timezone: "UTC" });
 
 const stockSymbolController = {

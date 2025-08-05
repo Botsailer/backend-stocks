@@ -31,7 +31,9 @@ const requireAdmin = require('../middleware/requirreAdmin');
  *           description: Stock ticker symbol
  *         exchange:
  *           type: string
- *           description: Exchange identifier (NSE, BSE, NYSE, etc.)
+ *           description: |
+ *             Exchange identifier. Supported values:
+ *             NSE, BSE, NYSE, NASDAQ, LSE, TSE, HKEX, SSE, SZSE, ASX, TSX, EURONEXT, XETRA, SIX, BIT, JSE, MOEX, KOSPI, SET, PSX, IDX, KLSE, SGX, TASE, EGX, BMV, BVC, BOVESPA, MCX, NCDEX, ICEX, CBOT, CME, NYMEX, COMEX, LME, ICE, SHFE, DCE, ZCE, TOCOM, SAFEX, EEX, EUREX, FOREX, FX, CRYPTO, BINANCE, COINBASE, KRAKEN, BITSTAMP, MUTUAL, ETF, MF, BOND, CORPORATE_BOND, GOVT_BOND, DERIVATIVES, FUTURES, OPTIONS, ENERGY, OIL, GAS, GOLD, SILVER, PLATINUM, PALLADIUM
  *         name:
  *           type: string
  *           description: Company name
@@ -89,7 +91,7 @@ const requireAdmin = require('../middleware/requirreAdmin');
  *                 type: string
  *               exchange:
  *                 type: string
- *                 description: Stock exchange identifier (e.g., NSE, BSE, NASDAQ)
+ *                 description: Stock exchange identifier (see supported list above)
  *             example:
  *               symbol: "TCS"
  *               name: "Tata Consultancy Services"
@@ -250,6 +252,9 @@ router.get('/', stockSymbolController.getAllStockSymbols);
  *                         type: string
  *                       exchange:
  *                         type: string
+ *                         description: |
+ *                           Stock exchange identifier. Supported values:
+ *                           NSE, BSE, NYSE, NASDAQ, LSE, TSE, HKEX, SSE, SZSE, ASX, TSX, EURONEXT, XETRA, SIX, BIT, JSE, MOEX, KOSPI, SET, PSX, IDX, KLSE, SGX, TASE, EGX, BMV, BVC, BOVESPA, MCX, NCDEX, ICEX, CBOT, CME, NYMEX, COMEX, LME, ICE, SHFE, DCE, ZCE, TOCOM, SAFEX, EEX, EUREX, FOREX, FX, CRYPTO, BINANCE, COINBASE, KRAKEN, BITSTAMP, MUTUAL, ETF, MF, BOND, CORPORATE_BOND, GOVT_BOND, DERIVATIVES, FUTURES, OPTIONS, ENERGY, OIL, GAS, GOLD, SILVER, PLATINUM, PALLADIUM
  *                     example:
  *                       _id: 60d21b4667d0d8992e610c85
  *                       symbol: AAPL
