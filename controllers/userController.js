@@ -469,6 +469,7 @@ exports.getTips = async (req, res) => {
         category: tip.category,
         createdAt: tip.createdAt,
         status: tip.status,
+           analysistConfidence: tip?.analysistConfidence,
         action: tip.action,
         message: "Login to view details"
       }))); 
@@ -495,6 +496,7 @@ exports.getTips = async (req, res) => {
         category: 'premium',
         createdAt: tip.createdAt,
         status: tip.status,
+        analysistConfidence: tip?.analysistConfidence,
         action: tip.action,
         message: "Upgrade to premium to view this content"
       };
@@ -554,6 +556,7 @@ exports.getTipsWithPortfolio = async (req, res) => {
         } : null,
         createdAt: tip.createdAt,
         status: tip.status,
+           analysistConfidence: tip?.analysistConfidence,
         action: tip.action,
         message: "Login to view details"
       }))); 
@@ -582,6 +585,7 @@ exports.getTipsWithPortfolio = async (req, res) => {
           name: tip.portfolio.name 
         } : null,
         createdAt: tip.createdAt,
+           analysistConfidence: tip?.analysistConfidence,
         status: tip.status,
         action: tip.action,
         message: "Subscribe to this portfolio to view details"
@@ -619,6 +623,7 @@ exports.getTipById = async (req, res) => {
         createdAt: tip.createdAt,
         status: tip.status,
         action: tip.action,
+           analysistConfidence: tip?.analysistConfidence,
         message: "Login to view details"
       });
     }
@@ -646,6 +651,7 @@ exports.getTipById = async (req, res) => {
         } : null,
         createdAt: tip.createdAt,
         status: tip.status,
+           analysistConfidence: tip?.analysistConfidence,
         action: tip.action,
         message: "Subscribe to this portfolio to view details"
       });
