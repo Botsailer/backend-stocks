@@ -1,10 +1,11 @@
-// utils/cron-scheduler.js
 const cron = require('node-cron');
 const mongoose = require('mongoose');
 const fs = require('fs');
 const path = require('path');
+const emailService = require('../services/emailServices');
+const config = require('../config/config'); // Make sure this is properly configured
 
-// Import your stock symbol model
+// Import models
 const StockSymbol = require('../models/stockSymbol');
 
 // Configure logging
@@ -29,6 +30,26 @@ class CronLogger {
   static error(message, error = null) {
     const errorMessage = error ? `${message}: ${error.message}` : message;
     this.log(errorMessage, 'ERROR');
+    
+    // Send email for critical errors
+    if (config.mail && config.mail.reportTo) {
+      const subject = `CRON Error: ${message.substring(0, 50)}...`;
+      let content = `<p><strong>Time:</strong> ${new Date().toLocaleString()}</p>`;
+      content += `<p><strong>Message:</strong> ${message}</p>`;
+      
+      if (error) {
+        content += `<p><strong>Error:</strong> ${error.message}</p>`;
+        content += `<pre>${error.stack}</pre>`;
+      }
+      
+      emailService.sendEmail(
+        config.mail.reportTo,
+        subject,
+        content
+      ).catch(err => {
+        console.error('Failed to send error email:', err);
+      });
+    }
   }
 
   static info(message) {
@@ -48,6 +69,8 @@ class TradingViewService {
     this.client = null;
     this.batchSize = 50;
     this.batchDelay = 1500;
+    this.maxRetries = 3;
+    this.retryDelay = 2000;
   }
 
   async initialize() {
@@ -58,26 +81,49 @@ class TradingViewService {
     return this;
   }
 
+  async fetchPriceWithRetry(stock) {
+    const symbolKey = `${stock.exchange}:${stock.symbol}`;
+    let retries = 0;
+    
+    while (retries < this.maxRetries) {
+      try {
+        const ticker = await this.client.getTicker(symbolKey);
+        const data = await ticker.fetch();
+        if (data.lp) {
+          return {
+            price: data.lp.toString(),
+            error: null
+          };
+        }
+      } catch (error) {
+        if (retries === this.maxRetries - 1) {
+          return {
+            price: null,
+            error: error.message || 'API error'
+          };
+        }
+      }
+      
+      retries++;
+      await new Promise(r => setTimeout(r, this.retryDelay));
+    }
+    
+    return {
+      price: null,
+      error: 'Max retries reached'
+    };
+  }
+
   async fetchBatchPrices(symbols) {
     const results = [];
     
     for (const stock of symbols) {
-      const symbolKey = `${stock.exchange}:${stock.symbol}`;
-      try {
-        const ticker = await this.client.getTicker(symbolKey);
-        const data = await ticker.fetch();
-        results.push({
-          stock,
-          price: data.lp ? data.lp.toString() : null,
-          error: data.lp ? null : 'No price data'
-        });
-      } catch (error) {
-        results.push({
-          stock,
-          price: null,
-          error: error.message || 'API error'
-        });
-      }
+      const { price, error } = await this.fetchPriceWithRetry(stock);
+      results.push({
+        stock,
+        price,
+        error
+      });
     }
     return results;
   }
@@ -92,7 +138,7 @@ class PriceUpdater {
     this.tvService = new TradingViewService();
   }
 
-  async executeUpdate() {
+  async executeUpdate(updateType = 'regular') {
     const start = Date.now();
     let updateQueue = [];
     
@@ -103,18 +149,21 @@ class PriceUpdater {
       }
 
       await this.tvService.initialize();
-      const stocks = await StockSymbol.find({}, '_id symbol exchange currentPrice');
+      const stocks = await StockSymbol.find({ isActive: true }, '_id symbol exchange currentPrice todayClosingPrice');
       
       if (!stocks.length) {
+        CronLogger.info('No active stocks found for update');
         return {
           success: false,
-          message: 'No stocks found',
+          message: 'No active stocks found',
           total: 0,
           updatedCount: 0,
           failed: []
         };
       }
 
+      CronLogger.info(`Found ${stocks.length} stocks to update (${updateType})`);
+      
       const batchCount = Math.ceil(stocks.length / this.tvService.batchSize);
       let updatedCount = 0;
       const failedUpdates = [];
@@ -124,27 +173,45 @@ class PriceUpdater {
         const endIdx = Math.min(startIdx + this.tvService.batchSize, stocks.length);
         const batch = stocks.slice(startIdx, endIdx);
 
+        CronLogger.info(`Processing batch ${i+1}/${batchCount} with ${batch.length} stocks`);
+        
         const batchResults = await this.tvService.fetchBatchPrices(batch);
         
-        // Fixed: batchResults instead of batch Results
         for (const result of batchResults) {
           const { stock, price, error } = result;
           
-          if (price && price !== stock.currentPrice) {
-            updateQueue.push({
-              updateOne: {
-                filter: { _id: stock._id },
-                update: {
-                  $set: {
-                    currentPrice: price,
-                    previousPrice: stock.currentPrice,
-                    lastUpdated: new Date()
-                  }
-                }
+          if (price) {
+            const update = {
+              $set: {
+                lastUpdated: new Date()
               }
-            });
-            updatedCount++;
+            };
+
+            // Update prices only if they changed
+            if (price !== stock.currentPrice) {
+              update.$set.currentPrice = price;
+              update.$set.previousPrice = stock.currentPrice;
+              CronLogger.info(`Price changed for ${stock.symbol}: ${stock.currentPrice} → ${price}`);
+            }
+
+            // Always set todayClosingPrice for closing updates
+            if (updateType === 'closing') {
+              update.$set.todayClosingPrice = price;
+              CronLogger.info(`Setting todayClosingPrice for ${stock.symbol}: ${price}`);
+            }
+            
+            // Only push update if we have something to change
+            if (Object.keys(update.$set).length > 1) { // More than just lastUpdated
+              updateQueue.push({
+                updateOne: {
+                  filter: { _id: stock._id },
+                  update
+                }
+              });
+              updatedCount++;
+            }
           } else if (error) {
+            CronLogger.error(`Failed to fetch price for ${stock.symbol}: ${error}`);
             failedUpdates.push({
               symbol: stock.symbol,
               exchange: stock.exchange,
@@ -153,13 +220,12 @@ class PriceUpdater {
           }
         }
 
-        // Process batch updates if queue has items
         if (updateQueue.length > 0) {
+          CronLogger.info(`Writing ${updateQueue.length} updates to database...`);
           await StockSymbol.bulkWrite(updateQueue);
-          updateQueue = []; // Reset queue
+          updateQueue = [];
         }
 
-        // Add delay between batches except last one
         if (i < batchCount - 1) {
           await new Promise(r => setTimeout(r, this.tvService.batchDelay));
         }
@@ -170,13 +236,46 @@ class PriceUpdater {
         total: stocks.length,
         updatedCount,
         failed: failedUpdates,
-        message: `Updated ${updatedCount}/${stocks.length} symbols`,
+        message: `Processed ${stocks.length} symbols (${updatedCount} updated)`,
+        updateType,
         duration: Date.now() - start
       };
+
+      // Log results and send email if needed
+      if (result.failed.length > 0 && config.mail && config.mail.reportTo) {
+        const failureRate = (result.failed.length / result.total * 100).toFixed(2);
+        const subject = `Stock Price Update Report (${updateType}) - ${failureRate}% Failed`;
+        
+        let htmlContent = `
+          <h1>Stock Price Update Report (${updateType})</h1>
+          <p><strong>Time:</strong> ${new Date().toLocaleString()}</p>
+          <p><strong>Duration:</strong> ${result.duration}ms</p>
+          <p><strong>Total Symbols:</strong> ${result.total}</p>
+          <p><strong>Updated:</strong> ${result.updatedCount}</p>
+          <p><strong>Failed:</strong> ${result.failed.length} (${failureRate}%)</p>
+        `;
+        
+        if (result.failed.length > 0) {
+          htmlContent += `<h2>Failure Details:</h2><ul>`;
+          result.failed.forEach(failure => {
+            htmlContent += `<li>${failure.symbol} (${failure.exchange}): ${failure.error}</li>`;
+          });
+          htmlContent += `</ul>`;
+        }
+        
+        emailService.sendEmail(
+          config.mail.reportTo,
+          subject,
+          htmlContent
+        ).catch(err => {
+          CronLogger.error('Failed to send update report email', err);
+        });
+      }
 
       return result;
 
     } catch (error) {
+      CronLogger.error('Update failed', error);
       return {
         success: false,
         message: 'Update failed',
@@ -184,6 +283,7 @@ class PriceUpdater {
         total: 0,
         updatedCount: 0,
         failed: [],
+        updateType,
         duration: Date.now() - start
       };
     } finally {
@@ -196,8 +296,8 @@ class PriceUpdater {
 const priceUpdater = new PriceUpdater();
 
 // Cron job wrapper with error handling and logging
-async function runPriceUpdate(jobName) {
-  CronLogger.info(`🚀 Starting ${jobName} stock price update`);
+async function runPriceUpdate(jobName, updateType = 'regular') {
+  CronLogger.info(`🚀 Starting ${jobName} stock price update (${updateType})`);
   
   try {
     // Check if database is connected
@@ -205,7 +305,7 @@ async function runPriceUpdate(jobName) {
       throw new Error('Database connection not ready');
     }
 
-    const result = await priceUpdater.executeUpdate();
+    const result = await priceUpdater.executeUpdate(updateType);
     
     if (result.success) {
       CronLogger.success(`✅ ${jobName} update completed: ${result.message} (${result.duration}ms)`);
@@ -235,35 +335,42 @@ class CronScheduler {
     try {
       // Morning update - 8:00 AM IST (2:30 AM UTC)
       const morningJob = cron.schedule('30 2 * * *', () => {
-        runPriceUpdate('Morning (8:00 AM IST)');
+        runPriceUpdate('Morning', 'regular');
+      }, {
+        scheduled: false,
+        timezone: "UTC"
+      });
+const hourlyJob = cron.schedule('0 * * * *', () => {
+  runPriceUpdate('Hourly', 'regular');
+}, {
+  scheduled: false,
+  timezone: "UTC"
+});
+      // Afternoon update - 4:00 PM IST (10:30 AM UTC)
+      const afternoonJob = cron.schedule('30 10 * * *', () => {
+        runPriceUpdate('Afternoon', 'regular');
       }, {
         scheduled: false,
         timezone: "UTC"
       });
 
-      // Afternoon update - 3:00 PM IST (9:30 AM UTC) - FIXED TIME
-      const afternoonJob = cron.schedule('30 9 * * *', () => {
-        runPriceUpdate('Afternoon (3:00 PM IST)');
-      }, {
-        scheduled: false,
-        timezone: "UTC"
-      });
-
-      // Optional: Evening update - 8:00 PM IST (2:30 PM UTC)
-      const eveningJob = cron.schedule('30 14 * * *', () => {
-        runPriceUpdate('Evening (8:00 PM IST)');
+      // Closing price update - 3:45 PM IST (10:15 UTC)
+      const closingJob = cron.schedule('15 10 * * *', () => {
+        runPriceUpdate('Closing Price', 'closing');
       }, {
         scheduled: false,
         timezone: "UTC"
       });
 
       this.jobs = [
-        { name: 'Morning Update', job: morningJob },
-        { name: 'Afternoon Update', job: afternoonJob },
-        { name: 'Evening Update', job: eveningJob }
+        {name:'Hourly Update', job: hourlyJob, type: 'hourly'},
+        { name: 'Morning Update', job: morningJob, type: 'morning' },
+        { name: 'Afternoon Update', job: afternoonJob, type: 'afternoon' },
+        { name: 'Closing Price Update', job: closingJob, type: 'closing' }
+        
       ];
 
-      CronLogger.info('📅 Cron scheduler initialized with 3 jobs');
+      CronLogger.info('📅 Cron scheduler initialized with 4 jobs');
       
     } catch (error) {
       CronLogger.error('Failed to initialize cron scheduler', error);
@@ -310,16 +417,17 @@ class CronScheduler {
 
   // Get status of all jobs
   getStatus() {
-    return this.jobs.map(({ name, job }) => ({
+    return this.jobs.map(({ name, job, type }) => ({
       name,
+      type,
       running: job.running || false
     }));
   }
 
   // Manual trigger for testing
-  async triggerManualUpdate() {
-    CronLogger.info('🔧 Manual update triggered');
-    await runPriceUpdate('Manual');
+  async triggerManualUpdate(updateType = 'regular') {
+    CronLogger.info(`🔧 Manual ${updateType} update triggered`);
+    await runPriceUpdate('Manual', updateType);
   }
 }
 

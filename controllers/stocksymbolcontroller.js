@@ -1,22 +1,26 @@
-// controllers/stockSymbolController.js
 const { TradingViewAPI } = require("tradingview-scraper");
-const StockSymbol = require('../models/stockSymbol');
+const StockSymbol = require('../models/stockSymbol'); // Use the model from separate file
 const cron = require('node-cron');
 const fs = require('fs');
 const path = require('path');
 const mongoose = require('mongoose');
+const emailService = require('../services/emailServices');
+const config = require('../config/config'); // Import config
 
 // Configure logging
 const LOGS_DIR = path.resolve(__dirname, '../logs');
 if (!fs.existsSync(LOGS_DIR)) {
-  fs.mkdirSync(LOGS_DIR);
+  fs.mkdirSync(LOGS_DIR, { recursive: true });
 }
 
+// Enhanced TradingViewService with retry logic
 class TradingViewService {
   constructor() {
     this.client = null;
     this.batchSize = 50;
     this.batchDelay = 1500;
+    this.maxRetries = 3;
+    this.retryDelay = 2000;
   }
 
   async initialize() {
@@ -27,26 +31,49 @@ class TradingViewService {
     return this;
   }
 
+  async fetchPriceWithRetry(stock) {
+    const symbolKey = `${stock.exchange}:${stock.symbol}`;
+    let retries = 0;
+    
+    while (retries < this.maxRetries) {
+      try {
+        const ticker = await this.client.getTicker(symbolKey);
+        const data = await ticker.fetch();
+        if (data.lp) {
+          return {
+            price: data.lp.toString(),
+            error: null
+          };
+        }
+      } catch (error) {
+        if (retries === this.maxRetries - 1) {
+          return {
+            price: null,
+            error: error.message || 'API error'
+          };
+        }
+      }
+      
+      retries++;
+      await new Promise(r => setTimeout(r, this.retryDelay));
+    }
+    
+    return {
+      price: null,
+      error: 'Max retries reached'
+    };
+  }
+
   async fetchBatchPrices(symbols) {
     const results = [];
     
     for (const stock of symbols) {
-      const symbolKey = `${stock.exchange}:${stock.symbol}`;
-      try {
-        const ticker = await this.client.getTicker(symbolKey);
-        const data = await ticker.fetch();
-        results.push({
-          stock,
-          price: data.lp ? data.lp.toString() : null,
-          error: data.lp ? null : 'No price data'
-        });
-      } catch (error) {
-        results.push({
-          stock,
-          price: null,
-          error: error.message || 'API error'
-        });
-      }
+      const { price, error } = await this.fetchPriceWithRetry(stock);
+      results.push({
+        stock,
+        price,
+        error
+      });
     }
     return results;
   }
@@ -75,11 +102,42 @@ class PriceUpdater {
         };
         
         fs.appendFileSync(logPath, JSON.stringify(logData) + '\n');
+        
+        // Send email report if failures exist
+        if (results.failed.length > 0 && config.mail && config.mail.reportTo) {
+          const failureRate = (results.failed.length / results.total * 100).toFixed(2);
+          const subject = `Stock Price Update Report - ${failureRate}% Failed`;
+          
+          let htmlContent = `
+            <h1>Stock Price Update Report</h1>
+            <p><strong>Time:</strong> ${date.toLocaleString()}</p>
+            <p><strong>Duration:</strong> ${duration}ms</p>
+            <p><strong>Total Symbols:</strong> ${results.total}</p>
+            <p><strong>Updated:</strong> ${results.updatedCount}</p>
+            <p><strong>Failed:</strong> ${results.failed.length} (${failureRate}%)</p>
+          `;
+          
+          if (results.failed.length > 0) {
+            htmlContent += `<h2>Failure Details:</h2><ul>`;
+            results.failed.forEach(failure => {
+              htmlContent += `<li>${failure.symbol} (${failure.exchange}): ${failure.error}</li>`;
+            });
+            htmlContent += `</ul>`;
+          }
+          
+          emailService.sendEmail(
+            config.mail.reportTo,
+            subject,
+            htmlContent
+          ).catch(err => {
+            console.error('Failed to send email report:', err);
+          });
+        }
       }
     };
   }
 
-  async executeUpdate() {
+ async executeUpdate(updateType = 'regular') {
     const start = Date.now();
     let updateQueue = [];
     
@@ -90,13 +148,15 @@ class PriceUpdater {
       if (!stocks.length) {
         return {
           success: false,
-          message: 'No stocks found',
+          message: 'No active stocks found',
           total: 0,
           updatedCount: 0,
           failed: []
         };
       }
 
+      console.log(`Found ${stocks.length} stocks to update`);
+      
       const batchCount = Math.ceil(stocks.length / this.tvService.batchSize);
       let updatedCount = 0;
       const failedUpdates = [];
@@ -106,26 +166,46 @@ class PriceUpdater {
         const endIdx = Math.min(startIdx + this.tvService.batchSize, stocks.length);
         const batch = stocks.slice(startIdx, endIdx);
 
+        console.log(`Processing batch ${i+1}/${batchCount} with ${batch.length} stocks`);
+        
         const batchResults = await this.tvService.fetchBatchPrices(batch);
         
-        for (const result of batchResults) {
-          const { stock, price, error } = result;
-          
-          if (price && price !== stock.currentPrice) {
-            updateQueue.push({
-              updateOne: {
-                filter: { _id: stock._id },
-                update: {
-                  $set: {
-                    currentPrice: price,
-                    previousPrice: stock.currentPrice,
-                    lastUpdated: new Date()
-                  }
-                }
-              }
-            });
-            updatedCount++;
-          } else if (error) {
+       
+    for (const result of batchResults) {
+      const { stock, price, error } = result;
+      
+      if (price) {
+        const update = {
+          $set: {
+            lastUpdated: new Date()
+          }
+        };
+
+        // Always update currentPrice and previousPrice
+        if (price !== stock.currentPrice) {
+          update.$set.currentPrice = price;
+          update.$set.previousPrice = stock.currentPrice;
+        }
+
+        // Always set todayClosingPrice for closing updates
+        if (updateType === 'closing') {
+          update.$set.todayClosingPrice = price;
+        }
+        
+        // For existing stocks without closing price, set it during any update
+        if (updateType !== 'closing' && !stock.todayClosingPrice) {
+          update.$set.todayClosingPrice = price;
+        }
+        
+        updateQueue.push({
+          updateOne: {
+            filter: { _id: stock._id },
+            update
+          }
+        });
+        updatedCount++;
+      } else if (error) {
+            console.error(`Failed to fetch price for ${stock.symbol}: ${error}`);
             failedUpdates.push({
               symbol: stock.symbol,
               exchange: stock.exchange,
@@ -134,13 +214,12 @@ class PriceUpdater {
           }
         }
 
-        // Process batch updates if queue has items
         if (updateQueue.length > 0) {
+          console.log(`Writing ${updateQueue.length} updates to database...`);
           await StockSymbol.bulkWrite(updateQueue);
-          updateQueue = []; // Reset queue
+          updateQueue = [];
         }
 
-        // Add delay between batches except last one
         if (i < batchCount - 1) {
           await new Promise(r => setTimeout(r, this.tvService.batchDelay));
         }
@@ -151,20 +230,23 @@ class PriceUpdater {
         total: stocks.length,
         updatedCount,
         failed: failedUpdates,
-        message: `Updated ${updatedCount}/${stocks.length} symbols`
+        message: `Processed ${stocks.length} symbols`,
+        updateType
       };
 
       this.logger.logUpdate(result, Date.now() - start);
       return result;
 
     } catch (error) {
+      console.error('Price update error:', error);
       return {
         success: false,
         message: 'Update failed',
-        error: error.message,
+        error: error?.message,
         total: 0,
         updatedCount: 0,
-        failed: []
+        failed: [],
+        updateType
       };
     } finally {
       this.tvService.cleanup();
@@ -175,7 +257,7 @@ class PriceUpdater {
 // Initialize updater and cron jobs
 const priceUpdater = new PriceUpdater();
 
-// Schedule updates (8:00 AM and 4:00 PM IST)
+// Schedule regular updates (8:00 AM and 4:00 PM IST)
 cron.schedule('30 2 * * *', () => {  // 8:00 AM IST (2:30 UTC)
   console.log('🚀 Starting morning update (8:00 AM IST)');
   priceUpdater.executeUpdate()
@@ -193,6 +275,16 @@ cron.schedule('0 10 * * *', () => {  // 4:00 PM IST (10:30 UTC)
     .catch(err => 
       console.error('❌ Afternoon update failed:', err));
 }, { timezone: "UTC" });
+
+// Schedule closing price update (3:45 PM IST - 10:15 UTC)
+cron.schedule('15 10 * * *', () => {  // 3:45 PM IST (10:15 UTC)
+  console.log('🚀 Starting closing price update (3:45 PM IST)');
+  priceUpdater.executeUpdate('closing')
+    .then(result => 
+      console.log(`✅ Closing price update: ${result.message || 'Completed without results'}`))
+    .catch(err => 
+      console.error('❌ Closing price update failed:', err));
+}, { timezone: "UTC" })
 
 const stockSymbolController = {
   createStockSymbol: async (req, res) => {
@@ -272,65 +364,66 @@ const stockSymbolController = {
     }
   },
 
-getAllStockSymbols: async (req, res) => {
-  try {
+  getAllStockSymbols: async (req, res) => {
+    try {
+      const page = parseInt(req.query.page) || 1;
+      const limit = parseInt(req.query.limit) || 2500;
+      
+      if (page < 1) {
+        return res.status(400).json({
+          success: false,
+          message: 'Page number must be greater than 0'
+        });
+      }
 
-    const page = parseInt(req.query.page) || 1;
-    const limit = parseInt(req.query.limit) || 2500;
-    if (page < 1) {
-      return res.status(400).json({
+      if (limit < 1 || limit > 5000) {
+        return res.status(400).json({
+          success: false,
+          message: 'Limit must be between 1 and 5000'
+        });
+      }
+
+      const totalSymbols = await StockSymbol.countDocuments();
+      const totalPages = Math.ceil(totalSymbols / limit);
+      
+      if (page > totalPages && totalSymbols > 0) {
+        return res.status(400).json({
+          success: false,
+          message: `Page ${page} does not exist. Total pages: ${totalPages}`
+        });
+      }
+
+      const skip = (page - 1) * limit;
+
+      const symbols = await StockSymbol.find()
+        .sort({ symbol: 1 })
+        .skip(skip)
+        .limit(limit);
+
+      return res.status(200).json({
+        success: true,
+        count: symbols.length,
+        totalCount: totalSymbols,
+        pagination: {
+          currentPage: page,
+          totalPages: totalPages,
+          limit: limit,
+          hasNextPage: page < totalPages,
+          hasPrevPage: page > 1,
+          nextPage: page < totalPages ? page + 1 : null,
+          prevPage: page > 1 ? page - 1 : null
+        },
+        data: symbols
+      });
+    } catch (error) {
+      console.error('Fetch error:', error);
+      return res.status(500).json({
         success: false,
-        message: 'Page number must be greater than 0'
+        message: 'Server error'
       });
     }
-
-    if (limit < 1 || limit > 5000) {
-      return res.status(400).json({
-        success: false,
-        message: 'Limit must be between 1 and 5000'
-      });
-    }
-
-    const totalSymbols = await StockSymbol.countDocuments();
-    const totalPages = Math.ceil(totalSymbols / limit);
-    
-    if (page > totalPages && totalSymbols > 0) {
-      return res.status(400).json({
-        success: false,
-        message: `Page ${page} does not exist. Total pages: ${totalPages}`
-      });
-    }
-
-    const skip = (page - 1) * limit;
-
-    const symbols = await StockSymbol.find()
-      .sort({ symbol: 1 })
-      .skip(skip)
-      .limit(limit);
-
-    return res.status(200).json({
-      success: true,
-      count: symbols.length,
-      totalCount: totalSymbols,
-      pagination: {
-        currentPage: page,
-        totalPages: totalPages,
-        limit: limit,
-        hasNextPage: page < totalPages,
-        hasPrevPage: page > 1,
-        nextPage: page < totalPages ? page + 1 : null,
-        prevPage: page > 1 ? page - 1 : null
-      },
-      data: symbols
-    });
-  } catch (error) {
-    console.error('Fetch error:', error);
-    return res.status(500).json({
-      success: false,
-      message: 'Server error'
-    });
-  }
-},
+  },
+  
   getStockSymbolById: async (req, res) => {
     try {
       const stock = await StockSymbol.findById(req.params.id);
@@ -476,11 +569,13 @@ getAllStockSymbols: async (req, res) => {
 
   updateStockPrices: async (req, res) => {
     try {
-      console.log('🚀 Manual stock price update initiated');
-      const result = await priceUpdater.executeUpdate();
+      const updateType = req.query.type || 'regular';
+      console.log(`🚀 Manual stock price update initiated (${updateType})`);
+      
+      const result = await priceUpdater.executeUpdate(updateType);
       
       if (result.success) {
-        console.log(`✅ Manual update: ${result.message}`);
+        console.log(`✅ Manual ${updateType} update: ${result.message}`);
         return res.json({
           success: true,
           updated: result.updatedCount,
@@ -491,7 +586,7 @@ getAllStockSymbols: async (req, res) => {
         });
       }
       
-      console.error(`❌ Manual update failed: ${result.error}`);
+      console.error(`❌ Manual ${updateType} update failed: ${result.error}`);
       return res.status(500).json({
         success: false,
         message: result.message,
@@ -508,4 +603,4 @@ getAllStockSymbols: async (req, res) => {
   }
 };
 
-module.exports = stockSymbolController;
+module.exports = {stockSymbolController,PriceUpdater};

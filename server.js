@@ -7,9 +7,14 @@ const dbAdapter = require('./utils/db');
 const authRoutes = require('./routes/authRoutes');
 const setupSwagger = require('./swaggerOptions');
 const cronController = require('./controllers/portfoliocroncontroller');
+const emailService = require('./services/emailServices');
+const { startSubscriptionCleanupJob } = require('./services/subscriptioncron');
 
 // Import the new cron scheduler
 const { cronScheduler, CronLogger } = require('./utils/cornscheduler');
+const { default: mongoose } = require('mongoose');
+
+
 
 // Middleware
 app.use(cors()); 
@@ -20,8 +25,6 @@ app.set('view engine', 'ejs');
 app.set('views', __dirname + '/views');
 
 //verify smtp config by transporter.verify
-const emailService = require('./services/emailServices');
-const { startSubscriptionCleanupJob } = require('./services/subscriptioncron');
 
 emailService.verifySmtpConfig()
   .then(() => console.log('SMTP configuration verified successfully'))
@@ -40,6 +43,7 @@ dbAdapter.connect()
   .then(() => {
     console.log('✅ Database connected successfully');
     CronLogger.info('Database connection established');
+
 
     // Initialize Passport and routes after DB connection
     app.use(passport.initialize());
@@ -72,6 +76,14 @@ dbAdapter.connect()
           res.status(500).json({ error: 'Failed to send contact us message' });
         });
     });
+
+    app.get('/health', (req, res) => {
+  res.json({
+    status: 'ok',
+    cronStatus: cronScheduler.getStatus(),
+    dbStatus: mongoose.connection.readyState === 1 ? 'connected' : 'disconnected'
+  });
+});
 
     // **NEW CRON ENDPOINTS** - Add these for monitoring and manual triggers
     app.get('/api/cron/status', (req, res) => {
@@ -116,6 +128,8 @@ dbAdapter.connect()
       console.log(`Auth service running on port ${config.server.port}`);
       console.log(`Swagger docs available at http://${config.server.host}:${config.server.port}/api-docs`);
       
+
+
       // Start subscription cleanup job
       await startSubscriptionCleanupJob();
       
@@ -128,6 +142,7 @@ dbAdapter.connect()
       // **INITIALIZE AND START STOCK PRICE CRON SCHEDULER**
       try {
         console.log('🚀 Initializing stock price cron scheduler...');
+
         CronLogger.info('Starting stock price cron scheduler initialization');
         
         // Initialize the cron scheduler
@@ -163,6 +178,7 @@ const gracefulShutdown = (signal) => {
   CronLogger.info(`${signal} received, initiating graceful shutdown`);
   
   try {
+
     // Stop cron scheduler
     cronScheduler.stop();
     console.log('🛑 Cron scheduler stopped');

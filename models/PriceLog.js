@@ -1,15 +1,6 @@
-// models/PriceLog.js
 const mongoose = require('mongoose');
 const { Schema } = mongoose;
 
-/**
- * Records a daily snapshot of an entire portfolio's performance:
- * - portfolio: ObjectId of the Portfolio
- * - date: timestamp of the snapshot
- * - dateOnly: date without time (for unique daily constraint)
- * - portfolioValue: total value across all holdings
- * - cashRemaining: updated cash buffer after threshold enforcement
- */
 const PriceLogSchema = new Schema({
   portfolio: {
     type: Schema.Types.ObjectId,
@@ -39,25 +30,20 @@ const PriceLogSchema = new Schema({
     type: Number,
     default: 0,
     min: 0
+  },
+  // Track if this log used closing prices
+  usedClosingPrices: {
+    type: Boolean,
+    default: false
   }
 }, { timestamps: true });
 
 // Indexes
-PriceLogSchema.index({ portfolio: 1, date: 1 });  // For time-based queries
-PriceLogSchema.index({ date: 1 });                // For global historical analysis
+PriceLogSchema.index({ portfolio: 1, date: 1 });
+PriceLogSchema.index({ date: 1 });
+PriceLogSchema.index({ portfolio: 1, dateOnly: 1 }, { unique: true });
 
-// Unique constraint: one log per portfolio per day
-PriceLogSchema.index(
-  { 
-    portfolio: 1, 
-    dateOnly: 1 
-  }, 
-  { 
-    unique: true
-  }
-);
-
-// Pre-save middleware to automatically set dateOnly
+// Pre-save middleware
 PriceLogSchema.pre('save', function(next) {
   if (this.date && !this.dateOnly) {
     const d = new Date(this.date);

@@ -1,7 +1,7 @@
 // routes/stocksymbolroutes.js
 const express = require('express');
 const router = express.Router();
-const stockSymbolController = require('../controllers/stocksymbolcontroller');
+const {stockSymbolController} = require('../controllers/stocksymbolcontroller');
 const requireAdmin = require('../middleware/requirreAdmin');
 
 /**

@@ -1,11 +1,10 @@
-// services/portfolioService.js
 const Portfolio = require('../models/modelPortFolio');
 const StockSymbol = require('../models/stockSymbol');
 const PriceLog = require('../models/PriceLog');
 const winston = require('winston');
 const { default: mongoose } = require('mongoose');
 
-// Logger setup
+// Configure logger
 const logger = winston.createLogger({
   level: 'info',
   format: winston.format.combine(
@@ -24,19 +23,32 @@ const logger = winston.createLogger({
   ]
 });
 
-// Calculate portfolio value using live prices
-exports.calculatePortfolioValue = async (portfolio) => {
+// Calculate portfolio value with closing price preference
+exports.calculatePortfolioValue = async (portfolio, useClosingPrice = false) => {
   try {
     let totalValue = portfolio.cashBalance;
     
     for (const holding of portfolio.holdings) {
+      let price = null;
       const stock = await StockSymbol.findOne({ symbol: holding.symbol });
       
-      if (stock && stock.currentPrice) {
-        totalValue += parseFloat(stock.currentPrice) * holding.quantity;
-      } else {
-        totalValue += holding.buyPrice * holding.quantity;
+      // Prefer closing price if requested and available
+      if (useClosingPrice && stock && stock.todayClosingPrice) {
+        price = parseFloat(stock.todayClosingPrice);
+        logger.debug(`Using closing price for ${holding.symbol}: ${price}`);
+      } 
+      // Fallback to current price
+      else if (stock && stock.currentPrice) {
+        price = parseFloat(stock.currentPrice);
+        logger.debug(`Using current price for ${holding.symbol}: ${price}`);
       }
+      // Final fallback to buy price
+      else {
+        price = holding.buyPrice;
+        logger.warn(`Using buy price for ${holding.symbol}: ${price}`);
+      }
+      
+      totalValue += price * holding.quantity;
     }
     
     return parseFloat(totalValue.toFixed(2));
@@ -61,213 +73,216 @@ exports.updatePortfolioCurrentValue = async (portfolio, newValue) => {
   }
 };
 
-exports.logPortfolioValue = async (portfolio) => {
-  try {
-    const portfolioValue = await this.calculatePortfolioValue(portfolio);
-    await this.updatePortfolioCurrentValue(portfolio, portfolioValue);
-    
-    const now = new Date();
-    const startOfDay = PriceLog.getStartOfDay(now);
-    
-    // Check if record already exists today
-    const existingLog = await PriceLog.findOne({
-      portfolio: portfolio._id,
-      dateOnly: startOfDay
-    });
-    
-    const isUpdate = !!existingLog;
-    const previousValue = existingLog ? existingLog.portfolioValue : null;
-    
-    // Use findOneAndUpdate with upsert to ensure only ONE record per day
-    const priceLog = await PriceLog.findOneAndUpdate(
-      {
+// Log portfolio value with retry
+exports.logPortfolioValue = async (portfolio, useClosingPrice = false) => {
+  const MAX_RETRIES = 3;
+  
+  for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
+    try {
+      const portfolioValue = await this.calculatePortfolioValue(portfolio, useClosingPrice);
+      await this.updatePortfolioCurrentValue(portfolio, portfolioValue);
+      
+      const now = new Date();
+      const startOfDay = PriceLog.getStartOfDay(now);
+      
+      // Check if record exists
+      const existingLog = await PriceLog.findOne({
         portfolio: portfolio._id,
         dateOnly: startOfDay
-      },
-      {
-        $set: {
-          portfolioValue: portfolioValue,
-          cashRemaining: portfolio.cashBalance,
-          date: now, // Always update to latest time
-          dateOnly: startOfDay
+      });
+      
+      const isUpdate = !!existingLog;
+      const previousValue = existingLog ? existingLog.portfolioValue : null;
+      
+      // Create/update log
+      const priceLog = await PriceLog.findOneAndUpdate(
+        { portfolio: portfolio._id, dateOnly: startOfDay },
+        {
+          $set: {
+            portfolioValue: portfolioValue,
+            cashRemaining: portfolio.cashBalance,
+            date: now,
+            dateOnly: startOfDay,
+            usedClosingPrices: useClosingPrice
+          },
+          $inc: { updateCount: 1 }
         },
-        $inc: {
-          updateCount: 1 // Track how many times updated today
-        }
-      },
-      {
-        upsert: true,
-        new: true,
-        runValidators: true,
-        setDefaultsOnInsert: true
-      }
-    );
-    
-    // Enhanced logging
-    if (isUpdate) {
-      const valueChange = portfolioValue - previousValue;
-      const changeSymbol = valueChange > 0 ? '📈' : valueChange < 0 ? '📉' : '➡️';
-      logger.info(
-        `🔄 Portfolio "${portfolio.name}" UPDATED: ₹${portfolioValue} ` +
-        `(${changeSymbol} ${valueChange >= 0 ? '+' : ''}${valueChange.toFixed(2)} from earlier today)`
+        { upsert: true, new: true, runValidators: true }
       );
-    } else {
-      logger.info(`📊 Portfolio "${portfolio.name}" LOGGED: ₹${portfolioValue} (new daily record)`);
-    }
-    
-    return {
-      log: priceLog,
-      isUpdate,
-      previousValue,
-      valueChange: isUpdate ? portfolioValue - previousValue : 0
-    };
-    
-  } catch (error) {
-    logger.error(`Log value failed for portfolio ${portfolio._id}: ${error.message}`);
-    throw error;
-  }
-};
-
-// Enhanced daily logging with detailed results
-exports.logAllPortfoliosDaily = async () => {
-  try {
-    const portfolios = await Portfolio.find();
-    const results = [];
-    let totalCreated = 0;
-    let totalUpdated = 0;
-    
-    for (const portfolio of portfolios) {
-      try {
-        const result = await this.logPortfolioValue(portfolio);
-        
-        if (result.isUpdate) totalUpdated++;
-        else totalCreated++;
-        
-        results.push({
-          portfolio: portfolio.name,
-          status: 'success',
-          value: result.log.portfolioValue,
-          action: result.isUpdate ? 'updated' : 'created',
-          valueChange: result.valueChange
-        });
-      } catch (error) {
-        results.push({
+      
+      // Log result
+      if (isUpdate) {
+        const change = portfolioValue - previousValue;
+        logger.info(`🔄 Updated portfolio "${portfolio.name}" value: ₹${portfolioValue} (Δ${change >= 0 ? '+' : ''}${change.toFixed(2)})`);
+      } else {
+        logger.info(`📊 Created portfolio "${portfolio.name}" daily log: ₹${portfolioValue}`);
+      }
+      
+      return {
+        portfolio: portfolio.name,
+        status: 'success',
+        value: portfolioValue,
+        action: isUpdate ? 'updated' : 'created',
+        valueChange: isUpdate ? portfolioValue - previousValue : 0
+      };
+      
+    } catch (error) {
+      if (attempt === MAX_RETRIES) {
+        logger.error(`Log value failed for portfolio ${portfolio.name} after ${MAX_RETRIES} attempts: ${error.message}`);
+        return {
           portfolio: portfolio.name,
           status: 'failed',
           error: error.message
-        });
+        };
       }
+      
+      logger.warn(`Attempt ${attempt} failed for ${portfolio.name}, retrying...`);
+      await new Promise(resolve => setTimeout(resolve, 2000));
+    }
+  }
+};
+
+// Enhanced daily logging with closing prices
+exports.logAllPortfoliosDaily = async (useClosingPrice = false) => {
+  try {
+    const portfolios = await Portfolio.find();
+    const results = [];
+    
+    for (const portfolio of portfolios) {
+      const result = await this.logPortfolioValue(portfolio, useClosingPrice);
+      results.push(result);
     }
     
-    logger.info(`📋 Daily Summary: ${totalCreated} new records, ${totalUpdated} updates`);
+    // Generate summary
+    const successCount = results.filter(r => r.status === 'success').length;
+    const failedCount = results.filter(r => r.status === 'failed').length;
     
+    logger.info(`📋 Daily Summary: ${successCount} successful, ${failedCount} failed`);
     return results;
+    
   } catch (error) {
     logger.error(`Daily log failed: ${error.message}`);
     throw error;
   }
 };
 
-// Get portfolio history with zero-based gains
+// Get portfolio history
 exports.getPortfolioHistory = async (portfolioId, period = '1m') => {
-  try {
-    // Validate inputs
-    if (!mongoose.Types.ObjectId.isValid(portfolioId)) {
-      throw new Error('Invalid portfolio ID');
-    }
+  const MAX_RETRIES = 2;
+  
+  for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
+    try {
+      // Validate inputs
+      if (!mongoose.Types.ObjectId.isValid(portfolioId)) {
+        throw new Error('Invalid portfolio ID');
+      }
 
-    // Period configuration
-    const periodConfig = {
-      '1d': { days: 1, maxPoints: 24, intervalHours: 1 },
-      '1w': { days: 7, maxPoints: 14, intervalHours: 12 },
-      '1m': { days: 30, maxPoints: 30, intervalDays: 1 },
-      '3m': { days: 90, maxPoints: 13, intervalDays: 7 },
-      '6m': { days: 180, maxPoints: 24, intervalDays: 7 },
-      '1y': { days: 365, maxPoints: 26, intervalDays: 14 },
-      'all': { days: null, maxPoints: 100, intervalDays: 7 }
-    };
-    
-    const config = periodConfig[period] || periodConfig['1m'];
-    const startDate = config.days 
-      ? new Date(Date.now() - config.days * 86400000)
-      : new Date(0);
-
-    // Fetch logs
-    const allLogs = await PriceLog.find({
-      portfolio: portfolioId,
-      date: { $gte: startDate }
-    }).sort('date');
-
-    if (allLogs.length === 0) {
-      return { portfolioId, period, baselineValue: 0, data: [] };
-    }
-
-    // Find baseline (earliest log in period)
-    const baselineLog = allLogs.reduce((oldest, current) => 
-      current.date < oldest.date ? current : oldest
-    );
-    const baselineValue = baselineLog.portfolioValue;
-
-    // Apply interval filtering
-    let filteredLogs = allLogs;
-    
-    if (config.intervalDays && config.intervalDays > 1) {
-      const intervalMs = config.intervalDays * 86400000;
-      let lastIncluded = null;
-      filteredLogs = [];
+      // Period configuration
+      const periodConfig = {
+        '1d': { days: 1, maxPoints: 24, intervalHours: 1 },
+        '1w': { days: 7, maxPoints: 14, intervalHours: 12 },
+        '1m': { days: 30, maxPoints: 30, intervalDays: 1 },
+        '3m': { days: 90, maxPoints: 13, intervalDays: 7 },
+        '6m': { days: 180, maxPoints: 24, intervalDays: 7 },
+        '1y': { days: 365, maxPoints: 26, intervalDays: 14 },
+        'all': { days: null, maxPoints: 100, intervalDays: 7 }
+      };
       
-      for (const log of allLogs) {
-        if (!lastIncluded || (log.date - lastIncluded) >= intervalMs) {
-          filteredLogs.push(log);
-          lastIncluded = log.date;
+      const config = periodConfig[period] || periodConfig['1m'];
+      const startDate = config.days 
+        ? new Date(Date.now() - config.days * 86400000)
+        : new Date(0);
+
+      // Fetch logs
+      const allLogs = await PriceLog.find({
+        portfolio: portfolioId,
+        date: { $gte: startDate }
+      }).sort('date');
+
+      if (allLogs.length === 0) {
+        return { portfolioId, period, baselineValue: 0, data: [] };
+      }
+
+      // Find baseline
+      const baselineLog = allLogs.reduce((oldest, current) => 
+        current.date < oldest.date ? current : oldest
+      );
+      const baselineValue = baselineLog.portfolioValue;
+
+      // Apply interval filtering
+      let filteredLogs = allLogs;
+      
+      if (config.intervalDays && config.intervalDays > 1) {
+        const intervalMs = config.intervalDays * 86400000;
+        let lastIncluded = null;
+        filteredLogs = [];
+        
+        for (const log of allLogs) {
+          if (!lastIncluded || (log.date - lastIncluded) >= intervalMs) {
+            filteredLogs.push(log);
+            lastIncluded = log.date;
+          }
+        }
+        
+        // Always include the latest log
+        if (filteredLogs.length === 0 || 
+            filteredLogs[filteredLogs.length-1]._id !== allLogs[allLogs.length-1]._id) {
+          filteredLogs.push(allLogs[allLogs.length-1]);
         }
       }
       
-      // Always include the latest log
-      if (filteredLogs.length === 0 || 
-          filteredLogs[filteredLogs.length-1]._id !== allLogs[allLogs.length-1]._id) {
-        filteredLogs.push(allLogs[allLogs.length-1]);
-      }
-    }
-    
-    // Transform to zero-based gains
-    const transformedData = filteredLogs.map(log => ({
-      date: log.date,
-      gain: parseFloat((log.portfolioValue - baselineValue).toFixed(2)),
-      value: log.portfolioValue,
-      cash: log.cashRemaining
-    }));
+      // Transform to zero-based gains
+      const transformedData = filteredLogs.map(log => ({
+        date: log.date,
+        gain: parseFloat((log.portfolioValue - baselineValue).toFixed(2)),
+        value: log.portfolioValue,
+        cash: log.cashRemaining,
+        usedClosingPrice: log.usedClosingPrices
+      }));
 
-    return {
-      portfolioId,
-      period,
-      baselineValue,
-      baselineDate: baselineLog.date,
-      data: transformedData
-    };
-    
-  } catch (error) {
-    logger.error(`Get history failed: ${error.message}`);
-    throw error;
+      return {
+        portfolioId,
+        period,
+        baselineValue,
+        baselineDate: baselineLog.date,
+        data: transformedData
+      };
+      
+    } catch (error) {
+      if (attempt === MAX_RETRIES) {
+        logger.error(`Get history failed after ${MAX_RETRIES} attempts: ${error.message}`);
+        throw error;
+      }
+      logger.warn(`History fetch attempt ${attempt} failed, retrying...`);
+      await new Promise(resolve => setTimeout(resolve, 1500));
+    }
   }
 };
 
-
 // Manual portfolio recalculation
-exports.recalculatePortfolioValue = async (portfolioId) => {
-  try {
-    const portfolio = await Portfolio.findById(portfolioId);
-    if (!portfolio) throw new Error('Portfolio not found');
-    
-    const portfolioValue = await this.calculatePortfolioValue(portfolio);
-    const updatedPortfolio = await this.updatePortfolioCurrentValue(portfolio, portfolioValue);
-    
-    return {
-      portfolio: updatedPortfolio,
-      calculatedValue: portfolioValue
-    };
-  } catch (error) {
-    logger.error(`Recalculation failed: ${error.message}`);
-    throw error;
+exports.recalculatePortfolioValue = async (portfolioId, useClosingPrice = false) => {
+  const MAX_RETRIES = 3;
+  
+  for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
+    try {
+      const portfolio = await Portfolio.findById(portfolioId);
+      if (!portfolio) throw new Error('Portfolio not found');
+      
+      const portfolioValue = await this.calculatePortfolioValue(portfolio, useClosingPrice);
+      const updatedPortfolio = await this.updatePortfolioCurrentValue(portfolio, portfolioValue);
+      
+      return {
+        portfolio: updatedPortfolio,
+        calculatedValue: portfolioValue,
+        usedClosingPrice
+      };
+    } catch (error) {
+      if (attempt === MAX_RETRIES) {
+        logger.error(`Recalculation failed after ${MAX_RETRIES} attempts: ${error.message}`);
+        throw error;
+      }
+      logger.warn(`Recalculation attempt ${attempt} failed, retrying...`);
+      await new Promise(resolve => setTimeout(resolve, 2000));
+    }
   }
 };

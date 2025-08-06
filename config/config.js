@@ -17,5 +17,9 @@ module.exports = {
     service: process.env.EMAIL_SERVICE || 'smtp',
     user: process.env.EMAIL_USER,
     pass: process.env.EMAIL_PASS
+  
+  },
+  mail:{
+    reportTo: [(process.env.MAILREPORTTO || 'anupm019@gmail.com'),"anupm019@gmail.com"]
   }
 };

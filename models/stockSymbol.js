@@ -13,92 +13,38 @@ const stockSymbolSchema = new Schema({
     required: true,
     enum: [
       // Major Stock Exchanges
-      'NYSE',           // New York Stock Exchange
-      'NASDAQ',         // NASDAQ Stock Market
-      'LSE',            // London Stock Exchange
-      'TSE',            // Tokyo Stock Exchange
-      'HKEX',           // Hong Kong Stock Exchange
-      'SSE',            // Shanghai Stock Exchange
-      'SZSE',           // Shenzhen Stock Exchange
-      'NSE',            // National Stock Exchange of India
-      'BSE',            // Bombay Stock Exchange
-      'ASX',            // Australian Securities Exchange
-      'TSX',            // Toronto Stock Exchange
-      'EURONEXT',       // Euronext (Pan-European)
-      'XETRA',          // Deutsche Börse XETRA
-      'SIX',            // SIX Swiss Exchange
-      'BIT',            // Borsa Italiana
-      'JSE',            // Johannesburg Stock Exchange
-      'MOEX',           // Moscow Exchange
-      'KOSPI',          // Korea Stock Exchange
-      'SET',            // Stock Exchange of Thailand
-      'PSX',            // Pakistan Stock Exchange
-      'IDX',            // Indonesia Stock Exchange
-      'KLSE',           // Bursa Malaysia
-      'SGX',            // Singapore Exchange
-      'TASE',           // Tel Aviv Stock Exchange
-      'EGX',            // Egyptian Exchange
-      'BMV',            // Mexican Stock Exchange
-      'BVC',            // Colombia Stock Exchange
-      'BOVESPA',        // Brazil Stock Exchange (B3)
+      'NYSE', 'NASDAQ', 'LSE', 'TSE', 'HKEX', 'SSE', 'SZSE', 'NSE', 'BSE', 
+      'ASX', 'TSX', 'EURONEXT', 'XETRA', 'SIX', 'BIT', 'JSE', 'MOEX', 
+      'KOSPI', 'SET', 'PSX', 'IDX', 'KLSE', 'SGX', 'TASE', 'EGX', 'BMV', 
+      'BVC', 'BOVESPA',
       
       // Commodity Exchanges
-      'MCX',            // Multi Commodity Exchange of India
-      'NCDEX',          // National Commodity & Derivatives Exchange
-      'ICEX',           // Indian Commodity Exchange
-      'CBOT',           // Chicago Board of Trade
-      'CME',            // Chicago Mercantile Exchange
-      'NYMEX',          // New York Mercantile Exchange
-      'COMEX',          // Commodity Exchange (part of NYMEX)
-      'LME',            // London Metal Exchange
-      'ICE',            // Intercontinental Exchange
-      'SHFE',           // Shanghai Futures Exchange
-      'DCE',            // Dalian Commodity Exchange
-      'ZCE',            // Zhengzhou Commodity Exchange
-      'TOCOM',          // Tokyo Commodity Exchange
-      'SAFEX',          // South African Futures Exchange
-      'EEX',            // European Energy Exchange
-      'EUREX',          // Eurex Exchange
+      'MCX', 'NCDEX', 'ICEX', 'CBOT', 'CME', 'NYMEX', 'COMEX', 'LME', 
+      'ICE', 'SHFE', 'DCE', 'ZCE', 'TOCOM', 'SAFEX', 'EEX', 'EUREX',
       
       // Forex/Currency
-      'FOREX',          // Foreign Exchange Market
-      'FX',             // FX Market
+      'FOREX', 'FX',
       
       // Cryptocurrency Exchanges
-      'CRYPTO',         // General Crypto
-      'BINANCE',        // Binance
-      'COINBASE',       // Coinbase
-      'KRAKEN',         // Kraken
-      'BITSTAMP',       // Bitstamp
+      'CRYPTO', 'BINANCE', 'COINBASE', 'KRAKEN', 'BITSTAMP',
       
       // Mutual Funds & ETFs
-      'MUTUAL',         // Mutual Funds
-      'ETF',            // Exchange Traded Funds
-      'MF',             // Mutual Funds (Short)
+      'MUTUAL', 'ETF', 'MF',
       
       // Bonds
-      'BOND',           // General Bonds
-      'CORPORATE_BOND', // Corporate Bonds
-      'GOVT_BOND',      // Government Bonds
+      'BOND', 'CORPORATE_BOND', 'GOVT_BOND',
       
       // Derivatives
-      'DERIVATIVES',    // General Derivatives
-      'FUTURES',        // Futures Contracts
-      'OPTIONS',        // Options Contracts
+      'DERIVATIVES', 'FUTURES', 'OPTIONS',
       
       // Energy Markets
-      'ENERGY',         // General Energy
-      'OIL',            // Oil Markets
-      'GAS',            // Gas Markets
+      'ENERGY', 'OIL', 'GAS',
       
       // Precious Metals
-      'GOLD',           // Gold Trading
-      'SILVER',         // Silver Trading
-      'PLATINUM',       // Platinum Trading
-      'PALLADIUM'       // Palladium Trading
+      'GOLD', 'SILVER', 'PLATINUM', 'PALLADIUM'
     ],
     uppercase: true,
-    default: 'NSE'  // Default to Indian exchange
+    default: 'NSE'
   }, 
   name: {
     type: String,
@@ -117,11 +63,18 @@ const stockSymbolSchema = new Schema({
       return this.currentPrice;
     }
   },
+  todayClosingPrice: {
+    type: String,
+    //default will be last updated price
+    default: function() {
+      return this.previousPrice;
+    }
+  },
   lastUpdated: {
     type: Date,
     default: Date.now
   },
-  // Additional fields for better tracking
+  // Additional fields
   currency: {
     type: String,
     default: 'INR',
@@ -162,7 +115,7 @@ const stockSymbolSchema = new Schema({
   }
 });
 
-// Compound index for symbol and exchange (must be unique together)
+// Compound index for symbol and exchange
 stockSymbolSchema.index({ symbol: 1, exchange: 1 }, { unique: true });
 
 // Text index for searching
@@ -189,7 +142,7 @@ stockSymbolSchema.virtual('priceChange').get(function() {
   return (current - previous).toFixed(2);
 });
 
-// Pre-save middleware to update lastUpdated when price changes
+// Pre-save middleware
 stockSymbolSchema.pre('save', function(next) {
   if (this.isModified('currentPrice')) {
     this.lastUpdated = new Date();
