@@ -102,6 +102,16 @@ class TelegramBotService {
   }
 
   setupEventHandlers() {
+    // Handle all messages for group auto-detection
+    this.bot.on('message', async (msg) => {
+      try {
+        // Auto-detect groups from any message
+        await this.handleGroupMessage(msg);
+      } catch (error) {
+        this.logger.error('Error in group auto-detection', { error: error.message, chatId: msg.chat?.id });
+      }
+    });
+
     // Handle new chat members
     this.bot.on('new_chat_members', async (msg) => {
       try {
@@ -399,6 +409,178 @@ Contact our support team for assistance.
         chatId 
       });
       return 0;
+    }
+  }
+
+  // Auto-detect groups the bot is a member of
+  async detectBotGroups() {
+    try {
+      const detectedGroups = [];
+      
+      // Get bot info
+      const botInfo = await this.bot.getMe();
+      
+      this.logger.info('Starting group auto-detection', { 
+        botId: botInfo.id, 
+        botUsername: botInfo.username 
+      });
+      
+      // Since Telegram Bot API doesn't provide a direct way to get all chats,
+      // we'll detect groups through message events and store them
+      // This method will return currently stored groups and provide a way to discover new ones
+      
+      const existingGroups = await TelegramGroup.find({ isActive: true });
+      
+      for (const group of existingGroups) {
+        try {
+          // Try to get chat info to verify bot is still a member
+          const chatInfo = await this.bot.getChat(group.chatId);
+          const memberCount = await this.getChatMembersCount(group.chatId);
+          
+          detectedGroups.push({
+            chatId: group.chatId,
+            title: chatInfo.title,
+            username: chatInfo.username,
+            type: chatInfo.type,
+            memberCount,
+            description: chatInfo.description,
+            inviteLink: chatInfo.invite_link,
+            isExistingGroup: true,
+            databaseId: group._id
+          });
+          
+          this.logger.info('Verified bot membership in group', {
+            chatId: group.chatId,
+            title: chatInfo.title,
+            memberCount
+          });
+          
+        } catch (error) {
+          this.logger.warn('Bot may no longer be member of group', {
+            chatId: group.chatId,
+            error: error.message
+          });
+          
+          // Mark group as inactive if bot is no longer a member
+          if (error.message.includes('chat not found') || 
+              error.message.includes('bot was kicked')) {
+            await TelegramGroup.findByIdAndUpdate(group._id, { 
+              isActive: false,
+              lastError: error.message 
+            });
+          }
+        }
+      }
+      
+      this.logger.info('Group detection completed', { 
+        detectedCount: detectedGroups.length 
+      });
+      
+      return detectedGroups;
+      
+    } catch (error) {
+      this.logger.error('Error detecting bot groups', { error: error.message });
+      throw error;
+    }
+  }
+
+  // Enhanced message handler to auto-discover new groups
+  async handleGroupMessage(msg) {
+    try {
+      const chat = msg.chat;
+      
+      // Only process group chats
+      if (chat.type !== 'group' && chat.type !== 'supergroup') {
+        return;
+      }
+      
+      const chatId = chat.id.toString();
+      
+      // Check if this group is already in our database
+      let existingGroup = await TelegramGroup.findOne({ chatId });
+      
+      if (!existingGroup) {
+        this.logger.info('New group detected', {
+          chatId,
+          title: chat.title,
+          username: chat.username,
+          type: chat.type
+        });
+        
+        // Create a basic group entry for manual configuration later
+        existingGroup = new TelegramGroup({
+          chatId,
+          groupTitle: chat.title,
+          groupUsername: chat.username || null,
+          productType: null, // To be configured manually
+          productId: null,   // To be configured manually
+          category: 'basic',
+          createdBy: null,   // Auto-detected
+          welcomeMessage: 'Welcome to the group!',
+          botUserId: (await this.bot.getMe()).id.toString(),
+          isActive: false,   // Inactive until manually configured
+          autoDetected: true,
+          detectedAt: new Date()
+        });
+        
+        await existingGroup.save();
+        
+        this.logger.info('Auto-detected group saved to database', {
+          groupId: existingGroup._id,
+          chatId,
+          title: chat.title
+        });
+      } else {
+        // Update group info if it has changed
+        if (existingGroup.groupTitle !== chat.title || 
+            existingGroup.groupUsername !== chat.username) {
+          
+          await TelegramGroup.findByIdAndUpdate(existingGroup._id, {
+            groupTitle: chat.title,
+            groupUsername: chat.username,
+            lastUpdated: new Date()
+          });
+          
+          this.logger.info('Updated group information', {
+            groupId: existingGroup._id,
+            chatId,
+            newTitle: chat.title
+          });
+        }
+      }
+      
+    } catch (error) {
+      this.logger.error('Error handling group message for auto-detection', {
+        error: error.message,
+        chatId: msg.chat?.id
+      });
+    }
+  }
+
+  async syncDetectedGroups() {
+    try {
+      const detectedGroups = await this.detectBotGroups();
+      
+      // Update member counts and group info
+      for (const group of detectedGroups) {
+        if (group.isExistingGroup) {
+          await TelegramGroup.findByIdAndUpdate(group.databaseId, {
+            totalMembers: group.memberCount,
+            activeMembers: group.memberCount,
+            lastSynced: new Date()
+          });
+        }
+      }
+      
+      this.logger.info('Group sync completed', { 
+        syncedCount: detectedGroups.length 
+      });
+      
+      return detectedGroups;
+      
+    } catch (error) {
+      this.logger.error('Error syncing detected groups', { error: error.message });
+      throw error;
     }
   }
 

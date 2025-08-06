@@ -69,6 +69,10 @@ router.post('/groups', telegramController.createGroupMapping);
 router.get('/admin/groups', telegramController.getAllGroups);
 router.put('/admin/groups/:groupId', telegramController.updateGroup);
 
+// Group auto-detection
+router.post('/admin/detect-groups', requireAdmin, telegramController.detectGroups);
+router.post('/admin/sync-groups', requireAdmin, telegramController.syncGroups);
+
 // Cleanup operations
 router.post('/admin/cleanup/expired', telegramController.cleanupExpiredUsers);
 router.post('/admin/cleanup/links', telegramController.cleanupExpiredLinks);

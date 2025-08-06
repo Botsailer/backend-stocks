@@ -730,6 +730,116 @@ exports.kickUser = async (req, res) => {
 
 /**
  * @swagger
+ * /api/telegram/admin/detect-groups:
+ *   post:
+ *     summary: Auto-detect groups the bot is member of (Admin only)
+ *     tags: [Telegram]
+ *     security:
+ *       - bearerAuth: []
+ *     responses:
+ *       200:
+ *         description: Groups detected successfully
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success:
+ *                   type: boolean
+ *                 message:
+ *                   type: string
+ *                 detectedGroups:
+ *                   type: array
+ *                   items:
+ *                     type: object
+ *                     properties:
+ *                       chatId:
+ *                         type: string
+ *                       title:
+ *                         type: string
+ *                       username:
+ *                         type: string
+ *                       memberCount:
+ *                         type: number
+ *                       isExistingGroup:
+ *                         type: boolean
+ *       500:
+ *         description: Server error
+ */
+exports.detectGroups = async (req, res) => {
+  try {
+    const detectedGroups = await telegramBotService.detectBotGroups();
+    
+    logger.info('Group detection completed', {
+      detectedCount: detectedGroups.length,
+      triggeredBy: req.user._id
+    });
+
+    res.json({
+      success: true,
+      message: 'Groups detected successfully',
+      detectedGroups,
+      count: detectedGroups.length
+    });
+
+  } catch (error) {
+    logger.error('Error detecting groups', { 
+      error: error.message,
+      triggeredBy: req.user._id 
+    });
+
+    res.status(500).json({
+      error: 'Failed to detect groups',
+      details: error.message
+    });
+  }
+};
+
+/**
+ * @swagger
+ * /api/telegram/admin/sync-groups:
+ *   post:
+ *     summary: Sync detected groups and update member counts (Admin only)
+ *     tags: [Telegram]
+ *     security:
+ *       - bearerAuth: []
+ *     responses:
+ *       200:
+ *         description: Groups synced successfully
+ *       500:
+ *         description: Server error
+ */
+exports.syncGroups = async (req, res) => {
+  try {
+    const syncedGroups = await telegramBotService.syncDetectedGroups();
+    
+    logger.info('Group sync completed', {
+      syncedCount: syncedGroups.length,
+      triggeredBy: req.user._id
+    });
+
+    res.json({
+      success: true,
+      message: 'Groups synced successfully',
+      syncedGroups,
+      count: syncedGroups.length
+    });
+
+  } catch (error) {
+    logger.error('Error syncing groups', { 
+      error: error.message,
+      triggeredBy: req.user._id 
+    });
+
+    res.status(500).json({
+      error: 'Failed to sync groups',
+      details: error.message
+    });
+  }
+};
+
+/**
+ * @swagger
  * /api/telegram/admin/stats:
  *   get:
  *     summary: Get Telegram bot statistics (Admin only)

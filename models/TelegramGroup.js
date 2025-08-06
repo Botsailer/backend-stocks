@@ -20,15 +20,15 @@ const TelegramGroupSchema = new Schema({
     sparse: true // Allow null but enforce uniqueness when present
   },
   
-  // Product mapping
+  // Product mapping (optional for auto-detected groups)
   productType: {
     type: String,
-    required: true,
+    required: false, // Made optional for auto-detected groups
     enum: ["Portfolio", "Bundle"]
   },
   productId: {
     type: Schema.Types.ObjectId,
-    required: true,
+    required: false, // Made optional for auto-detected groups
     refPath: "productType"
   },
   
@@ -80,18 +80,40 @@ const TelegramGroupSchema = new Schema({
   createdBy: {
     type: Schema.Types.ObjectId,
     ref: "User",
-    required: true
+    required: false // Made optional for auto-detected groups
+  },
+  
+  // Auto-detection fields
+  autoDetected: {
+    type: Boolean,
+    default: false
+  },
+  detectedAt: {
+    type: Date
+  },
+  lastSynced: {
+    type: Date
+  },
+  lastUpdated: {
+    type: Date
+  },
+  lastError: {
+    type: String
   }
 }, {
   timestamps: true,
   toJSON: { virtuals: true }
 });
 
-// Ensure unique product mapping per group
+// Ensure unique product mapping per group (only when both fields are present)
 TelegramGroupSchema.index({ 
   productType: 1, 
   productId: 1 
-}, { unique: true, background: true });
+}, { 
+  unique: true, 
+  background: true,
+  sparse: true // Only create index when both fields have values
+});
 
 // Virtual to get associated product
 TelegramGroupSchema.virtual('product', {
