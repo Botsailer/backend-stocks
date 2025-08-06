@@ -8,41 +8,9 @@ const options = {
     info: {
       title: 'Stock Trading Platform API',
       version: '1.0.0',
-      description: 'Comprehensive API for stock trading platform with Telegram bot integration',
-      contact: {
-        name: 'API Support',
-        email: 'support@yourplatform.com'
-      },
-      license: {
-        name: 'MIT',
-        url: 'https://opensource.org/licenses/MIT'
-      }
     },
-    servers: [
-      {
-        url: 'http://localhost:3000',
-        description: 'Development server'
-      },
-      {
-        url: 'https://api.yourplatform.com',
-        description: 'Production server'
-      }
-    ],
-    components: {
-      securitySchemes: {
-        bearerAuth: {
-          type: 'http',
-          scheme: 'bearer',
-          bearerFormat: 'JWT',
-          description: 'Enter JWT token'
-        }
-      }
-    }
   },
-  apis: [
-    './routes/*.js',
-    './controllers/*.js'
-  ]
+  apis: ['./routes/*.js'], // adjust path as necessary
 };
 
 const swaggerSpec = swaggerJsdoc(options);
