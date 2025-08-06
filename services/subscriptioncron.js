@@ -23,6 +23,8 @@ const logger = winston.createLogger({
   ]
 });
 
+
+
 // Main cleanup function for expired and unpaid subscriptions
 const cleanupExpiredSubscriptions = async () => {
   try {
@@ -44,17 +46,59 @@ const cleanupExpiredSubscriptions = async () => {
 
     logger.info(`Expired ${expiredOneTimeResult.modifiedCount} one-time subscriptions`);
 
-    // Step 2: Handle stalled recurring subscriptions (30+ days without payment)
     const thirtyDaysAgo = new Date(now.getTime() - (30 * 24 * 60 * 60 * 1000));
     
-    // Find recurring subscriptions that haven't been charged recently
+
+const checkRecurringPaymentsJob = cron.schedule("0 * * * *", async () => {
+  const now = new Date();
+  const subscriptions = await Subscription.find({ 
+    type: "recurring", 
+    status: "active" 
+  });
+
+  const razorpay = await getRazorpayInstance();
+
+  for (const sub of subscriptions) {
+    try {
+      const rSub = await razorpay.subscriptions.fetch(sub.razorpaySubscriptionId);
+      if (["halted", "cancelled", "expired"].includes(rSub.status)) {
+        await Subscription.updateOne(
+          { _id: sub._id },
+          { status: "cancelled", cancelledAt: now, cancelReason: "Payment failed or mandate cancelled" }
+        );
+        await updateUserPremiumStatus(sub.user);
+      }
+      // Check if last payment was more than 30 days ago
+      if (!sub.lastPaymentAt || new Date(sub.lastPaymentAt) < thirtyDaysAgo) {
+        // If last payment is more than 30 days ago, cancel the subscription
+        await Subscription.updateOne(
+          { _id: sub._id },
+          { status: "cancelled", updatedAt: now, cancellationReason: "Payment failure - auto-cancelled after 30 days of no payment" }
+        );
+        logger.info(`Cancelled stalled recurring subscription: ${sub._id} for user: ${sub.user}`);
+      }
+      // If the subscription is active but last payment is more than 30 days ago, cancel
+      if (rSub.status === "active" && sub.lastPaymentAt && new Date(sub.lastPaymentAt) < thirtyDaysAgo) {
+        await Subscription.updateOne(
+          { _id: sub._id },
+          { status: "cancelled", updatedAt: now, cancellationReason: "Payment failure - auto-cancelled after 30 days of no payment" }
+        );
+        logger.info(`Cancelled stalled recurring subscription: ${sub._id} for user: ${sub.user}`);
+      }
+    } catch (err) {
+      logger.error(`Error checking subscription ${sub._id}:`, err);
+    }
+  }
+  logger.info("Recurring payment check completed");
+}, { timezone: "Asia/Kolkata" });
+    
+
     const stalledRecurringSubscriptions = await Subscription.find({
       status: "active",
       type: "recurring",
       $or: [
         { lastPaymentAt: { $lt: thirtyDaysAgo } },
         { lastPaymentAt: { $exists: false } },
-        // Subscriptions created 30+ days ago but never received payment
         {
           createdAt: { $lt: thirtyDaysAgo },
           lastPaymentAt: { $exists: false }
@@ -67,7 +111,6 @@ const cleanupExpiredSubscriptions = async () => {
 
     for (const subscription of stalledRecurringSubscriptions) {
       try {
-        // Cancel the stalled recurring subscription
         await Subscription.updateOne(
           { _id: subscription._id },
           { 
