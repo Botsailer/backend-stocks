@@ -24,6 +24,21 @@ app.use(cors());
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
+// Request logging middleware
+app.use((req, res, next) => {
+  const start = Date.now();
+  res.on('finish', () => {
+    const duration = Date.now() - start;
+    const logLevel = res.statusCode >= 400 ? 'error' : 'info';
+    console.log(`${req.method} ${req.originalUrl} - ${res.statusCode} (${duration}ms)`);
+    
+    if (logLevel === 'error') {
+      CronLogger.error(`HTTP Error: ${req.method} ${req.originalUrl} - ${res.statusCode}`);
+    }
+  });
+  next();
+});
+
 app.set('view engine', 'ejs');
 app.set('views', __dirname + '/views');
 
@@ -64,6 +79,35 @@ dbAdapter.connect()
     app.use('/api/tips', require('./routes/tips')); 
     app.use('/api/bundles', require('./routes/bundleRouter'));
     app.use('/api/admin/configs', require('./routes/configRoute'));
+
+    // Global error handling middleware
+    app.use((err, req, res, next) => {
+      console.error('🚨 Global error handler:', err);
+      CronLogger.error('Global error handler caught error', err);
+      
+      // Don't expose internal error details in production
+      const isDevelopment = process.env.NODE_ENV !== 'production';
+      
+      res.status(err.status || 500).json({
+        status: 'error',
+        message: err.message || 'Internal server error',
+        ...(isDevelopment && { stack: err.stack, details: err })
+      });
+    });
+
+    // 404 handler for undefined routes
+    app.use('*', (req, res) => {
+      res.status(404).json({
+        status: 'error',
+        message: `Route ${req.originalUrl} not found`,
+        availableEndpoints: [
+          'GET /health',
+          'GET /api-docs',
+          'POST /auth/login',
+          'GET /api/portfolios'
+        ]
+      });
+    });
 
     // Contact us endpoint
     app.post("/api/contactus", (req, res) => {
@@ -262,7 +306,25 @@ process.on('uncaughtException', (error) => {
 process.on('unhandledRejection', (reason, promise) => {
   console.error('💥 Unhandled Rejection at:', promise, 'reason:', reason);
   CronLogger.error('Unhandled Rejection', new Error(reason));
-  gracefulShutdown('UNHANDLED_REJECTION');
+  
+  // Check if this is a critical error that should cause shutdown
+  const errorString = String(reason);
+  const criticalErrors = [
+    'ECONNREFUSED', // Database connection issues
+    'ENOTFOUND',    // DNS resolution issues
+    'auth failed',  // Authentication failures
+    'connection failed'
+  ];
+  
+  const isCritical = criticalErrors.some(err => errorString.includes(err));
+  
+  if (isCritical) {
+    console.error('🚨 Critical error detected, shutting down...');
+    gracefulShutdown('UNHANDLED_REJECTION');
+  } else {
+    console.warn('⚠️ Non-critical error logged, continuing operation...');
+    // For non-critical errors, just log and continue
+  }
 });
 
 module.exports = app;

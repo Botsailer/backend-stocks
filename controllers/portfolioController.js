@@ -130,9 +130,15 @@ exports.createPortfolio = asyncHandler(async (req, res) => {
 
 exports.getPortfolioPriceHistory = asyncHandler(async (req, res) => {
   const { id } = req.params;
-  const { period = '1m', tz = 'Asia/Kolkata' } = req.query; 
+  const { period = '1m', tz = 'Asia/Kolkata' } = req.query;
+
+  // Validate portfolio ID
   if (!mongoose.Types.ObjectId.isValid(id)) {
-    return res.status(400).json({ error: 'Invalid portfolio ID' });
+    return res.status(400).json({ 
+      status: 'error',
+      error: 'Invalid portfolio ID format',
+      message: 'The provided portfolio ID is not a valid MongoDB ObjectId'
+    });
   }
 
   try {
@@ -140,7 +146,11 @@ exports.getPortfolioPriceHistory = asyncHandler(async (req, res) => {
     const historyData = await portfolioService.getPortfolioHistory(id, period, tz);
     
     if (!historyData.data || historyData.dataPoints === 0) {
-      return res.status(404).json({ error: 'No price history found' });
+      return res.status(404).json({ 
+        status: 'error',
+        error: 'No price history found',
+        message: 'No price history data available for this portfolio in the specified period'
+      });
     }
 
     res.status(200).json({
@@ -149,10 +159,11 @@ exports.getPortfolioPriceHistory = asyncHandler(async (req, res) => {
       ...historyData
     });
   } catch (error) {
+    console.error('Portfolio price history error:', error);
     res.status(500).json({ 
       status: 'error',
       error: 'Failed to retrieve price history',
-      message: error.message
+      message: error.message || 'Internal server error while retrieving portfolio price history'
     });
   }
 });
