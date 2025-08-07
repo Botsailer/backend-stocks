@@ -329,21 +329,47 @@ async function updateClosingPrices() {
     const portfolios = await Portfolio.find({ compareWith: { $exists: true, $ne: "" } })
                                     .select('compareWith');
     
-    // Extract unique benchmark symbols
-    const benchmarkSymbols = [...new Set(portfolios.map(p => p.compareWith))];
+    // Extract benchmark symbols or IDs
+    const benchmarks = portfolios.map(p => p.compareWith);
+    const benchmarkSymbols = [];
+    const benchmarkIds = [];
     
-    CronLogger.info(`Found ${benchmarkSymbols.length} unique benchmark symbols used in portfolios: ${benchmarkSymbols.join(', ')}`);
+    // Separate IDs from symbols
+    benchmarks.forEach(benchmark => {
+      if (/^[0-9a-fA-F]{24}$/.test(benchmark)) {
+        benchmarkIds.push(mongoose.Types.ObjectId(benchmark));
+      } else {
+        benchmarkSymbols.push(benchmark);
+      }
+    });
     
-    // First, get all benchmark symbols (important for portfolio comparisons)
-    const marketIndices = await StockSymbol.find({
-      isActive: true,
-      symbol: { $in: benchmarkSymbols }
-    }, '_id symbol exchange currentPrice');
+    CronLogger.info(`Found ${benchmarks.length} unique benchmarks used in portfolios`);
     
-    // Then get all other stocks that need updating
+    // First, get all benchmark stocks by either ID or symbol
+    const idCriteria = benchmarkIds.length > 0 ? { _id: { $in: benchmarkIds } } : null;
+    const symbolCriteria = benchmarkSymbols.length > 0 ? { symbol: { $in: benchmarkSymbols } } : null;
+    
+    let marketIndicesCriteria = { isActive: true };
+    if (idCriteria && symbolCriteria) {
+      marketIndicesCriteria.$or = [idCriteria, symbolCriteria];
+    } else if (idCriteria) {
+      marketIndicesCriteria = { ...marketIndicesCriteria, ...idCriteria };
+    } else if (symbolCriteria) {
+      marketIndicesCriteria = { ...marketIndicesCriteria, ...symbolCriteria };
+    }
+    
+    const marketIndices = await StockSymbol.find(marketIndicesCriteria, '_id symbol exchange currentPrice');
+    
+    // Extract the IDs and symbols of the benchmark stocks we found
+    const marketIndiceIds = marketIndices.map(index => index._id.toString());
+    const marketIndiceSymbols = marketIndices.map(index => index.symbol);
+    
+    CronLogger.info(`Found ${marketIndices.length} benchmark stocks: ${marketIndiceSymbols.join(', ')}`);
+    
+    // Then get all other stocks that need updating (excluding the benchmarks we just fetched)
     const regularStocks = await StockSymbol.find({
       isActive: true,
-      symbol: { $nin: benchmarkSymbols },
+      _id: { $nin: marketIndiceIds },
       $or: [
         { closingPriceUpdatedAt: { $lt: today } },
         { closingPriceUpdatedAt: { $exists: false } }

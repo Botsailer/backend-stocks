@@ -26,7 +26,11 @@ const cronController = require('../controllers/portfoliocroncontroller');
  *       properties:
  *         type:
  *           type: string
- *           enum: [monthly, quarterly, yearly]
+ *           enum: 
+ *             - monthly
+ *             - quarterly
+ *             - yearly
+ *           description: Subscription interval
  *           example: "yearly"
  *         price:
  *           type: number
@@ -97,11 +101,23 @@ const cronController = require('../controllers/portfoliocroncontroller');
  *           example: "Technology"
  *         stockCapType:
  *           type: string
- *           enum: [small cap, mid cap, large cap, micro cap, mega cap]
+ *           enum: 
+ *             - small cap
+ *             - mid cap
+ *             - large cap
+ *             - micro cap
+ *             - mega cap
+ *           description: Market capitalization category of the stock
  *           example: "large cap"
  *         status:
  *           type: string
- *           enum: [Hold, Fresh-Buy, partial-sell, addon-buy, Sell]
+ *           enum: 
+ *             - Hold
+ *             - Fresh-Buy
+ *             - partial-sell
+ *             - addon-buy
+ *             - Sell
+ *           description: Current recommendation status
  *           example: "Hold"
  *         buyPrice:
  *           type: number
@@ -200,7 +216,8 @@ const cronController = require('../controllers/portfoliocroncontroller');
  *           example: "15%"
  *         compareWith:
  *           type: string
- *           example: "NIFTY 50"
+ *           description: Benchmark symbol or ID to compare performance against
+ *           example: "NIFTY50"
  *         holdings:
  *           type: array
  *           items:

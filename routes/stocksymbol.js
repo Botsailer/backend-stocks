@@ -31,9 +31,75 @@ const requireAdmin = require('../middleware/requirreAdmin');
  *           description: Stock ticker symbol
  *         exchange:
  *           type: string
- *           description: |
- *             Exchange identifier. Supported values:
- *             NSE, BSE, NYSE, NASDAQ, LSE, TSE, HKEX, SSE, SZSE, ASX, TSX, EURONEXT, XETRA, SIX, BIT, JSE, MOEX, KOSPI, SET, PSX, IDX, KLSE, SGX, TASE, EGX, BMV, BVC, BOVESPA, MCX, NCDEX, ICEX, CBOT, CME, NYMEX, COMEX, LME, ICE, SHFE, DCE, ZCE, TOCOM, SAFEX, EEX, EUREX, FOREX, FX, CRYPTO, BINANCE, COINBASE, KRAKEN, BITSTAMP, MUTUAL, ETF, MF, BOND, CORPORATE_BOND, GOVT_BOND, DERIVATIVES, FUTURES, OPTIONS, ENERGY, OIL, GAS, GOLD, SILVER, PLATINUM, PALLADIUM
+ *           description: Stock exchange identifier
+ *           enum:
+ *             - NYSE
+ *             - NASDAQ
+ *             - LSE
+ *             - TSE
+ *             - HKEX
+ *             - SSE
+ *             - SZSE
+ *             - NSE
+ *             - BSE
+ *             - ASX
+ *             - TSX
+ *             - EURONEXT
+ *             - XETRA
+ *             - SIX
+ *             - BIT
+ *             - JSE
+ *             - MOEX
+ *             - KOSPI
+ *             - SET
+ *             - PSX
+ *             - IDX
+ *             - KLSE
+ *             - SGX
+ *             - TASE
+ *             - EGX
+ *             - BMV
+ *             - BVC
+ *             - BOVESPA
+ *             - MCX
+ *             - NCDEX
+ *             - ICEX
+ *             - CBOT
+ *             - CME
+ *             - NYMEX
+ *             - COMEX
+ *             - LME
+ *             - ICE
+ *             - SHFE
+ *             - DCE
+ *             - ZCE
+ *             - TOCOM
+ *             - SAFEX
+ *             - EEX
+ *             - EUREX
+ *             - FOREX
+ *             - FX
+ *             - CRYPTO
+ *             - BINANCE
+ *             - COINBASE
+ *             - KRAKEN
+ *             - BITSTAMP
+ *             - MUTUAL
+ *             - ETF
+ *             - MF
+ *             - BOND
+ *             - CORPORATE_BOND
+ *             - GOVT_BOND
+ *             - DERIVATIVES
+ *             - FUTURES
+ *             - OPTIONS
+ *             - ENERGY
+ *             - OIL
+ *             - GAS
+ *             - GOLD
+ *             - SILVER
+ *             - PLATINUM
+ *             - PALLADIUM
  *         name:
  *           type: string
  *           description: Company name
@@ -130,7 +196,7 @@ router.post('/', stockSymbolController.createStockSymbol);
  *       - in: query
  *         name: limit
  *         schema:
- *           type: integer
+ *          
  *           minimum: 1
  *           maximum: 5000
  *           default: 2500
@@ -439,8 +505,125 @@ router.delete('/:id', stockSymbolController.deleteStockSymbol);
  */
 router.post('/update-prices', requireAdmin, stockSymbolController.updateStockPrices);
 
+/**
+ * @swagger
+ * /api/stock-symbols/benchmarks:
+ *   get:
+ *     summary: Get all stocks that can be used as benchmarks
+ *     description: Returns a list of stocks that are suitable as portfolio benchmarks
+ *     tags: [Stock Symbols]
+ *     security:
+ *       - bearerAuth: []
+ *     responses:
+ *       200:
+ *         description: List of benchmark stocks
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success:
+ *                   type: boolean
+ *                 count:
+ *                   type: number
+ *                 data:
+ *                   type: array
+ *                   items:
+ *                     $ref: '#/components/schemas/StockSymbol'
+ *       500:
+ *         description: Server error
+ */
+router.get('/benchmarks', stockSymbolController.getBenchmarkStocks);
 
+/**
+ * @swagger
+ * /api/stock-symbols/{id}/history:
+ *   get:
+ *     summary: Get stock details with price history
+ *     description: Returns detailed information about a stock including price history
+ *     tags: [Stock Symbols]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         schema:
+ *           type: string
+ *         required: true
+ *         description: Stock symbol or ID
+ *     responses:
+ *       200:
+ *         description: Stock details with price history
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success:
+ *                   type: boolean
+ *                 data:
+ *                   type: object
+ *                   properties:
+ *                     _id:
+ *                       type: string
+ *                     symbol:
+ *                       type: string
+ *                     name:
+ *                       type: string
+ *                     exchange:
+ *                       type: string
+ *                     currentPrice:
+ *                       type: string
+ *                     previousPrice:
+ *                       type: string
+ *                     priceHistory:
+ *                       type: object
+ *       404:
+ *         description: Stock symbol not found
+ *       500:
+ *         description: Server error
+ */
+router.get('/:id/history', stockSymbolController.getStockWithHistory);
 
-
+/**
+ * @swagger
+ * /api/stock-symbols/enums:
+ *   get:
+ *     summary: Get all available enum values for stock symbols
+ *     description: Returns lists of all enum values for exchanges, sectors, etc. for use in dropdown menus
+ *     tags: [Stock Symbols]
+ *     security:
+ *       - bearerAuth: []
+ *     responses:
+ *       200:
+ *         description: Lists of all enum values
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success:
+ *                   type: boolean
+ *                 data:
+ *                   type: object
+ *                   properties:
+ *                     exchanges:
+ *                       type: object
+ *                     sectors:
+ *                       type: array
+ *                       items:
+ *                         type: string
+ *                     stockCapTypes:
+ *                       type: array
+ *                       items:
+ *                         type: string
+ *                     currencies:
+ *                       type: array
+ *                       items:
+ *                         type: string
+ *       500:
+ *         description: Server error
+ */
+router.get('/enums', stockSymbolController.getEnumValues);
 
 module.exports = router;

@@ -80,7 +80,15 @@ exports.createPortfolio = asyncHandler(async (req, res) => {
   // Validate benchmark symbol if provided
   if (compareWith) {
     const StockSymbol = require('../models/stockSymbol');
-    const symbolExists = await StockSymbol.exists({ symbol: compareWith });
+    let symbolExists = false;
+    
+    // Check if it's a MongoDB ObjectId
+    if (/^[0-9a-fA-F]{24}$/.test(compareWith)) {
+      symbolExists = await StockSymbol.exists({ _id: compareWith });
+    } else {
+      symbolExists = await StockSymbol.exists({ symbol: compareWith });
+    }
+    
     if (!symbolExists) {
       return res.status(400).json({ error: `Benchmark symbol "${compareWith}" does not exist` });
     }
@@ -188,7 +196,15 @@ exports.updatePortfolio = asyncHandler(async (req, res) => {
   // Validate benchmark symbol if provided
   if (req.body.compareWith) {
     const StockSymbol = require('../models/stockSymbol');
-    const symbolExists = await StockSymbol.exists({ symbol: req.body.compareWith });
+    let symbolExists = false;
+    
+    // Check if it's a MongoDB ObjectId
+    if (/^[0-9a-fA-F]{24}$/.test(req.body.compareWith)) {
+      symbolExists = await StockSymbol.exists({ _id: req.body.compareWith });
+    } else {
+      symbolExists = await StockSymbol.exists({ symbol: req.body.compareWith });
+    }
+    
     if (!symbolExists) {
       return res.status(400).json({ error: `Benchmark symbol "${req.body.compareWith}" does not exist` });
     }

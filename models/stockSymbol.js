@@ -80,7 +80,15 @@ const stockSymbolSchema = new Schema({
   },
   sector: {
     type: String,
-    trim: true
+    trim: true,
+    enum: [
+      'Technology', 'Financial Services', 'Healthcare', 'Consumer Cyclical', 
+      'Consumer Defensive', 'Industrials', 'Energy', 'Basic Materials',
+      'Communication Services', 'Utilities', 'Real Estate', 'Aerospace & Defense',
+      'Automobile', 'Banking', 'Chemicals', 'Construction', 'Entertainment',
+      'FMCG', 'Insurance', 'IT', 'Media', 'Metals & Mining', 'Oil & Gas',
+      'Pharmaceuticals', 'Retail', 'Telecommunications', 'Transportation', 'Other'
+    ]
   },
   marketCap: {
     type: String

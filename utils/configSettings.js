@@ -1,6 +1,6 @@
 // File: utils/configSettings.js
 
-
+const Razorpay = require('razorpay');
 const ConfigSettings = require('../models/configsettings');
 
 // Cache to minimize DB hits

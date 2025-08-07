@@ -600,7 +600,158 @@ const stockSymbolController = {
         error: error.message
       });
     }
+  },
+
+  // Get benchmark stocks for dropdown selection
+  getBenchmarkStocks: async (req, res) => {
+    try {
+      const benchmarks = await StockSymbol.find({
+        isActive: true,
+        $or: [
+          // Common market indices
+          { symbol: { $in: ['NIFTY50', 'BANKNIFTY', 'SENSEX', 'NIFTYMIDCAP150', 'NIFTYSMALLCAP250'] } },
+          // Find all stocks that are used as benchmarks in portfolios
+          { _id: { $in: await getStocksUsedAsBenchmarks() } }
+        ]
+      }).select('_id symbol name exchange currentPrice');
+
+      res.status(200).json({
+        success: true,
+        count: benchmarks.length,
+        data: benchmarks
+      });
+    } catch (error) {
+      console.error('Error getting benchmark stocks:', error);
+      res.status(500).json({
+        success: false,
+        error: 'Server Error'
+      });
+    }
+  },
+
+  // Get stock symbol details with price history
+  getStockWithHistory: async (req, res) => {
+    try {
+      const { id } = req.params;
+      let query = {};
+      
+      // Check if id is a MongoDB ObjectId or a symbol string
+      if (mongoose.Types.ObjectId.isValid(id)) {
+        query._id = id;
+      } else {
+        query.symbol = id.toUpperCase();
+      }
+      
+      const stock = await StockSymbol.findOne(query);
+      
+      if (!stock) {
+        return res.status(404).json({
+          success: false,
+          error: 'Stock symbol not found'
+        });
+      }
+      
+      // Format response with historical price data if available
+      const response = {
+        ...stock.toObject(),
+        priceHistory: {
+          last30Days: await getPriceHistory(stock._id, 30),
+          last90Days: await getPriceHistory(stock._id, 90),
+        }
+      };
+      
+      res.status(200).json({
+        success: true,
+        data: response
+      });
+    } catch (error) {
+      console.error('Error getting stock with history:', error);
+      res.status(500).json({
+        success: false,
+        error: 'Server Error'
+      });
+    }
+  },
+
+  // Get all available enum values for stock symbols
+  getEnumValues: async (req, res) => {
+    try {
+      // Get exchange categories directly from the model
+      const exchanges = StockSymbol.getExchangeCategories();
+      
+      // Get sector enum values from the schema
+      const sectors = StockSymbol.schema.path('sector').enumValues || [];
+      
+      // Get Portfolio model to access its enums
+      const Portfolio = mongoose.model('Portfolio');
+      
+      // Get stockCapType enum values from the Portfolio schema
+      let stockCapTypes = [];
+      try {
+        const StockHoldingPath = Portfolio.schema.path('holdings');
+        stockCapTypes = StockHoldingPath.schema.path('stockCapType').enumValues || [];
+      } catch (err) {
+        console.warn('Could not get stockCapType enum values:', err.message);
+      }
+      
+      // Common currencies
+      const currencies = ['INR', 'USD', 'EUR', 'GBP', 'JPY', 'AUD', 'CAD', 'CNY', 'HKD', 'SGD'];
+      
+      res.status(200).json({
+        success: true,
+        data: {
+          exchanges,
+          sectors,
+          stockCapTypes,
+          currencies
+        }
+      });
+    } catch (error) {
+      console.error('Error getting enum values:', error);
+      res.status(500).json({
+        success: false,
+        error: 'Server Error'
+      });
+    }
   }
 };
+
+// Helper function to get stock IDs used as benchmarks in portfolios
+async function getStocksUsedAsBenchmarks() {
+  try {
+    const Portfolio = require('../models/modelPortFolio');
+    const portfolios = await Portfolio.find({ 
+      compareWith: { $exists: true, $ne: "" } 
+    }).select('compareWith');
+    
+    const benchmarkIds = [];
+    
+    for (const portfolio of portfolios) {
+      if (/^[0-9a-fA-F]{24}$/.test(portfolio.compareWith)) {
+        benchmarkIds.push(mongoose.Types.ObjectId(portfolio.compareWith));
+      }
+    }
+    
+    return benchmarkIds;
+  } catch (error) {
+    console.error('Error getting stocks used as benchmarks:', error);
+    return [];
+  }
+}
+
+// Helper function to get price history for a stock
+async function getPriceHistory(stockId, days) {
+  try {
+    // This would require a price history model to be implemented
+    // For now, we'll return a placeholder
+    return [
+      { date: new Date(Date.now() - 86400000 * days), price: "0" },
+      { date: new Date(), price: "0" }
+    ];
+  } catch (error) {
+    console.error('Error getting price history:', error);
+    return [];
+  }
+}
 
 module.exports = {stockSymbolController,PriceUpdater};

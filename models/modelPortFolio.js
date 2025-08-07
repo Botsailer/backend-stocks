@@ -201,10 +201,18 @@ const PortfolioSchema = new Schema({
       validator: async function(value) {
         if (!value) return true; // Allow empty value
         
-        // Check if the referenced symbol exists
+        // Check if the referenced symbol exists by either symbol name or ID
         const StockSymbol = mongoose.model('StockSymbol');
-        const symbolExists = await StockSymbol.exists({ symbol: value });
-        return symbolExists;
+        
+        // If it looks like a MongoDB ObjectId, check by ID
+        if (/^[0-9a-fA-F]{24}$/.test(value)) {
+          const symbolExistsById = await StockSymbol.exists({ _id: value });
+          return symbolExistsById;
+        }
+        
+        // Otherwise check by symbol name
+        const symbolExistsByName = await StockSymbol.exists({ symbol: value });
+        return symbolExistsByName;
       },
       message: props => `Benchmark symbol "${props.value}" does not exist in stock symbols`
     }

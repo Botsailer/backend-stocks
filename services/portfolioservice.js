@@ -98,21 +98,29 @@ exports.logPortfolioValue = async (portfolio, useClosingPrice = false) => {
       
       if (portfolio.compareWith) {
         try {
-          const indexStock = await StockSymbol.findOne({ symbol: portfolio.compareWith });
+          let indexStock = null;
+          
+          // Check if compareWith is a MongoDB ObjectId
+          if (/^[0-9a-fA-F]{24}$/.test(portfolio.compareWith)) {
+            indexStock = await StockSymbol.findById(portfolio.compareWith);
+          } else {
+            indexStock = await StockSymbol.findOne({ symbol: portfolio.compareWith });
+          }
+          
           if (indexStock) {
             // For daily logs with closing prices, prefer todayClosingPrice
             if (useClosingPrice && indexStock.todayClosingPrice) {
               compareIndexValue = parseFloat(indexStock.todayClosingPrice);
               benchmarkPriceSource = 'closing';
-              logger.debug(`Using closing price for benchmark ${portfolio.compareWith}: ${compareIndexValue}`);
+              logger.debug(`Using closing price for benchmark ${indexStock.symbol}: ${compareIndexValue}`);
             } 
             // Otherwise use current price
             else if (indexStock.currentPrice) {
               compareIndexValue = parseFloat(indexStock.currentPrice);
               benchmarkPriceSource = 'current';
-              logger.debug(`Using current price for benchmark ${portfolio.compareWith}: ${compareIndexValue}`);
+              logger.debug(`Using current price for benchmark ${indexStock.symbol}: ${compareIndexValue}`);
             } else {
-              logger.warn(`No price available for benchmark ${portfolio.compareWith}`);
+              logger.warn(`No price available for benchmark ${indexStock.symbol}`);
             }
           } else {
             logger.warn(`Benchmark index ${portfolio.compareWith} not found in stock symbols`);
