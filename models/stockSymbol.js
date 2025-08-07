@@ -58,17 +58,15 @@ const stockSymbolSchema = new Schema({
   },
   previousPrice: {
     type: String,
-    required: true,
-    default: function() {
-      return this.currentPrice;
-    }
+    required: false // Previous day's close, set by cron
   },
   todayClosingPrice: {
     type: String,
-    //default will be last updated price
-    default: function() {
-      return this.previousPrice;
-    }
+    required: false // Today's close, set by cron
+  },
+  closingPriceUpdatedAt: {
+    type: Date, // Tracks when todayClosingPrice was last set
+    required: false
   },
   lastUpdated: {
     type: Date,
@@ -144,7 +142,7 @@ stockSymbolSchema.virtual('priceChange').get(function() {
 
 // Pre-save middleware
 stockSymbolSchema.pre('save', function(next) {
-  if (this.isModified('currentPrice')) {
+  if (this.isModified('currentPrice') && !this.isModified('todayClosingPrice')) {
     this.lastUpdated = new Date();
   }
   next();

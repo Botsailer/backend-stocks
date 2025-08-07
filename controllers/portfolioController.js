@@ -77,6 +77,15 @@ exports.createPortfolio = asyncHandler(async (req, res) => {
     });
   }
 
+  // Validate benchmark symbol if provided
+  if (compareWith) {
+    const StockSymbol = require('../models/stockSymbol');
+    const symbolExists = await StockSymbol.exists({ symbol: compareWith });
+    if (!symbolExists) {
+      return res.status(400).json({ error: `Benchmark symbol "${compareWith}" does not exist` });
+    }
+  }
+
   const cashBalance = parseFloat((minInvestment - totalCost).toFixed(2));
   
   const portfolio = new Portfolio({
@@ -167,6 +176,15 @@ exports.updatePortfolio = asyncHandler(async (req, res) => {
     return res.status(400).json({ 
       error: 'All holdings must have minimumInvestmentValueStock >= 1' 
     });
+  }
+
+  // Validate benchmark symbol if provided
+  if (req.body.compareWith) {
+    const StockSymbol = require('../models/stockSymbol');
+    const symbolExists = await StockSymbol.exists({ symbol: req.body.compareWith });
+    if (!symbolExists) {
+      return res.status(400).json({ error: `Benchmark symbol "${req.body.compareWith}" does not exist` });
+    }
   }
 
   // Update only allowed fields (removed calculated fields)

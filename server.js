@@ -11,8 +11,11 @@ const emailService = require('./services/emailServices');
 const { startSubscriptionCleanupJob } = require('./services/subscriptioncron');
 
 // Import the new cron scheduler
-const { cronScheduler, CronLogger } = require('./utils/cornscheduler');
+const { CronScheduler, CronLogger } = require('./utils/cornscheduler');
 const { default: mongoose } = require('mongoose');
+
+// Create an instance of the scheduler
+const cronScheduler = new CronScheduler();
 
 
 
@@ -155,10 +158,12 @@ dbAdapter.connect()
         CronLogger.success('Stock price cron scheduler initialized and started');
         
         // Log the scheduled times
-        console.log('📅 Stock price update schedule:');
-        console.log('   - Morning: 8:00 AM IST (2:30 AM UTC)');
-        console.log('   - Afternoon: 3:00 PM IST (9:30 AM UTC)');
-        console.log('   - Evening: 8:00 PM IST (2:30 PM UTC)');
+        console.log('📅 Stock price update schedule (Asia/Kolkata timezone - IST):');
+        console.log('   - Morning: 8:00 AM IST');
+        console.log('   - Hourly: Every hour');
+        console.log('   - Afternoon: 2:00 PM IST');
+        console.log('   - Closing Price: 3:45 PM IST (Indian market close)');
+        console.log('   - Portfolio Valuation: 3:50 PM IST (After market close)');
         
       } catch (error) {
         console.error('❌ Failed to initialize stock price cron scheduler:', error);

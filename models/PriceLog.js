@@ -31,6 +31,15 @@ const PriceLogSchema = new Schema({
     default: 0,
     min: 0
   },
+  compareIndexValue: {
+    type: Number,
+    required: false
+  },
+  compareIndexPriceSource: {
+    type: String,
+    enum: ['closing', 'current', null],
+    required: false
+  },
   // Track if this log used closing prices
   usedClosingPrices: {
     type: Boolean,

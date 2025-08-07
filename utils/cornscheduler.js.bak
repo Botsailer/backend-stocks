@@ -324,34 +324,37 @@ async function updateClosingPrices() {
     const today = new Date();
     today.setHours(0, 0, 0, 0); // Start of today
 
-    // First, dynamically determine which symbols are used as benchmarks in portfolios
-    const Portfolio = require('../models/modelPortFolio');
-    const portfolios = await Portfolio.find({ compareWith: { $exists: true, $ne: "" } })
-                                    .select('compareWith');
+    // First, dynamically find all symbols used as benchmarks in portfolios
+    const Portfolio = mongoose.model('Portfolio');
+    const benchmarkSymbols = await Portfolio.distinct('compareWith', { 
+      compareWith: { $exists: true, $ne: '', $ne: null } 
+    });
     
-    // Extract unique benchmark symbols
-    const benchmarkSymbols = [...new Set(portfolios.map(p => p.compareWith))];
-    
-    CronLogger.info(`Found ${benchmarkSymbols.length} unique benchmark symbols used in portfolios: ${benchmarkSymbols.join(', ')}`);
-    
-    // First, get all benchmark symbols (important for portfolio comparisons)
-    const marketIndices = await StockSymbol.find({
-      isActive: true,
-      symbol: { $in: benchmarkSymbols }
-    }, '_id symbol exchange currentPrice');
-    
+    CronLogger.info(`Found ${benchmarkSymbols.length} symbols used as benchmarks in portfolios`);
+
+    // Prioritize closing price updates for benchmark symbols
+    let benchmarkStocks = [];
+    if (benchmarkSymbols.length > 0) {
+      benchmarkStocks = await StockSymbol.find({
+        isActive: true,
+        symbol: { $in: benchmarkSymbols }
+      }, '_id symbol exchange currentPrice');
+      
+      CronLogger.info(`Prioritizing ${benchmarkStocks.length} benchmark symbols for closing price updates`);
+    }
+
     // Then get all other stocks that need updating
     const regularStocks = await StockSymbol.find({
       isActive: true,
-      symbol: { $nin: benchmarkSymbols },
+      ...(benchmarkSymbols.length > 0 ? { symbol: { $nin: benchmarkSymbols } } : {}),
       $or: [
         { closingPriceUpdatedAt: { $lt: today } },
         { closingPriceUpdatedAt: { $exists: false } }
       ]
     }, '_id symbol exchange currentPrice');
 
-    // Combine, placing indices first
-    const stocksToUpdate = [...marketIndices, ...regularStocks];
+    // Combine, placing benchmarks first
+    const stocksToUpdate = [...benchmarkStocks, ...regularStocks];
 
     if (!stocksToUpdate.length) {
       CronLogger.info('All stock closing prices are already up-to-date for today.');
@@ -409,256 +412,4 @@ async function updateClosingPrices() {
             }
         }
         
-        if (i < batchCount - 1) {
-            await new Promise(r => setTimeout(r, tvService.batchDelay));
-        }
-    }
-
-    if (updateQueue.length > 0) {
-        CronLogger.info(`Writing ${updateQueue.length} closing price updates to database...`);
-        await StockSymbol.bulkWrite(updateQueue);
-    }
-
-    const result = {
-        success: true,
-        total: stocksToUpdate.length,
-        updatedCount,
-        failed: failedUpdates,
-        message: `Processed ${stocksToUpdate.length} symbols (${updatedCount} updated)`,
-        duration: Date.now() - start
-    };
-    
-    CronLogger.success(`✅ ${jobName} update completed: ${result.message} (${result.duration}ms)`);
-
-    if (failedUpdates.length > 0) {
-        CronLogger.error(`${jobName} update had ${failedUpdates.length} failures`);
-    }
-
-    tvService.cleanup();
-    return result;
-
-  } catch (error) {
-    CronLogger.error(`❌ ${jobName} update crashed`, error);
-    return {
-        success: false,
-        message: 'Update failed',
-        error: error.message,
-        duration: Date.now() - start
-    };
-  }
-}
-
-// Cron job wrapper with error handling and logging
-async function runPriceUpdate(jobName, updateType = 'regular') {
-  CronLogger.info(`🚀 Starting ${jobName} stock price update (${updateType})`);
-  
-  try {
-    // Check if database is connected
-    if (mongoose.connection.readyState !== 1) {
-      throw new Error('Database connection not ready');
-    }
-
-    const result = await priceUpdater.executeUpdate(updateType);
-    
-    if (result.success) {
-      CronLogger.success(`✅ ${jobName} update completed: ${result.message} (${result.duration}ms)`);
-      
-      // Log detailed results
-      if (result.failed.length > 0) {
-        CronLogger.error(`${jobName} update had ${result.failed.length} failures`);
-      }
-      
-    } else {
-      CronLogger.error(`❌ ${jobName} update failed: ${result.message}`, { message: result.error });
-    }
-    
-  } catch (error) {
-    CronLogger.error(`❌ ${jobName} update crashed`, error);
-  }
-}
-
-// Cron Jobs Configuration
-class CronScheduler {
-  constructor() {
-    this.jobs = [];
-    this.scheduledJobs = {};
-  }
-
-  // Initialize all cron jobs
-  initialize() {
-    try {
-      // Morning update - 8:00 AM IST
-      const morningJob = cron.schedule('30 2 * * *', () => {
-        runPriceUpdate('Morning', 'regular');
-      }, {
-        scheduled: false,
-        timezone: "Asia/Kolkata"
-      });
-
-      // Hourly job for regular updates
-      const hourlyJob = cron.schedule('0 * * * *', () => {
-        runPriceUpdate('Hourly', 'regular');
-      }, {
-        scheduled: false,
-        timezone: "Asia/Kolkata"
-      });
-
-      // Afternoon update - 2:00 PM IST
-      const afternoonJob = cron.schedule('0 14 * * *', () => {
-        runPriceUpdate('Afternoon', 'regular');
-      }, {
-        scheduled: false,
-        timezone: "Asia/Kolkata"
-      });
-
-      // Closing price update - 3:45 PM IST (Indian market close time)
-      const closingJob = cron.schedule('45 15 * * *', () => {
-        updateClosingPrices();
-      }, {
-        scheduled: false,
-        timezone: "Asia/Kolkata"
-      });
-
-      this.jobs = [
-        { name: 'Hourly Update', job: hourlyJob, type: 'hourly' },
-        { name: 'Morning Update', job: morningJob, type: 'morning' },
-        { name: 'Afternoon Update', job: afternoonJob, type: 'afternoon' },
-        { name: 'Closing Price Update', job: closingJob, type: 'closing' }
-      ];
-
-      CronLogger.info('📅 Cron scheduler initialized with 4 jobs');
-    } catch (error) {
-      CronLogger.error('Failed to initialize cron scheduler', error);
-      throw error; // Re-throw to allow caller to handle
-    }
-  }
-
-  start() {
-    try {
-      // If jobs array is empty, initialize first
-      if (this.jobs.length === 0) {
-        this.initialize();
-      }
-
-      // Wait for database connection before starting cron jobs
-      if (mongoose.connection.readyState === 1) {
-        this.jobs.forEach(({ name, job }) => {
-          job.start();
-          CronLogger.info(`🟢 Started: ${name}`);
-        });
-        CronLogger.success('✅ All cron jobs started successfully');
-      } else {
-        CronLogger.info('⏳ Waiting for database connection...');
-        mongoose.connection.once('connected', () => {
-          this.jobs.forEach(({ name, job }) => {
-            job.start();
-            CronLogger.info(`🟢 Started: ${name}`);
-          });
-          CronLogger.success('✅ All cron jobs started successfully after DB connection');
-        });
-      }
-    } catch (error) {
-      CronLogger.error('Failed to start cron jobs', error);
-      throw error;
-    }
-  }
-
-  stop() {
-    try {
-      this.jobs.forEach(({ name, job }) => {
-        job.stop();
-        CronLogger.info(`🔴 Stopped: ${name}`);
-      });
-      CronLogger.info('🛑 All cron jobs stopped');
-
-      // Also clear any scheduled jobs
-      for (const job of Object.values(this.scheduledJobs)) {
-        job.stop();
-      }
-      this.scheduledJobs = {};
-    } catch (error) {
-      CronLogger.error('Failed to stop cron jobs', error);
-    }
-  }
-
-  scheduleDailyClosingPriceUpdate() {
-    const jobName = 'Daily Closing Price Update';
-    
-    // Remove existing job if it exists
-    if (this.scheduledJobs[jobName]) {
-      this.scheduledJobs[jobName].stop();
-      CronLogger.info(`Stopped existing job: ${jobName}`);
-    }
-
-    // Schedule new job
-    const job = cron.schedule('45 15 * * *', async () => {
-      await updateClosingPrices();
-    }, {
-      timezone: 'Asia/Kolkata',
-      scheduled: true
-    });
-
-    this.scheduledJobs[jobName] = job;
-    CronLogger.info(`Scheduled new job: ${jobName} (Daily at 3:45 PM IST - Indian market close time)`);
-  }
-
-  scheduleRegularPriceUpdates() {
-    const jobName = 'Regular Price Update';
-    
-    // Remove existing job if it exists
-    if (this.scheduledJobs[jobName]) {
-      this.scheduledJobs[jobName].stop();
-      CronLogger.info(`Stopped existing job: ${jobName}`);
-    }
-
-    // Schedule new job
-    const job = cron.schedule('*/5 * * * *', async () => {
-      await runPriceUpdate(jobName, 'regular');
-    }, {
-      timezone: 'Asia/Kolkata',
-      scheduled: true
-    });
-
-    this.scheduledJobs[jobName] = job;
-    CronLogger.info(`Scheduled new job: ${jobName} (Every 5 minutes)`);
-  }
-
-  // Get status of all jobs
-  getStatus() {
-    const status = this.jobs.map(({ name, job, type }) => ({
-      name,
-      type,
-      running: job.running || false
-    }));
-
-    // Add scheduled jobs
-    for (const [name, job] of Object.entries(this.scheduledJobs)) {
-      status.push({
-        name,
-        type: 'scheduled',
-        running: job.running || false
-      });
-    }
-
-    return status;
-  }
-
-  // Manual trigger for testing
-  async triggerManualUpdate(updateType = 'regular') {
-    CronLogger.info(`🔧 Manual ${updateType} update triggered`);
-    if (updateType === 'closing') {
-      await updateClosingPrices();
-    } else {
-      await runPriceUpdate('Manual', updateType);
-    }
-  }
-}
-
-// Export the scheduler class and other utilities
-module.exports = {
-  CronScheduler,
-  CronLogger,
-  PriceUpdater,
-  runPriceUpdate,
-  updateClosingPrices
-};
+        if

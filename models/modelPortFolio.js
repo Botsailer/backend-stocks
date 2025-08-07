@@ -196,7 +196,18 @@ const PortfolioSchema = new Schema({
   compareWith: {
     type: String,
     required: false,
-    default: ""
+    default: "",
+    validate: {
+      validator: async function(value) {
+        if (!value) return true; // Allow empty value
+        
+        // Check if the referenced symbol exists
+        const StockSymbol = mongoose.model('StockSymbol');
+        const symbolExists = await StockSymbol.exists({ symbol: value });
+        return symbolExists;
+      },
+      message: props => `Benchmark symbol "${props.value}" does not exist in stock symbols`
+    }
   },
   expiryDate: {
     type: Date,

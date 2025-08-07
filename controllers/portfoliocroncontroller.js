@@ -3,7 +3,7 @@ const winston = require('winston');
 const stockSymbolController = require('./stocksymbolcontroller');
 const portfolioService = require('../services/portfolioservice');
 const emailService = require('../services/emailServices');
-const { runPriceUpdate } = require('../utils/cornscheduler');
+const { runPriceUpdate, updateClosingPrices } = require('../utils/cornscheduler');
 const config = require('../config/config');
 
 // Configure logger
@@ -34,17 +34,17 @@ const logger = winston.createLogger({
 
 // Initialize cron job
 exports.initScheduledJobs = () => {
-  logger.info('⏰ Scheduling daily portfolio valuation job at 10:20 UTC (3:50 PM IST)');
+  logger.info('⏰ Scheduling daily portfolio valuation job at 3:50 PM IST (Indian market close + 5 minutes)');
   
-  // Run at 3:50 PM IST (10:20 UTC)
-  cron.schedule('20 10 * * *', async () => {
+  // Run at 3:50 PM IST
+  cron.schedule('50 15 * * *', async () => {
     const jobStart = new Date();
     logger.info(`🚀 Starting daily portfolio valuation at ${jobStart.toISOString()}`);
     
     try {
       // 1. Update stock prices with closing prices
       logger.info('🔄 Updating stock prices with closing prices...');
-      await runPriceUpdate('Closing Price', 'closing');
+      await updateClosingPrices();
       
       // 2. Log all portfolio values using closing prices
       logger.info('📝 Logging portfolio values using closing prices...');
@@ -126,8 +126,13 @@ exports.triggerDailyValuation = async (useClosingPrices = true) => {
       logger.info(`🔔 MANUAL TRIGGER (Attempt ${attempt}/${MAX_RETRIES}): Starting daily valuation`);
       
       // 1. Update stock prices
-      logger.info(`🔄 Updating stock prices (${useClosingPrices ? 'closing' : 'regular'})...`);
-      await runPriceUpdate('Manual', useClosingPrices ? 'closing' : 'regular');
+      if (useClosingPrices) {
+        logger.info('🔄 Updating stock prices with closing prices...');
+        await updateClosingPrices();
+      } else {
+        logger.info('🔄 Updating stock prices with regular prices...');
+        await runPriceUpdate('Manual', 'regular');
+      }
       
       // 2. Log portfolio values
       logger.info('📝 Logging portfolio values...');

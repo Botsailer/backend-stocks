@@ -27,30 +27,37 @@ const logger = winston.createLogger({
 exports.calculatePortfolioValue = async (portfolio, useClosingPrice = false) => {
   try {
     let totalValue = portfolio.cashBalance;
+    let priceSourceCounts = { closing: 0, current: 0, buy: 0 };
     
     for (const holding of portfolio.holdings) {
       let price = null;
+      let priceSource = null;
       const stock = await StockSymbol.findOne({ symbol: holding.symbol });
       
       // Prefer closing price if requested and available
       if (useClosingPrice && stock && stock.todayClosingPrice) {
         price = parseFloat(stock.todayClosingPrice);
-        logger.debug(`Using closing price for ${holding.symbol}: ${price}`);
+        priceSource = 'closing';
+        priceSourceCounts.closing++;
       } 
       // Fallback to current price
       else if (stock && stock.currentPrice) {
         price = parseFloat(stock.currentPrice);
-        logger.debug(`Using current price for ${holding.symbol}: ${price}`);
+        priceSource = 'current';
+        priceSourceCounts.current++;
       }
       // Final fallback to buy price
       else {
         price = holding.buyPrice;
-        logger.warn(`Using buy price for ${holding.symbol}: ${price}`);
+        priceSource = 'buy';
+        priceSourceCounts.buy++;
       }
       
+      logger.debug(`${holding.symbol}: Using ${priceSource} price: ${price} × ${holding.quantity} = ${price * holding.quantity}`);
       totalValue += price * holding.quantity;
     }
     
+    logger.info(`Portfolio value calculation: ₹${totalValue.toFixed(2)} (Used prices: ${priceSourceCounts.closing} closing, ${priceSourceCounts.current} current, ${priceSourceCounts.buy} buy)`);
     return parseFloat(totalValue.toFixed(2));
   } catch (error) {
     logger.error(`Calculate value failed: ${error.message}`);
@@ -85,6 +92,38 @@ exports.logPortfolioValue = async (portfolio, useClosingPrice = false) => {
       const now = new Date();
       const startOfDay = PriceLog.getStartOfDay(now);
       
+      // Fetch compareWith index price if it exists
+      let compareIndexValue = null;
+      let benchmarkPriceSource = null;
+      
+      if (portfolio.compareWith) {
+        try {
+          const indexStock = await StockSymbol.findOne({ symbol: portfolio.compareWith });
+          if (indexStock) {
+            // For daily logs with closing prices, prefer todayClosingPrice
+            if (useClosingPrice && indexStock.todayClosingPrice) {
+              compareIndexValue = parseFloat(indexStock.todayClosingPrice);
+              benchmarkPriceSource = 'closing';
+              logger.debug(`Using closing price for benchmark ${portfolio.compareWith}: ${compareIndexValue}`);
+            } 
+            // Otherwise use current price
+            else if (indexStock.currentPrice) {
+              compareIndexValue = parseFloat(indexStock.currentPrice);
+              benchmarkPriceSource = 'current';
+              logger.debug(`Using current price for benchmark ${portfolio.compareWith}: ${compareIndexValue}`);
+            } else {
+              logger.warn(`No price available for benchmark ${portfolio.compareWith}`);
+            }
+          } else {
+            logger.warn(`Benchmark index ${portfolio.compareWith} not found in stock symbols`);
+          }
+        } catch (error) {
+          logger.error(`Error fetching benchmark ${portfolio.compareWith}: ${error.message}`);
+        }
+      } else {
+        logger.debug(`No benchmark index set for portfolio ${portfolio.name}`);
+      }
+
       // Check if record exists
       const existingLog = await PriceLog.findOne({
         portfolio: portfolio._id,
@@ -103,7 +142,9 @@ exports.logPortfolioValue = async (portfolio, useClosingPrice = false) => {
             cashRemaining: portfolio.cashBalance,
             date: now,
             dateOnly: startOfDay,
-            usedClosingPrices: useClosingPrice
+            usedClosingPrices: useClosingPrice,
+            compareIndexValue: compareIndexValue,
+            compareIndexPriceSource: benchmarkPriceSource
           },
           $inc: { updateCount: 1 }
         },
@@ -113,9 +154,17 @@ exports.logPortfolioValue = async (portfolio, useClosingPrice = false) => {
       // Log result
       if (isUpdate) {
         const change = portfolioValue - previousValue;
-        logger.info(`🔄 Updated portfolio "${portfolio.name}" value: ₹${portfolioValue} (Δ${change >= 0 ? '+' : ''}${change.toFixed(2)})`);
+        let logMsg = `🔄 Updated portfolio "${portfolio.name}" value: ₹${portfolioValue} (Δ${change >= 0 ? '+' : ''}${change.toFixed(2)})`;
+        if (compareIndexValue) {
+          logMsg += ` | Benchmark ${portfolio.compareWith}: ${compareIndexValue}`;
+        }
+        logger.info(logMsg);
       } else {
-        logger.info(`📊 Created portfolio "${portfolio.name}" daily log: ₹${portfolioValue}`);
+        let logMsg = `📊 Created portfolio "${portfolio.name}" daily log: ₹${portfolioValue}`;
+        if (compareIndexValue) {
+          logMsg += ` | Benchmark ${portfolio.compareWith}: ${compareIndexValue}`;
+        }
+        logger.info(logMsg);
       }
       
       return {
@@ -193,14 +242,17 @@ exports.getPortfolioHistory = async (portfolioId, period = '1m') => {
         ? new Date(Date.now() - config.days * 86400000)
         : new Date(0);
 
-      // Fetch logs
-      const allLogs = await PriceLog.find({
-        portfolio: portfolioId,
-        date: { $gte: startDate }
-      }).sort('date');
+      // Fetch logs and portfolio info
+      const [allLogs, portfolio] = await Promise.all([
+        PriceLog.find({
+          portfolio: portfolioId,
+          date: { $gte: startDate }
+        }).sort('date'),
+        Portfolio.findById(portfolioId).select('compareWith')
+      ]);
 
       if (allLogs.length === 0) {
-        return { portfolioId, period, baselineValue: 0, data: [] };
+        return { portfolioId, period, baselineValue: 0, data: [], compareData: [] };
       }
 
       // Find baseline
@@ -208,6 +260,7 @@ exports.getPortfolioHistory = async (portfolioId, period = '1m') => {
         current.date < oldest.date ? current : oldest
       );
       const baselineValue = baselineLog.portfolioValue;
+      const baselineIndexValue = baselineLog.compareIndexValue;
 
       // Apply interval filtering
       let filteredLogs = allLogs;
@@ -231,7 +284,7 @@ exports.getPortfolioHistory = async (portfolioId, period = '1m') => {
         }
       }
       
-      // Transform to zero-based gains
+      // Transform to zero-based gains for portfolio
       const transformedData = filteredLogs.map(log => ({
         date: log.date,
         gain: parseFloat((log.portfolioValue - baselineValue).toFixed(2)),
@@ -240,12 +293,32 @@ exports.getPortfolioHistory = async (portfolioId, period = '1m') => {
         usedClosingPrice: log.usedClosingPrices
       }));
 
+      // Transform to zero-based gains for comparison index
+      let compareData = [];
+      if (portfolio.compareWith) {
+        // Filter logs with compareIndexValue
+        const logsWithCompareValue = filteredLogs.filter(log => log.compareIndexValue != null);
+        
+        if (logsWithCompareValue.length > 0) {
+          // Get baseline for index
+          const indexBaselineValue = baselineIndexValue || logsWithCompareValue[0].compareIndexValue;
+          
+          compareData = logsWithCompareValue.map(log => ({
+            date: log.date,
+            gain: parseFloat((log.compareIndexValue - indexBaselineValue).toFixed(2)),
+            value: log.compareIndexValue
+          }));
+        }
+      }
+
       return {
         portfolioId,
         period,
         baselineValue,
         baselineDate: baselineLog.date,
-        data: transformedData
+        data: transformedData,
+        compareData,
+        compareSymbol: portfolio.compareWith || null
       };
       
     } catch (error) {
