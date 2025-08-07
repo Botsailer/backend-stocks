@@ -33,7 +33,7 @@ app.use((req, res, next) => {
     console.log(`${req.method} ${req.originalUrl} - ${res.statusCode} (${duration}ms)`);
     
     if (logLevel === 'error') {
-      CronLogger.error(`HTTP Error: ${req.method} ${req.originalUrl} - ${res.statusCode}`);
+      console.error(`HTTP Error: ${req.method} ${req.originalUrl} - ${res.statusCode}`);
     }
   });
   next();
