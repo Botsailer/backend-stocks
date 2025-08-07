@@ -154,15 +154,15 @@ exports.logPortfolioValue = async (portfolio, useClosingPrice = false) => {
       // Log result
       if (isUpdate) {
         const change = portfolioValue - previousValue;
-        let logMsg = `🔄 Updated portfolio "${portfolio.name}" value: ₹${portfolioValue} (Δ${change >= 0 ? '+' : ''}${change.toFixed(2)})`;
+        let logMsg = `🔄 Updated portfolio "${portfolio.name}" value: ₹${portfolioValue.toFixed(2)} (Δ${change >= 0 ? '+' : ''}${change.toFixed(2)})`;
         if (compareIndexValue) {
-          logMsg += ` | Benchmark ${portfolio.compareWith}: ${compareIndexValue}`;
+          logMsg += ` | Benchmark ${portfolio.compareWith}: ${compareIndexValue.toFixed(2)} (${priceLog.compareIndexPriceSource || 'unknown'} price)`;
         }
         logger.info(logMsg);
       } else {
-        let logMsg = `📊 Created portfolio "${portfolio.name}" daily log: ₹${portfolioValue}`;
+        let logMsg = `📊 Created portfolio "${portfolio.name}" daily log: ₹${portfolioValue.toFixed(2)}`;
         if (compareIndexValue) {
-          logMsg += ` | Benchmark ${portfolio.compareWith}: ${compareIndexValue}`;
+          logMsg += ` | Benchmark ${portfolio.compareWith}: ${compareIndexValue.toFixed(2)} (${priceLog.compareIndexPriceSource || 'unknown'} price)`;
         }
         logger.info(logMsg);
       }
@@ -296,18 +296,29 @@ exports.getPortfolioHistory = async (portfolioId, period = '1m') => {
       // Transform to zero-based gains for comparison index
       let compareData = [];
       if (portfolio.compareWith) {
-        // Filter logs with compareIndexValue
-        const logsWithCompareValue = filteredLogs.filter(log => log.compareIndexValue != null);
+        // Filter logs with valid compareIndexValue
+        const logsWithCompareValue = filteredLogs.filter(log => 
+          log.compareIndexValue != null && !isNaN(log.compareIndexValue)
+        );
         
         if (logsWithCompareValue.length > 0) {
           // Get baseline for index
           const indexBaselineValue = baselineIndexValue || logsWithCompareValue[0].compareIndexValue;
           
-          compareData = logsWithCompareValue.map(log => ({
-            date: log.date,
-            gain: parseFloat((log.compareIndexValue - indexBaselineValue).toFixed(2)),
-            value: log.compareIndexValue
-          }));
+          if (indexBaselineValue != null && !isNaN(indexBaselineValue)) {
+            compareData = logsWithCompareValue.map(log => ({
+              date: log.date,
+              gain: parseFloat((log.compareIndexValue - indexBaselineValue).toFixed(2)),
+              value: log.compareIndexValue,
+              priceSource: log.compareIndexPriceSource || 'unknown'
+            }));
+            
+            logger.info(`Generated ${compareData.length} comparison data points for ${portfolio.compareWith}`);
+          } else {
+            logger.warn(`Invalid baseline value for ${portfolio.compareWith}: ${indexBaselineValue}`);
+          }
+        } else {
+          logger.warn(`No valid comparison data found for ${portfolio.compareWith}`);
         }
       }
 
@@ -316,6 +327,8 @@ exports.getPortfolioHistory = async (portfolioId, period = '1m') => {
         period,
         baselineValue,
         baselineDate: baselineLog.date,
+        dataPoints: transformedData.length,
+        compareDataPoints: compareData.length,
         data: transformedData,
         compareData,
         compareSymbol: portfolio.compareWith || null

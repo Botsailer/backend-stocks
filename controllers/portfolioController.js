@@ -132,14 +132,21 @@ exports.getPortfolioPriceHistory = asyncHandler(async (req, res) => {
     const portfolioService = require('../services/portfolioservice');
     const historyData = await portfolioService.getPortfolioHistory(id, period);
     
-    if (historyData.dataPoints === 0) {
+    if (!historyData.data || historyData.dataPoints === 0) {
       return res.status(404).json({ error: 'No price history found' });
     }
+
+    // Add status info
+    historyData.status = 'success';
+    historyData.message = `Retrieved ${historyData.dataPoints} data points for portfolio and ${historyData.compareDataPoints} data points for benchmark`;
 
     res.status(200).json(historyData);
   } catch (error) {
     console.error('Error fetching price history:', error);
-    res.status(500).json({ error: 'Failed to retrieve price history' });
+    res.status(500).json({ 
+      error: 'Failed to retrieve price history',
+      message: error.message
+    });
   }
 });
 
