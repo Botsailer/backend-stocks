@@ -136,6 +136,8 @@ const requireAdmin = require('../middleware/requirreAdmin');
  * /api/stock-symbols:
  *   post:
  *     summary: Create a new stock symbol
+ *     security:
+ *       - bearerAuth: []
  *     tags: [Stock Symbols]
  *     requestBody:
  *       required: true
@@ -177,7 +179,7 @@ const requireAdmin = require('../middleware/requirreAdmin');
  *       500:
  *         description: Internal server error
  */
-router.post('/', stockSymbolController.createStockSymbol);
+router.post('/', requireAdmin, stockSymbolController.createStockSymbol);
 
 /**
  * @swagger
@@ -396,6 +398,8 @@ router.get('/ticker/:symbol', stockSymbolController.getStockSymbolBySymbol);
  * /api/stock-symbols/{id}:
  *   put:
  *     summary: Update a stock symbol
+ *     security:
+ *       - bearerAuth: []
  *     tags: [Stock Symbols]
  *     parameters:
  *       - in: path
@@ -428,7 +432,7 @@ router.get('/ticker/:symbol', stockSymbolController.getStockSymbolBySymbol);
  *       500:
  *         description: Internal server error
  */
-router.put('/:id', stockSymbolController.updateStockSymbol);
+router.put('/:id', requireAdmin, stockSymbolController.updateStockSymbol);
 
 
 /**
@@ -436,6 +440,8 @@ router.put('/:id', stockSymbolController.updateStockSymbol);
  * /api/stock-symbols/{id}:
  *   delete:
  *     summary: Delete a stock symbol
+ *     security:
+ *       - bearerAuth: []
  *     tags: [Stock Symbols]
  *     parameters:
  *       - in: path
@@ -453,7 +459,7 @@ router.put('/:id', stockSymbolController.updateStockSymbol);
  *       500:
  *         description: Internal server error
  */
-router.delete('/:id', stockSymbolController.deleteStockSymbol);
+router.delete('/:id', requireAdmin, stockSymbolController.deleteStockSymbol);
 
 /**
  * @swagger
