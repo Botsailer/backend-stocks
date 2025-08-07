@@ -1,14 +1,14 @@
 const cron = require('node-cron');
 const winston = require('winston');
-const stockSymbolController = require('./stocksymbolcontroller');
 const portfolioService = require('../services/portfolioservice');
 const emailService = require('../services/emailServices');
 const { runPriceUpdate, updateClosingPrices } = require('../utils/cornscheduler');
 const config = require('../config/config');
+const PriceLog = require('../models/PriceLog'); // Import at top level
 
-// Configure logger
+// Enhanced logger configuration
 const logger = winston.createLogger({
-  level: 'info',
+  level: config.env === 'development' ? 'debug' : 'info',
   format: winston.format.combine(
     winston.format.timestamp({ format: 'YYYY-MM-DD HH:mm:ss' }),
     winston.format.errors({ stack: true }),
@@ -26,155 +26,166 @@ const logger = winston.createLogger({
     }),
     new winston.transports.File({ 
       filename: 'logs/cron.log',
-      maxsize: 5 * 1024 * 1024,
-      maxFiles: 7
+      maxsize: 10 * 1024 * 1024, // 10MB
+      maxFiles: 14 // Keep 2 weeks of logs
     })
   ]
 });
 
-// Initialize cron job
-exports.initScheduledJobs = () => {
-  logger.info('⏰ Scheduling daily portfolio valuation job at 3:50 PM IST (Indian market close + 5 minutes)');
+// Centralized daily valuation runner
+const runDailyValuation = async (triggerType = 'Scheduled', useClosingPrices = true) => {
+  const jobStart = new Date();
+  logger.info(`🚀 ${triggerType} run started at ${jobStart.toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' })} IST`);
   
-  // Run at 3:50 PM IST
-  cron.schedule('50 15 * * *', async () => {
-    const jobStart = new Date();
-    logger.info(`🚀 Starting daily portfolio valuation at ${jobStart.toISOString()}`);
+  try {
+    // 1. Update stock prices
+    const priceUpdateType = useClosingPrices ? 'closing' : 'regular';
+    logger.info(`🔄 Updating stock prices (${priceUpdateType})...`);
     
-    try {
-      // 1. Update stock prices with closing prices
-      logger.info('🔄 Updating stock prices with closing prices...');
+    if (useClosingPrices) {
       await updateClosingPrices();
+    } else {
+      await runPriceUpdate(triggerType, 'regular');
+    }
+
+    // 2. Log portfolio values
+    logger.info('📝 Logging portfolio values...');
+    const portfolioResults = await portfolioService.logAllPortfoliosDaily(useClosingPrices);
+    
+    // 3. Cleanup duplicates
+    logger.info('🧹 Running duplicate cleanup...');
+    const cleanupResults = await PriceLog.cleanupDuplicates();
+    
+    // 4. Analyze results
+    const successCount = portfolioResults.filter(r => r.status === 'success').length;
+    const failedCount = portfolioResults.filter(r => r.status === 'failed').length;
+    const jobDurationSec = ((new Date() - jobStart) / 1000).toFixed(2);
+    
+    logger.info(`📊 Results: ${successCount} successful, ${failedCount} failed`);
+    logger.info(`🏁 ${triggerType} run completed in ${jobDurationSec} seconds`);
+    
+    return {
+      success: true,
+      portfolioResults,
+      cleanupResults,
+      duration: jobDurationSec,
+      startTime: jobStart,
+      endTime: new Date()
+    };
+    
+  } catch (error) {
+    const errorDuration = ((new Date() - jobStart) / 1000).toFixed(2);
+    logger.error(`🔥 ${triggerType} run FAILED after ${errorDuration}s: ${error.message}`);
+    return {
+      success: false,
+      error: error.message,
+      duration: errorDuration
+    };
+  }
+};
+
+// Email notification functions
+const sendFailureReport = async (portfolioResults) => {
+  const failedResults = portfolioResults.filter(r => r.status === 'failed');
+  
+  if (!failedResults.length || !config.mail.reportTo) return;
+  
+  const subject = `Portfolio Valuation Failed for ${failedResults.length} Portfolio(s)`;
+  let html = `<h1>Portfolio Valuation Report</h1>
+    <p><strong>Date:</strong> ${new Date().toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' })} (IST)</p>
+    <p><strong>Total Portfolios:</strong> ${portfolioResults.length}</p>
+    <p><strong>Successful:</strong> ${portfolioResults.length - failedResults.length}</p>
+    <p><strong>Failed:</strong> ${failedResults.length}</p>`;
+  
+  html += `<h2>Failed Portfolios:</h2><ul>`;
+  failedResults.forEach(failure => {
+    html += `<li><strong>${failure.portfolio}</strong>: ${failure.error}</li>`;
+  });
+  html += `</ul>`;
+  
+  await emailService.sendEmail(config.mail.reportTo, subject, html);
+  logger.info(`📧 Sent failure report to ${config.mail.reportTo}`);
+};
+
+const sendCriticalAlert = async (error) => {
+  if (!config.mail.reportTo) return;
+  
+  const subject = 'CRITICAL: Portfolio Valuation Job Failed';
+  const html = `<h1>Portfolio Valuation Job Failed</h1>
+    <p><strong>Time:</strong> ${new Date().toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' })} (IST)</p>
+    <p><strong>Error:</strong> ${error.message}</p>
+    <pre>${error.stack}</pre>`;
+  
+  await emailService.sendEmail(config.mail.reportTo, subject, html);
+  logger.info('📧 Sent critical alert');
+};
+
+// Cron job scheduler
+exports.initScheduledJobs = () => {
+  // Schedule at 10:20 UTC (3:50 PM IST)
+  const cronSchedule = '20 10 * * *'; // UTC: 10:20 AM
+  logger.info(`⏰ Scheduling daily job at ${cronSchedule} UTC (3:50 PM IST)`);
+  
+  cron.schedule(cronSchedule, async () => {
+    try {
+      const result = await runDailyValuation('Scheduled', true);
       
-      // 2. Log all portfolio values using closing prices
-      logger.info('📝 Logging portfolio values using closing prices...');
-      const portfolioResults = await portfolioService.logAllPortfoliosDaily(true);
+      // Send failure reports if needed
+      if (!result.success) throw new Error(result.error);
       
-      // 3. Run duplicate cleanup to ensure data integrity
-      logger.info('🧹 Running duplicate price log cleanup...');
-      const PriceLog = require('../models/PriceLog');
-      const cleanupResults = await PriceLog.cleanupDuplicates();
-      
-      if (cleanupResults.duplicatesRemoved > 0) {
-        logger.info(`🗑️ Removed ${cleanupResults.duplicatesRemoved} duplicate price log entries`);
-      }
-      
-      if (cleanupResults.errors.length > 0) {
-        logger.warn(`⚠️ ${cleanupResults.errors.length} errors during duplicate cleanup`);
-        cleanupResults.errors.forEach(err => {
-          logger.warn(`  - Error with portfolio ${err.portfolio}: ${err.error}`);
-        });
-      }
-      
-      // Analyze results
-      const successCount = portfolioResults.filter(r => r.status === 'success').length;
-      const failedCount = portfolioResults.filter(r => r.status === 'failed').length;
-      const failedPortfolios = portfolioResults
-        .filter(r => r.status === 'failed')
-        .map(f => f.portfolio);
-      
-      logger.info(`✅ Portfolio logging complete: ${successCount} successful, ${failedCount} failed`);
-      
-      // 4. Send failure report email
-      if (failedCount > 0 && config.mail.reportTo) {
-        const subject = `Portfolio Valuation Failed for ${failedCount} Portfolio(s)`;
-        let html = `<h1>Portfolio Valuation Report</h1>
-          <p><strong>Date:</strong> ${new Date().toLocaleString()}</p>
-          <p><strong>Total Portfolios:</strong> ${successCount + failedCount}</p>
-          <p><strong>Successful:</strong> ${successCount}</p>
-          <p><strong>Failed:</strong> ${failedCount}</p>`;
+      // Process results
+      if (result.portfolioResults) {
+        await sendFailureReport(result.portfolioResults);
         
-        if (failedCount > 0) {
-          html += `<h2>Failed Portfolios:</h2><ul>`;
-          portfolioResults
-            .filter(r => r.status === 'failed')
-            .forEach(failure => {
-              html += `<li><strong>${failure.portfolio}</strong>: ${failure.error}</li>`;
-            });
-          html += `</ul>`;
+        // Log cleanup results
+        if (result.cleanupResults.duplicatesRemoved > 0) {
+          logger.info(`🗑️ Removed ${result.cleanupResults.duplicatesRemoved} duplicates`);
         }
-        
-        await emailService.sendEmail(
-          config.mail.reportTo,
-          subject,
-          html
-        );
-        logger.info(`📧 Sent failure report to ${config.mail.reportTo}`);
+        if (result.cleanupResults.errors.length > 0) {
+          logger.warn(`⚠️ Cleanup errors: ${result.cleanupResults.errors.length}`);
+        }
       }
-      
-      const jobDuration = (new Date() - jobStart) / 1000;
-      logger.info(`🏁 Daily valuation completed in ${jobDuration.toFixed(2)} seconds`);
       
     } catch (error) {
-      logger.error(`🔥 CRITICAL: Cron job failed: ${error.message}\n${error.stack}`);
-      
-      // Send critical failure email
-      if (config.mail.reportTo) {
-        const subject = 'CRITICAL: Portfolio Valuation Job Failed';
-        const html = `<h1>Portfolio Valuation Job Failed</h1>
-          <p><strong>Time:</strong> ${new Date().toLocaleString()}</p>
-          <p><strong>Error:</strong> ${error.message}</p>
-          <pre>${error.stack}</pre>`;
-        
-        emailService.sendEmail(
-          config.mail.reportTo,
-          subject,
-          html
-        ).catch(emailErr => {
-          logger.error('Failed to send critical failure email:', emailErr);
-        });
-      }
+      logger.error(`🔥 CRITICAL: ${error.message}\n${error.stack}`);
+      await sendCriticalAlert(error);
     }
   }, {
     scheduled: true,
-    timezone: 'UTC'
+    timezone: 'UTC' // Cron uses UTC timezone
   });
 };
 
-// Manual trigger with retry logic
+// Manual trigger with enhanced retry
 exports.triggerDailyValuation = async (useClosingPrices = true) => {
   const MAX_RETRIES = 3;
   const RETRY_DELAY = 5000; // 5 seconds
   
   for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
     try {
-      const jobStart = new Date();
-      logger.info(`🔔 MANUAL TRIGGER (Attempt ${attempt}/${MAX_RETRIES}): Starting daily valuation`);
+      logger.info(`🔔 MANUAL TRIGGER (Attempt ${attempt}/${MAX_RETRIES})`);
+      const result = await runDailyValuation('Manual', useClosingPrices);
       
-      // 1. Update stock prices
-      if (useClosingPrices) {
-        logger.info('🔄 Updating stock prices with closing prices...');
-        await updateClosingPrices();
-      } else {
-        logger.info('🔄 Updating stock prices with regular prices...');
-        await runPriceUpdate('Manual', 'regular');
+      if (!result.success) throw new Error(result.error);
+      
+      // Log individual results
+      if (result.portfolioResults) {
+        result.portfolioResults.forEach(res => {
+          if (res.status === 'success') {
+            logger.info(`✅ ${res.portfolio}: ₹${res.value.toFixed(2)}`);
+          } else {
+            logger.error(`❌ ${res.portfolio}: ${res.error}`);
+          }
+        });
       }
       
-      // 2. Log portfolio values
-      logger.info('📝 Logging portfolio values...');
-      const portfolioResults = await portfolioService.logAllPortfoliosDaily(useClosingPrices);
-      
-      // Log results
-      portfolioResults
-        .filter(r => r.status === 'success')
-        .forEach(success => {
-          logger.info(`✅ Portfolio "${success.portfolio}" valued at ${success.value}`);
-        });
-      
-      portfolioResults
-        .filter(r => r.status === 'failed')
-        .forEach(failure => {
-          logger.error(`❌ Portfolio "${failure.portfolio}" failed: ${failure.error}`);
-        });
-      
-      logger.info(`🏁 Manual valuation completed in ${((new Date() - jobStart) / 1000).toFixed(2)} seconds`);
-      return portfolioResults;
+      return result;
       
     } catch (error) {
-      logger.error(`🔥 Attempt ${attempt} failed: ${error.message}`);
+      logger.error(`Attempt ${attempt} failed: ${error.message}`);
       
       if (attempt < MAX_RETRIES) {
-        logger.info(`⏳ Retrying in ${RETRY_DELAY / 1000} seconds...`);
+        logger.info(`⌛ Retrying in ${RETRY_DELAY / 1000}s...`);
         await new Promise(resolve => setTimeout(resolve, RETRY_DELAY));
       } else {
         logger.error(`🔥 MANUAL TRIGGER FAILED after ${MAX_RETRIES} attempts`);

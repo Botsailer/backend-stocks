@@ -221,82 +221,75 @@ exports.logAllPortfoliosDaily = async (useClosingPrice = false) => {
 };
 
 // Get portfolio history
-exports.getPortfolioHistory = async (portfolioId, period = '1m') => {
-  const MAX_RETRIES = 2;
+const moment = require('moment-timezone');
+
+exports.getPortfolioHistory = async (portfolioId, period = '1m', timezone = 'Asia/Kolkata') => {
+  // Validate inputs
+  if (!mongoose.Types.ObjectId.isValid(portfolioId)) {
+    throw new Error('Invalid portfolio ID');
+  }
+
+  // Period configuration with improved intervals
+  const periodConfig = {
+    '1d': { days: 1, maxPoints: 24, interval: 'hours' },
+    '1w': { days: 7, maxPoints: 14, interval: 'hours' },
+    '1m': { days: 30, maxPoints: 30, interval: 'days' },
+    '3m': { days: 90, maxPoints: 13, interval: 'days' },
+    '6m': { days: 180, maxPoints: 24, interval: 'weeks' },
+    '1y': { days: 365, maxPoints: 52, interval: 'weeks' },
+    'all': { days: null, maxPoints: 100, interval: 'months' }
+  };
   
-  for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
-    try {
-      // Validate inputs
-      if (!mongoose.Types.ObjectId.isValid(portfolioId)) {
-        throw new Error('Invalid portfolio ID');
-      }
+  const config = periodConfig[period] || periodConfig['1m'];
+  
+  try {
+    // Calculate date range with timezone support
+    const startDate = config.days 
+      ? moment().tz(timezone).subtract(config.days, 'days').startOf('day').toDate()
+      : new Date(0);
 
-      // Period configuration
-      const periodConfig = {
-        '1d': { days: 1, maxPoints: 24, intervalHours: 1 },
-        '1w': { days: 7, maxPoints: 14, intervalHours: 12 },
-        '1m': { days: 30, maxPoints: 30, intervalDays: 1 },
-        '3m': { days: 90, maxPoints: 13, intervalDays: 7 },
-        '6m': { days: 180, maxPoints: 24, intervalDays: 7 },
-        '1y': { days: 365, maxPoints: 26, intervalDays: 14 },
-        'all': { days: null, maxPoints: 100, intervalDays: 7 }
+    // Fetch logs and portfolio info
+    const [allLogs, portfolio] = await Promise.all([
+      PriceLog.find({
+        portfolio: portfolioId,
+        date: { $gte: startDate }
+      }).sort({ date: 1 }), // Sort chronologically
+      Portfolio.findById(portfolioId).select('compareWith')
+    ]);
+
+    if (allLogs.length === 0) {
+      return { 
+        portfolioId, 
+        period, 
+        baselineValue: 0, 
+        data: [], 
+        compareData: [],
+        dataPoints: 0,
+        compareDataPoints: 0
       };
-      
-      const config = periodConfig[period] || periodConfig['1m'];
-      const startDate = config.days 
-        ? new Date(Date.now() - config.days * 86400000)
-        : new Date(0);
+    }
 
-      // Fetch logs and portfolio info
-      const [allLogs, portfolio] = await Promise.all([
-        PriceLog.find({
-          portfolio: portfolioId,
-          date: { $gte: startDate }
-        }).sort('date'),
-        Portfolio.findById(portfolioId).select('compareWith')
-      ]);
+    // Convert logs to timezone-adjusted moments
+    const tzLogs = allLogs.map(log => ({
+      ...log.toObject(),
+      tzMoment: moment(log.date).tz(timezone)
+    }));
 
-      if (allLogs.length === 0) {
-        return { portfolioId, period, baselineValue: 0, data: [], compareData: [] };
-      }
+    // Find baseline (first log in period)
+    const baselineLog = tzLogs[0];
+    const baselineValue = baselineLog.portfolioValue;
 
-      // Find baseline
-      const baselineLog = allLogs.reduce((oldest, current) => 
-        current.date < oldest.date ? current : oldest
-      );
-      const baselineValue = baselineLog.portfolioValue;
-      const baselineIndexValue = baselineLog.compareIndexValue;
-
-      // Apply interval filtering
-      let filteredLogs = allLogs;
-      
-      if (config.intervalDays && config.intervalDays > 1) {
-        const intervalMs = config.intervalDays * 86400000;
-        let lastIncluded = null;
-        filteredLogs = [];
-        
-        for (const log of allLogs) {
-          if (!lastIncluded || (log.date - lastIncluded) >= intervalMs) {
-            filteredLogs.push(log);
-            lastIncluded = log.date;
-          }
-        }
-        
-        // Always include the latest log
-        if (filteredLogs.length === 0 || 
-            filteredLogs[filteredLogs.length-1]._id !== allLogs[allLogs.length-1]._id) {
-          filteredLogs.push(allLogs[allLogs.length-1]);
-        }
-      }
-      
-      // Transform to zero-based gains for portfolio
-      const transformedData = filteredLogs.map(log => ({
-        date: log.date,
-        gain: parseFloat((log.portfolioValue - baselineValue).toFixed(2)),
-        value: log.portfolioValue,
-        cash: log.cashRemaining,
-        usedClosingPrice: log.usedClosingPrices
-      }));
+    // Smart downsampling
+    const filteredLogs = this.downsampleLogs(tzLogs, config);
+    
+    // Transform to zero-based gains for portfolio
+    const transformedData = filteredLogs.map(log => ({
+      date: log.date,
+      gain: parseFloat((log.portfolioValue - baselineValue).toFixed(2)),
+      value: log.portfolioValue,
+      cash: log.cashRemaining,
+      usedClosingPrice: log.usedClosingPrices
+    }));
 
       // Transform to zero-based gains for comparison index
       let compareData = [];
@@ -327,27 +320,49 @@ exports.getPortfolioHistory = async (portfolioId, period = '1m') => {
         }
       }
 
-      return {
-        portfolioId,
-        period,
-        baselineValue,
-        baselineDate: baselineLog.date,
-        dataPoints: transformedData.length,
-        compareDataPoints: compareData.length,
-        data: transformedData,
-        compareData,
-        compareSymbol: portfolio.compareWith || null
-      };
-      
-    } catch (error) {
-      if (attempt === MAX_RETRIES) {
-        logger.error(`Get history failed after ${MAX_RETRIES} attempts: ${error.message}`);
-        throw error;
-      }
-      logger.warn(`History fetch attempt ${attempt} failed, retrying...`);
-      await new Promise(resolve => setTimeout(resolve, 1500));
-    }
+    return {
+      portfolioId,
+      period,
+      baselineValue,
+      baselineDate: baselineLog.date,
+      dataPoints: transformedData.length,
+      compareDataPoints: compareData.length,
+      data: transformedData,
+      compareData,
+      compareSymbol: portfolio.compareWith || null
+    };
+    
+  } catch (error) {
+    logger.error(`Get history failed: ${error.message}`);
+    throw error;
   }
+};
+
+
+exports.downsampleLogs = (logs, config) => {
+  if (logs.length <= config.maxPoints) return logs;
+  
+  const interval = config.interval;
+  const grouped = {};
+  
+  // Group logs by time interval
+  logs.forEach(log => {
+    const key = log.tzMoment.startOf(interval).format();
+    if (!grouped[key]) grouped[key] = [];
+    grouped[key].push(log);
+  });
+  
+  // Select best representative from each group
+  return Object.values(grouped).map(group => {
+    // Prefer logs with closing prices
+    const closingPriceLog = group.find(log => log.usedClosingPrices);
+    if (closingPriceLog) return closingPriceLog;
+    
+    // Otherwise most recent in group
+    return group.reduce((latest, current) => 
+      current.date > latest.date ? current : latest
+    );
+  });
 };
 
 // Manual portfolio recalculation
