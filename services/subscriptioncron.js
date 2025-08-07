@@ -3,7 +3,7 @@ const mongoose = require("mongoose");
 const Subscription = require("../models/subscription");
 const PaymentHistory = require("../models/paymenthistory");
 const winston = require("winston");
-const getRazorpayInstance = require("../controllers/subscriptionController").getRazorpayInstance;
+const { getRazorpayInstance } = require("../utils/configSettings");
 const updateUserPremiumStatus = require("../controllers/subscriptionController").updateUserPremiumStatus;
 
 // Logger configuration

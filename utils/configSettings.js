@@ -90,6 +90,15 @@ async function getPaymentConfig() {
   };
 }
 
+const getRazorpayInstance = async () => {
+  const config = await getPaymentConfig();
+  if (!config.key_id || !config.key_secret) {
+    throw new Error("Razorpay credentials not configured");
+  }
+  return new Razorpay({ key_id: config.key_id, key_secret: config.key_secret });
+};
+
+
 
 async function getFmpApiKeys() {
   try {
@@ -118,5 +127,6 @@ module.exports = {
   refreshCache,
   getSmtpConfig,
   getPaymentConfig,
-  getFmpApiKeys
+  getFmpApiKeys,
+  getRazorpayInstance
 };
