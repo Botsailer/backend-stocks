@@ -132,32 +132,29 @@ exports.logPortfolioValue = async (portfolio, useClosingPrice = false) => {
         logger.debug(`No benchmark index set for portfolio ${portfolio.name}`);
       }
 
-      // Check if record exists
-      const existingLog = await PriceLog.findOne({
+      // Use the new static method for creating/updating logs with built-in retry
+      const logData = {
+        portfolioValue: portfolioValue,
+        cashRemaining: portfolio.cashBalance,
+        date: now,
+        usedClosingPrices: useClosingPrice,
+        compareIndexValue: compareIndexValue,
+        compareIndexPriceSource: benchmarkPriceSource,
+        dataVerified: true // Mark this data as verified
+      };
+
+      const result = await PriceLog.createOrUpdateDailyLog(portfolio._id, logData);
+      
+      if (!result.success) {
+        throw new Error(`Failed to save price log: ${result.error}`);
+      }
+      
+      const priceLog = result.priceLog;
+      const isUpdate = result.action !== 'created';
+      const previousValue = isUpdate ? await PriceLog.findOne({
         portfolio: portfolio._id,
         dateOnly: startOfDay
-      });
-      
-      const isUpdate = !!existingLog;
-      const previousValue = existingLog ? existingLog.portfolioValue : null;
-      
-      // Create/update log
-      const priceLog = await PriceLog.findOneAndUpdate(
-        { portfolio: portfolio._id, dateOnly: startOfDay },
-        {
-          $set: {
-            portfolioValue: portfolioValue,
-            cashRemaining: portfolio.cashBalance,
-            date: now,
-            dateOnly: startOfDay,
-            usedClosingPrices: useClosingPrice,
-            compareIndexValue: compareIndexValue,
-            compareIndexPriceSource: benchmarkPriceSource
-          },
-          $inc: { updateCount: 1 }
-        },
-        { upsert: true, new: true, runValidators: true }
-      );
+      }).then(log => log?.portfolioValue) : null;
       
       // Log result
       if (isUpdate) {

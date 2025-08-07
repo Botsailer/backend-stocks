@@ -50,6 +50,22 @@ exports.initScheduledJobs = () => {
       logger.info('📝 Logging portfolio values using closing prices...');
       const portfolioResults = await portfolioService.logAllPortfoliosDaily(true);
       
+      // 3. Run duplicate cleanup to ensure data integrity
+      logger.info('🧹 Running duplicate price log cleanup...');
+      const PriceLog = require('../models/PriceLog');
+      const cleanupResults = await PriceLog.cleanupDuplicates();
+      
+      if (cleanupResults.duplicatesRemoved > 0) {
+        logger.info(`🗑️ Removed ${cleanupResults.duplicatesRemoved} duplicate price log entries`);
+      }
+      
+      if (cleanupResults.errors.length > 0) {
+        logger.warn(`⚠️ ${cleanupResults.errors.length} errors during duplicate cleanup`);
+        cleanupResults.errors.forEach(err => {
+          logger.warn(`  - Error with portfolio ${err.portfolio}: ${err.error}`);
+        });
+      }
+      
       // Analyze results
       const successCount = portfolioResults.filter(r => r.status === 'success').length;
       const failedCount = portfolioResults.filter(r => r.status === 'failed').length;
@@ -59,7 +75,7 @@ exports.initScheduledJobs = () => {
       
       logger.info(`✅ Portfolio logging complete: ${successCount} successful, ${failedCount} failed`);
       
-      // 3. Send failure report email
+      // 4. Send failure report email
       if (failedCount > 0 && config.mail.reportTo) {
         const subject = `Portfolio Valuation Failed for ${failedCount} Portfolio(s)`;
         let html = `<h1>Portfolio Valuation Report</h1>

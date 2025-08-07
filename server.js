@@ -88,6 +88,46 @@ dbAdapter.connect()
   });
 });
 
+    // Price log cleanup endpoint
+    app.post('/api/admin/price-logs/cleanup', async (req, res) => {
+      try {
+        const { cleanupDuplicatePriceLogs, verifyPriceLogIntegrity } = require('./utils/priceLogCleanup');
+        
+        // First verify if we have duplicates
+        const initialIntegrity = await verifyPriceLogIntegrity();
+        
+        if (initialIntegrity) {
+          return res.json({
+            success: true,
+            message: 'No duplicate price logs found. Database is in good state.',
+            duplicatesFound: 0
+          });
+        }
+        
+        // Run cleanup
+        const results = await cleanupDuplicatePriceLogs();
+        
+        // Verify cleanup was successful
+        const finalIntegrity = await verifyPriceLogIntegrity();
+        
+        res.json({
+          success: true,
+          message: `Cleanup completed: ${results.duplicatesRemoved} duplicates removed`,
+          initialCheck: !initialIntegrity, // true means duplicates found
+          finalCheck: finalIntegrity, // true means no duplicates
+          results,
+          allDuplicatesRemoved: finalIntegrity
+        });
+      } catch (error) {
+        console.error('Price log cleanup failed:', error);
+        res.status(500).json({
+          success: false,
+          message: 'Failed to clean up price logs',
+          error: error.message
+        });
+      }
+    });
+
     // **NEW CRON ENDPOINTS** - Add these for monitoring and manual triggers
     app.get('/api/cron/status', (req, res) => {
       try {
