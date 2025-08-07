@@ -53,15 +53,16 @@ const stockSymbolSchema = new Schema({
     index: true
   },
   currentPrice: {
-    type: String,
-    required: true
+    type: Number,
+    required: true,
+    min: 0
   },
   previousPrice: {
-    type: String,
+    type: Number,
     required: false // Previous day's close, set by cron
   },
   todayClosingPrice: {
-    type: String,
+    type: Number,
     required: false // Today's close, set by cron
   },
   closingPriceUpdatedAt: {
@@ -91,16 +92,16 @@ const stockSymbolSchema = new Schema({
     ]
   },
   marketCap: {
-    type: String
+    type: Number
   },
   volume: {
-    type: String
+    type: Number
   },
   high52Week: {
-    type: String
+    type: Number
   },
   low52Week: {
-    type: String
+    type: Number
   },
   isActive: {
     type: Boolean,
@@ -134,8 +135,8 @@ stockSymbolSchema.index({
 // Virtual for price change percentage
 stockSymbolSchema.virtual('priceChangePercent').get(function() {
   if (!this.previousPrice || !this.currentPrice) return 0;
-  const current = parseFloat(this.currentPrice);
-  const previous = parseFloat(this.previousPrice);
+  const current = this.currentPrice;
+  const previous = this.previousPrice;
   if (previous === 0) return 0;
   return ((current - previous) / previous * 100).toFixed(2);
 });
@@ -143,8 +144,8 @@ stockSymbolSchema.virtual('priceChangePercent').get(function() {
 // Virtual for price change amount
 stockSymbolSchema.virtual('priceChange').get(function() {
   if (!this.previousPrice || !this.currentPrice) return 0;
-  const current = parseFloat(this.currentPrice);
-  const previous = parseFloat(this.previousPrice);
+  const current = this.currentPrice;
+  const previous = this.previousPrice;
   return (current - previous).toFixed(2);
 });
 

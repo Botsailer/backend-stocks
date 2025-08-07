@@ -36,13 +36,13 @@ exports.calculatePortfolioValue = async (portfolio, useClosingPrice = false) => 
       
       // Prefer closing price if requested and available
       if (useClosingPrice && stock && stock.todayClosingPrice) {
-        price = parseFloat(stock.todayClosingPrice);
+        price = stock.todayClosingPrice;
         priceSource = 'closing';
         priceSourceCounts.closing++;
       } 
       // Fallback to current price
       else if (stock && stock.currentPrice) {
-        price = parseFloat(stock.currentPrice);
+        price = stock.currentPrice;
         priceSource = 'current';
         priceSourceCounts.current++;
       }
@@ -109,18 +109,18 @@ exports.logPortfolioValue = async (portfolio, useClosingPrice = false) => {
           
           if (indexStock) {
             // For daily logs with closing prices, prefer todayClosingPrice
-            if (useClosingPrice && indexStock.todayClosingPrice) {
-              compareIndexValue = parseFloat(indexStock.todayClosingPrice);
+            if (useClosingPrice && indexStock.todayClosingPrice && indexStock.todayClosingPrice > 0) {
+              compareIndexValue = indexStock.todayClosingPrice;
               benchmarkPriceSource = 'closing';
               logger.debug(`Using closing price for benchmark ${indexStock.symbol}: ${compareIndexValue}`);
             } 
             // Otherwise use current price
-            else if (indexStock.currentPrice) {
-              compareIndexValue = parseFloat(indexStock.currentPrice);
+            else if (indexStock.currentPrice && indexStock.currentPrice > 0) {
+              compareIndexValue = indexStock.currentPrice;
               benchmarkPriceSource = 'current';
               logger.debug(`Using current price for benchmark ${indexStock.symbol}: ${compareIndexValue}`);
             } else {
-              logger.warn(`No price available for benchmark ${indexStock.symbol}`);
+              logger.warn(`No valid price available for benchmark ${indexStock.symbol} (closing: ${indexStock.todayClosingPrice}, current: ${indexStock.currentPrice})`);
             }
           } else {
             logger.warn(`Benchmark index ${portfolio.compareWith} not found in stock symbols`);
@@ -265,7 +265,8 @@ exports.getPortfolioHistory = async (portfolioId, period = '1m', timezone = 'Asi
         data: [], 
         compareData: [],
         dataPoints: 0,
-        compareDataPoints: 0
+        compareDataPoints: 0,
+        compareSymbol: portfolio?.compareWith || null
       };
     }
 
@@ -291,34 +292,46 @@ exports.getPortfolioHistory = async (portfolioId, period = '1m', timezone = 'Asi
       usedClosingPrice: log.usedClosingPrices
     }));
 
-      // Transform to zero-based gains for comparison index
-      let compareData = [];
-      if (portfolio.compareWith) {
-        // Filter logs with valid compareIndexValue
-        const logsWithCompareValue = filteredLogs.filter(log => 
-          log.compareIndexValue != null && !isNaN(log.compareIndexValue)
-        );
+    // Transform to zero-based gains for comparison index
+    let compareData = [];
+    if (portfolio && portfolio.compareWith) {
+      // Filter logs with valid compareIndexValue
+      const logsWithCompareValue = filteredLogs.filter(log => 
+        log.compareIndexValue != null && !isNaN(log.compareIndexValue) && log.compareIndexValue > 0
+      );
+      
+      if (logsWithCompareValue.length > 0) {
+        // Get baseline for index from first available compareIndexValue
+        const indexBaselineValue = logsWithCompareValue[0].compareIndexValue;
         
-        if (logsWithCompareValue.length > 0) {
-          // Get baseline for index
-          const indexBaselineValue = baselineIndexValue || logsWithCompareValue[0].compareIndexValue;
+        if (indexBaselineValue != null && !isNaN(indexBaselineValue) && indexBaselineValue > 0) {
+          compareData = logsWithCompareValue.map(log => ({
+            date: log.date,
+            gain: parseFloat((log.compareIndexValue - indexBaselineValue).toFixed(2)),
+            value: log.compareIndexValue,
+            priceSource: log.compareIndexPriceSource || 'unknown'
+          }));
           
-          if (indexBaselineValue != null && !isNaN(indexBaselineValue)) {
-            compareData = logsWithCompareValue.map(log => ({
-              date: log.date,
-              gain: parseFloat((log.compareIndexValue - indexBaselineValue).toFixed(2)),
-              value: log.compareIndexValue,
-              priceSource: log.compareIndexPriceSource || 'unknown'
-            }));
-            
-            logger.info(`Generated ${compareData.length} comparison data points for ${portfolio.compareWith}`);
-          } else {
-            logger.warn(`Invalid baseline value for ${portfolio.compareWith}: ${indexBaselineValue}`);
-          }
+          logger.info(`Generated ${compareData.length} comparison data points for ${portfolio.compareWith} with baseline ${indexBaselineValue}`);
         } else {
-          logger.warn(`No valid comparison data found for ${portfolio.compareWith}`);
+          logger.warn(`Invalid baseline value for ${portfolio.compareWith}: ${indexBaselineValue}`);
+        }
+      } else {
+        logger.warn(`No valid comparison data found for ${portfolio.compareWith}. Logs found: ${filteredLogs.length}, with compareIndexValue: ${filteredLogs.filter(log => log.compareIndexValue != null).length}`);
+        
+        // Log sample of what we found for debugging
+        if (filteredLogs.length > 0) {
+          const sampleLog = filteredLogs[0];
+          logger.debug(`Sample log structure:`, {
+            hasCompareIndexValue: sampleLog.compareIndexValue != null,
+            compareIndexValue: sampleLog.compareIndexValue,
+            compareIndexPriceSource: sampleLog.compareIndexPriceSource
+          });
         }
       }
+    } else {
+      logger.info(`No compareWith symbol set for portfolio ${portfolioId}`);
+    }
 
     return {
       portfolioId,
@@ -329,7 +342,7 @@ exports.getPortfolioHistory = async (portfolioId, period = '1m', timezone = 'Asi
       compareDataPoints: compareData.length,
       data: transformedData,
       compareData,
-      compareSymbol: portfolio.compareWith || null
+      compareSymbol: portfolio?.compareWith || null
     };
     
   } catch (error) {
