@@ -3,6 +3,8 @@ const mongoose = require("mongoose");
 const Subscription = require("../models/subscription");
 const PaymentHistory = require("../models/paymenthistory");
 const winston = require("winston");
+const getRazorpayInstance = require("../controllers/subscriptionController").getRazorpayInstance;
+const updateUserPremiumStatus = require("../controllers/subscriptionController").updateUserPremiumStatus;
 
 // Logger configuration
 const logger = winston.createLogger({
@@ -23,7 +25,41 @@ const logger = winston.createLogger({
   ]
 });
 
-
+// Recurring payment check job (runs every hour)
+const checkRecurringPaymentsJob = cron.schedule("0 * * * *", async () => {
+  const now = new Date();
+  const thirtyDaysAgo = new Date(now.getTime() - (30 * 24 * 60 * 60 * 1000));
+  const subscriptions = await Subscription.find({ 
+    type: "recurring", 
+    status: "active" 
+  });
+  const razorpay = await getRazorpayInstance();
+  for (const sub of subscriptions) {
+    try {
+      const rSub = await razorpay.subscriptions.fetch(sub.razorpaySubscriptionId);
+      if (["halted", "cancelled", "expired"].includes(rSub.status)) {
+        await Subscription.updateOne(
+          { _id: sub._id },
+          { status: "cancelled", cancelledAt: now, cancelReason: "Payment failed or mandate cancelled" }
+        );
+        await updateUserPremiumStatus(sub.user);
+        logger.info(`Cancelled recurring subscription (Razorpay status): ${sub._id} for user: ${sub.user}`);
+      }
+      // If the subscription is active but last payment is more than 30 days ago, cancel
+      if (rSub.status === "active" && (!sub.lastPaymentAt || new Date(sub.lastPaymentAt) < thirtyDaysAgo)) {
+        await Subscription.updateOne(
+          { _id: sub._id },
+          { status: "cancelled", updatedAt: now, cancellationReason: "Payment failure - auto-cancelled after 30 days of no payment" }
+        );
+        await updateUserPremiumStatus(sub.user);
+        logger.info(`Cancelled stalled recurring subscription: ${sub._id} for user: ${sub.user}`);
+      }
+    } catch (err) {
+      logger.error(`Error checking subscription ${sub._id}:`, err);
+    }
+  }
+  logger.info("Recurring payment check completed");
+}, { timezone: "Asia/Kolkata", scheduled: false });
 
 // Main cleanup function for expired and unpaid subscriptions
 const cleanupExpiredSubscriptions = async () => {
@@ -43,56 +79,10 @@ const cleanupExpiredSubscriptions = async () => {
         updatedAt: now
       }
     );
-
     logger.info(`Expired ${expiredOneTimeResult.modifiedCount} one-time subscriptions`);
 
+    // Step 2: Cancel stalled recurring subscriptions (handled by recurring job, but double-check here)
     const thirtyDaysAgo = new Date(now.getTime() - (30 * 24 * 60 * 60 * 1000));
-    
-
-const checkRecurringPaymentsJob = cron.schedule("0 * * * *", async () => {
-  const now = new Date();
-  const subscriptions = await Subscription.find({ 
-    type: "recurring", 
-    status: "active" 
-  });
-
-  const razorpay = await getRazorpayInstance();
-
-  for (const sub of subscriptions) {
-    try {
-      const rSub = await razorpay.subscriptions.fetch(sub.razorpaySubscriptionId);
-      if (["halted", "cancelled", "expired"].includes(rSub.status)) {
-        await Subscription.updateOne(
-          { _id: sub._id },
-          { status: "cancelled", cancelledAt: now, cancelReason: "Payment failed or mandate cancelled" }
-        );
-        await updateUserPremiumStatus(sub.user);
-      }
-      // Check if last payment was more than 30 days ago
-      if (!sub.lastPaymentAt || new Date(sub.lastPaymentAt) < thirtyDaysAgo) {
-        // If last payment is more than 30 days ago, cancel the subscription
-        await Subscription.updateOne(
-          { _id: sub._id },
-          { status: "cancelled", updatedAt: now, cancellationReason: "Payment failure - auto-cancelled after 30 days of no payment" }
-        );
-        logger.info(`Cancelled stalled recurring subscription: ${sub._id} for user: ${sub.user}`);
-      }
-      // If the subscription is active but last payment is more than 30 days ago, cancel
-      if (rSub.status === "active" && sub.lastPaymentAt && new Date(sub.lastPaymentAt) < thirtyDaysAgo) {
-        await Subscription.updateOne(
-          { _id: sub._id },
-          { status: "cancelled", updatedAt: now, cancellationReason: "Payment failure - auto-cancelled after 30 days of no payment" }
-        );
-        logger.info(`Cancelled stalled recurring subscription: ${sub._id} for user: ${sub.user}`);
-      }
-    } catch (err) {
-      logger.error(`Error checking subscription ${sub._id}:`, err);
-    }
-  }
-  logger.info("Recurring payment check completed");
-}, { timezone: "Asia/Kolkata" });
-    
-
     const stalledRecurringSubscriptions = await Subscription.find({
       status: "active",
       type: "recurring",
@@ -105,10 +95,8 @@ const checkRecurringPaymentsJob = cron.schedule("0 * * * *", async () => {
         }
       ]
     });
-
     let cancelledRecurringCount = 0;
     const cancelledUserIds = new Set();
-
     for (const subscription of stalledRecurringSubscriptions) {
       try {
         await Subscription.updateOne(
@@ -119,21 +107,17 @@ const checkRecurringPaymentsJob = cron.schedule("0 * * * *", async () => {
             cancellationReason: "Payment failure - auto-cancelled after 30 days of no payment"
           }
         );
-        
         cancelledRecurringCount++;
         cancelledUserIds.add(subscription.user.toString());
-        
         logger.info(`Cancelled stalled recurring subscription: ${subscription._id} for user: ${subscription.user}`);
       } catch (error) {
         logger.error(`Error cancelling subscription ${subscription._id}:`, error);
       }
     }
-
     logger.info(`Cancelled ${cancelledRecurringCount} stalled recurring subscriptions`);
 
     // Step 3: Handle pending subscriptions that are too old (7+ days)
     const sevenDaysAgo = new Date(now.getTime() - (7 * 24 * 60 * 60 * 1000));
-    
     const oldPendingResult = await Subscription.updateMany(
       {
         status: "pending",
@@ -145,27 +129,22 @@ const checkRecurringPaymentsJob = cron.schedule("0 * * * *", async () => {
         cancellationReason: "Pending payment timeout - expired after 7 days"
       }
     );
-
     logger.info(`Expired ${oldPendingResult.modifiedCount} old pending subscriptions`);
 
     // Step 4: Clean up very old expired/cancelled subscriptions (6+ months)
     const sixMonthsAgo = new Date(now.getTime() - (6 * 30 * 24 * 60 * 60 * 1000));
-    
     const deletedOldResult = await Subscription.deleteMany({
       status: { $in: ["expired", "cancelled"] },
       updatedAt: { $lt: sixMonthsAgo }
     });
-
     logger.info(`Deleted ${deletedOldResult.deletedCount} old expired/cancelled subscriptions`);
 
     // Step 5: Clean up old payment history records (1+ year)
     const oneYearAgo = new Date(now.getTime() - (365 * 24 * 60 * 60 * 1000));
-    
     const deletedPaymentHistoryResult = await PaymentHistory.deleteMany({
       createdAt: { $lt: oneYearAgo },
       status: { $in: ["failed", "expired"] }
     });
-
     logger.info(`Deleted ${deletedPaymentHistoryResult.deletedCount} old payment history records`);
 
     // Step 6: Generate summary statistics
@@ -173,10 +152,7 @@ const checkRecurringPaymentsJob = cron.schedule("0 * * * *", async () => {
     const totalExpiredSubscriptions = await Subscription.countDocuments({ status: "expired" });
     const totalCancelledSubscriptions = await Subscription.countDocuments({ status: "cancelled" });
     const totalPendingSubscriptions = await Subscription.countDocuments({ status: "pending" });
-
     const executionTime = Date.now() - now.getTime();
-
-    // Summary log
     logger.info("Subscription cleanup completed", {
       summary: {
         expiredOneTime: expiredOneTimeResult.modifiedCount,
@@ -194,7 +170,6 @@ const checkRecurringPaymentsJob = cron.schedule("0 * * * *", async () => {
         pendingSubscriptions: totalPendingSubscriptions
       }
     });
-
     return {
       success: true,
       stats: {
@@ -212,13 +187,11 @@ const checkRecurringPaymentsJob = cron.schedule("0 * * * *", async () => {
         }
       }
     };
-
   } catch (error) {
     logger.error("Subscription cleanup job failed", {
       error: error.message,
       stack: error.stack
     });
-    
     return {
       success: false,
       error: error.message
@@ -229,11 +202,8 @@ const checkRecurringPaymentsJob = cron.schedule("0 * * * *", async () => {
 // Handle Razorpay subscription cancellation for recurring subscriptions
 const cancelRazorpaySubscriptions = async (subscriptionIds) => {
   if (!subscriptionIds.length) return;
-
   try {
-    const { getRazorpayInstance } = require("../controllers/subscriptionController");
     const razorpay = await getRazorpayInstance();
-
     for (const subscriptionId of subscriptionIds) {
       try {
         await razorpay.subscriptions.cancel(subscriptionId, {
@@ -253,7 +223,6 @@ const cancelRazorpaySubscriptions = async (subscriptionIds) => {
 const enhancedCleanupExpiredSubscriptions = async () => {
   try {
     const cleanupResult = await cleanupExpiredSubscriptions();
-    
     if (cleanupResult.success) {
       // Get Razorpay subscription IDs that need to be cancelled
       const razorpaySubscriptionIds = await Subscription.distinct('razorpaySubscriptionId', {
@@ -261,12 +230,10 @@ const enhancedCleanupExpiredSubscriptions = async () => {
         razorpaySubscriptionId: { $exists: true, $ne: null },
         updatedAt: { $gte: new Date(Date.now() - 60000) } // Last minute
       });
-
       if (razorpaySubscriptionIds.length > 0) {
         await cancelRazorpaySubscriptions(razorpaySubscriptionIds);
       }
     }
-    
     return cleanupResult;
   } catch (error) {
     logger.error("Enhanced cleanup failed", error);
@@ -280,15 +247,14 @@ const startSubscriptionCleanupJob = () => {
   cron.schedule("0 */5 * * *", async () => {
     logger.info("Subscription cleanup cron job triggered");
     await enhancedCleanupExpiredSubscriptions();
+    logger.info("Subscription cleanup cron job completed");
   }, {
     scheduled: true,
     timezone: "Asia/Kolkata"
   });
-
   // Also schedule a daily summary report at 6 AM
   cron.schedule("0 6 * * *", async () => {
     logger.info("Daily subscription summary job triggered");
-    
     try {
       const stats = {
         active: await Subscription.countDocuments({ status: "active" }),
@@ -299,7 +265,6 @@ const startSubscriptionCleanupJob = () => {
         recurringActive: await Subscription.countDocuments({ status: "active", type: "recurring" }),
         oneTimeActive: await Subscription.countDocuments({ status: "active", type: "one_time" })
       };
-
       logger.info("Daily subscription summary", { dailySummary: stats });
     } catch (error) {
       logger.error("Daily summary failed", error);
@@ -308,10 +273,13 @@ const startSubscriptionCleanupJob = () => {
     scheduled: true,
     timezone: "Asia/Kolkata"
   });
-
   logger.info("Subscription cleanup cron jobs scheduled:");
   logger.info("- Cleanup job: Every 5 hours (0 */5 * * *)");
   logger.info("- Daily summary: 6:00 AM daily (0 6 * * *)");
+  logger.info("Cron jobs initialized successfully");
+  logger.info("starting recurring payment check job every hour");
+  checkRecurringPaymentsJob.start();
+  logger.info("Recurring payment check job started");
 };
 
 // Export functions for manual execution and testing
