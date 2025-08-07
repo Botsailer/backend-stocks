@@ -336,7 +336,153 @@ router.get('/', stockSymbolController.getAllStockSymbols);
 router.get('/search', stockSymbolController.searchStockSymbols);
 
 
+/**
+ * @swagger
+ * /api/stock-symbols/update-prices:
+ *   post:
+ *     summary: Update stock prices using TradingView API
+ *     tags: [Stock Symbols]
+ *     security:
+ *       - bearerAuth: []
+ *     responses:
+ *       200:
+ *         description: Price update results
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success:
+ *                   type: boolean
+ *                 updated:
+ *                   type: integer
+ *                 failed:
+ *                   type: integer
+ *                 successSymbols:
+ *                   type: array
+ *                   items:
+ *                     type: string
+ *                 failedSymbols:
+ *                   type: array
+ *                   items:
+ *                     type: string
+ *                 progress:
+ *                   type: object
+ *                   properties:
+ *                     current:
+ *                       type: integer
+ *                     total:
+ *                       type: integer
+ *                     processed:
+ *                       type: integer
+ *                     totalSymbols:
+ *                       type: integer
+ *                 message:
+ *                   type: string
+ *       404:
+ *         description: No stocks found in database
+ *       500:
+ *         description: Internal server error
+ */
+router.post('/update-prices', requireAdmin, stockSymbolController.updateStockPrices);
 
+
+/**
+ * @swagger
+ * /api/stock-symbols/benchmarks:
+ *   get:
+ *     summary: Get all stocks that can be used as benchmarks
+ *     description: Returns a list of stocks that are suitable as portfolio benchmarks
+ *     tags: [Stock Symbols]
+ *     security:
+ *       - bearerAuth: []
+ *     responses:
+ *       200:
+ *         description: List of benchmark stocks
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success:
+ *                   type: boolean
+ *                 count:
+ *                   type: number
+ *                 data:
+ *                   type: array
+ *                   items:
+ *                     $ref: '#/components/schemas/StockSymbol'
+ *       500:
+ *         description: Server error
+ */
+router.get('/benchmarks', stockSymbolController.getBenchmarkStocks);
+
+
+/**
+ * @swagger
+ * /api/stock-symbols/enums:
+ *   get:
+ *     summary: Get all available enum values for stock symbols
+ *     description: Returns lists of all enum values for exchanges, sectors, etc. for use in dropdown menus
+ *     tags: [Stock Symbols]
+ *     responses:
+ *       200:
+ *         description: Lists of all enum values
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success:
+ *                   type: boolean
+ *                 data:
+ *                   type: object
+ *                   properties:
+ *                     exchanges:
+ *                       type: object
+ *                     sectors:
+ *                       type: array
+ *                       items:
+ *                         type: string
+ *                     stockCapTypes:
+ *                       type: array
+ *                       items:
+ *                         type: string
+ *                     currencies:
+ *                       type: array
+ *                       items:
+ *                         type: string
+ *       500:
+ *         description: Server error
+ */
+router.get('/enums', stockSymbolController.getEnumValues);
+
+
+/**
+ * @swagger
+ * /api/stock-symbols/ticker/{symbol}:
+ *   get:
+ *     summary: Get stock symbol by ticker
+ *     tags: [Stock Symbols]
+ *     parameters:
+ *       - in: path
+ *         name: symbol
+ *         required: true
+ *         schema:
+ *           type: string
+ *     responses:
+ *       200:
+ *         description: Stock symbol data
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/StockSymbol'
+ *       404:
+ *         description: Symbol not found
+ *       500:
+ *         description: Internal server error
+ */
+router.get('/ticker/:symbol', stockSymbolController.getStockSymbolBySymbol);
 
 
 /**
@@ -367,31 +513,6 @@ router.get('/search', stockSymbolController.searchStockSymbols);
  */
 router.get('/:id', stockSymbolController.getStockSymbolById);
 
-/**
- * @swagger
- * /api/stock-symbols/ticker/{symbol}:
- *   get:
- *     summary: Get stock symbol by ticker
- *     tags: [Stock Symbols]
- *     parameters:
- *       - in: path
- *         name: symbol
- *         required: true
- *         schema:
- *           type: string
- *     responses:
- *       200:
- *         description: Stock symbol data
- *         content:
- *           application/json:
- *             schema:
- *               $ref: '#/components/schemas/StockSymbol'
- *       404:
- *         description: Symbol not found
- *       500:
- *         description: Internal server error
- */
-router.get('/ticker/:symbol', stockSymbolController.getStockSymbolBySymbol);
 
 /**
  * @swagger
@@ -463,86 +584,6 @@ router.delete('/:id', requireAdmin, stockSymbolController.deleteStockSymbol);
 
 /**
  * @swagger
- * /api/stock-symbols/update-prices:
- *   post:
- *     summary: Update stock prices using TradingView API
- *     tags: [Stock Symbols]
- *     security:
- *       - bearerAuth: []
- *     responses:
- *       200:
- *         description: Price update results
- *         content:
- *           application/json:
- *             schema:
- *               type: object
- *               properties:
- *                 success:
- *                   type: boolean
- *                 updated:
- *                   type: integer
- *                 failed:
- *                   type: integer
- *                 successSymbols:
- *                   type: array
- *                   items:
- *                     type: string
- *                 failedSymbols:
- *                   type: array
- *                   items:
- *                     type: string
- *                 progress:
- *                   type: object
- *                   properties:
- *                     current:
- *                       type: integer
- *                     total:
- *                       type: integer
- *                     processed:
- *                       type: integer
- *                     totalSymbols:
- *                       type: integer
- *                 message:
- *                   type: string
- *       404:
- *         description: No stocks found in database
- *       500:
- *         description: Internal server error
- */
-router.post('/update-prices', requireAdmin, stockSymbolController.updateStockPrices);
-
-/**
- * @swagger
- * /api/stock-symbols/benchmarks:
- *   get:
- *     summary: Get all stocks that can be used as benchmarks
- *     description: Returns a list of stocks that are suitable as portfolio benchmarks
- *     tags: [Stock Symbols]
- *     security:
- *       - bearerAuth: []
- *     responses:
- *       200:
- *         description: List of benchmark stocks
- *         content:
- *           application/json:
- *             schema:
- *               type: object
- *               properties:
- *                 success:
- *                   type: boolean
- *                 count:
- *                   type: number
- *                 data:
- *                   type: array
- *                   items:
- *                     $ref: '#/components/schemas/StockSymbol'
- *       500:
- *         description: Server error
- */
-router.get('/benchmarks', stockSymbolController.getBenchmarkStocks);
-
-/**
- * @swagger
  * /api/stock-symbols/{id}/history:
  *   get:
  *     summary: Get stock details with price history
@@ -591,45 +632,6 @@ router.get('/benchmarks', stockSymbolController.getBenchmarkStocks);
  */
 router.get('/:id/history', stockSymbolController.getStockWithHistory);
 
-/**
- * @swagger
- * /api/stock-symbols/enums:
- *   get:
- *     summary: Get all available enum values for stock symbols
- *     description: Returns lists of all enum values for exchanges, sectors, etc. for use in dropdown menus
- *     tags: [Stock Symbols]
- *     security:
- *       - bearerAuth: []
- *     responses:
- *       200:
- *         description: Lists of all enum values
- *         content:
- *           application/json:
- *             schema:
- *               type: object
- *               properties:
- *                 success:
- *                   type: boolean
- *                 data:
- *                   type: object
- *                   properties:
- *                     exchanges:
- *                       type: object
- *                     sectors:
- *                       type: array
- *                       items:
- *                         type: string
- *                     stockCapTypes:
- *                       type: array
- *                       items:
- *                         type: string
- *                     currencies:
- *                       type: array
- *                       items:
- *                         type: string
- *       500:
- *         description: Server error
- */
-router.get('/enums', stockSymbolController.getEnumValues);
+
 
 module.exports = router;

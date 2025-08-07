@@ -676,26 +676,15 @@ const stockSymbolController = {
   // Get all available enum values for stock symbols
   getEnumValues: async (req, res) => {
     try {
-      // Get exchange categories directly from the model
-      const exchanges = StockSymbol.getExchangeCategories();
+      const StockSymbolSchema = StockSymbol.schema;
       
-      // Get sector enum values from the schema
-      const sectors = StockSymbol.schema.path('sector').enumValues || [];
+      // Get enum values from the schema
+      const exchanges = StockSymbolSchema.path('exchange').enumValues || [];
+      const sectors = StockSymbolSchema.path('sector').enumValues || [];
       
-      // Get Portfolio model to access its enums
-      const Portfolio = mongoose.model('Portfolio');
-      
-      // Get stockCapType enum values from the Portfolio schema
-      let stockCapTypes = [];
-      try {
-        const StockHoldingPath = Portfolio.schema.path('holdings');
-        stockCapTypes = StockHoldingPath.schema.path('stockCapType').enumValues || [];
-      } catch (err) {
-        console.warn('Could not get stockCapType enum values:', err.message);
-      }
-      
-      // Common currencies
-      const currencies = ['INR', 'USD', 'EUR', 'GBP', 'JPY', 'AUD', 'CAD', 'CNY', 'HKD', 'SGD'];
+      // Additional static values
+      const currencies = ['INR', 'USD', 'EUR', 'GBP', 'JPY', 'AUD', 'CAD', 'SGD', 'HKD'];
+      const stockCapTypes = ['Large Cap', 'Mid Cap', 'Small Cap', 'Micro Cap'];
       
       res.status(200).json({
         success: true,
@@ -710,7 +699,7 @@ const stockSymbolController = {
       console.error('Error getting enum values:', error);
       res.status(500).json({
         success: false,
-        error: 'Server Error'
+        message: error.message || 'Error fetching enum values'
       });
     }
   }
@@ -742,8 +731,6 @@ async function getStocksUsedAsBenchmarks() {
 // Helper function to get price history for a stock
 async function getPriceHistory(stockId, days) {
   try {
-    // This would require a price history model to be implemented
-    // For now, we'll return a placeholder
     return [
       { date: new Date(Date.now() - 86400000 * days), price: "0" },
       { date: new Date(), price: "0" }
@@ -754,4 +741,4 @@ async function getPriceHistory(stockId, days) {
   }
 }
 
-module.exports = {stockSymbolController,PriceUpdater};
+module.exports = { stockSymbolController, PriceUpdater };
