@@ -168,6 +168,7 @@ exports.getPortfolioPriceHistory = asyncHandler(async (req, res) => {
   }
 });
 
+// filepath: controllers/portfolioController.js
 exports.updatePortfolio = asyncHandler(async (req, res) => {
   const portfolio = await Portfolio.findById(req.params.id);
   
@@ -193,16 +194,6 @@ exports.updatePortfolio = asyncHandler(async (req, res) => {
     return res.status(400).json({ error: 'Description items must have key and value' });
   }
 
-  // Validate holdings
-  if (req.body.holdings && req.body.holdings.some(holding => 
-    !holding.minimumInvestmentValueStock || 
-    holding.minimumInvestmentValueStock < 1
-  )) {
-    return res.status(400).json({ 
-      error: 'All holdings must have minimumInvestmentValueStock >= 1' 
-    });
-  }
-
   // Validate benchmark symbol if provided
   if (req.body.compareWith) {
     const StockSymbol = require('../models/stockSymbol');
@@ -220,9 +211,125 @@ exports.updatePortfolio = asyncHandler(async (req, res) => {
     }
   }
 
-  // Update only allowed fields (removed calculated fields)
+  // Handle holdings based on stockAction
+  if (req.body.holdings) {
+    if (!Array.isArray(req.body.holdings)) {
+      return res.status(400).json({ error: 'Holdings must be an array' });
+    }
+
+    // Get stockAction (case insensitive)
+    const stockAction = (req.body.stockAction || 'update').toLowerCase();
+    let updatedHoldings = [...portfolio.holdings];
+
+    if (stockAction.includes('add')) {
+      // ADD: Add new holdings without affecting existing ones
+      for (const newHolding of req.body.holdings) {
+        // Validate required fields for new holdings
+        if (!newHolding.symbol || !newHolding.sector || !newHolding.buyPrice || 
+            !newHolding.quantity || !newHolding.minimumInvestmentValueStock) {
+          return res.status(400).json({ 
+            error: `New holding missing required fields (symbol, sector, buyPrice, quantity, minimumInvestmentValueStock)` 
+          });
+        }
+
+        // Check if holding already exists
+        const existingHolding = updatedHoldings.find(h => h.symbol === newHolding.symbol);
+        if (existingHolding) {
+          return res.status(400).json({ 
+            error: `Holding with symbol ${newHolding.symbol} already exists. Use update action to modify existing holdings.` 
+          });
+        }
+
+        // Validate minimumInvestmentValueStock
+        if (newHolding.minimumInvestmentValueStock < 1) {
+          return res.status(400).json({ 
+            error: `Holding ${newHolding.symbol}: minimumInvestmentValueStock must be >= 1` 
+          });
+        }
+
+        updatedHoldings.push(newHolding);
+      }
+
+    } else if (stockAction.includes('delete') || stockAction.includes('remove')) {
+      // DELETE: Remove holdings by symbol
+      const symbolsToDelete = req.body.holdings.map(h => h.symbol.toUpperCase());
+      const initialCount = updatedHoldings.length;
+      
+      updatedHoldings = updatedHoldings.filter(holding => 
+        !symbolsToDelete.includes(holding.symbol.toUpperCase())
+      );
+
+      const deletedCount = initialCount - updatedHoldings.length;
+      if (deletedCount === 0) {
+        return res.status(400).json({ 
+          error: `No holdings found with symbols: ${symbolsToDelete.join(', ')}` 
+        });
+      }
+
+    } else if (stockAction.includes('replace')) {
+      // REPLACE: Replace entire holdings array
+      for (const holding of req.body.holdings) {
+        // Validate required fields
+        if (!holding.symbol || !holding.sector || !holding.buyPrice || 
+            !holding.quantity || !holding.minimumInvestmentValueStock) {
+          return res.status(400).json({ 
+            error: `Holding missing required fields (symbol, sector, buyPrice, quantity, minimumInvestmentValueStock)` 
+          });
+        }
+
+        // Validate minimumInvestmentValueStock
+        if (holding.minimumInvestmentValueStock < 1) {
+          return res.status(400).json({ 
+            error: `Holding ${holding.symbol}: minimumInvestmentValueStock must be >= 1` 
+          });
+        }
+      }
+      updatedHoldings = req.body.holdings;
+
+    } else {
+      // DEFAULT/UPDATE: Merge holdings - update existing by symbol, add new ones
+      for (const newHolding of req.body.holdings) {
+        const existingIndex = updatedHoldings.findIndex(h => h.symbol === newHolding.symbol);
+        
+        if (existingIndex >= 0) {
+          // Update existing holding
+          updatedHoldings[existingIndex] = { ...updatedHoldings[existingIndex], ...newHolding };
+        } else {
+          // Add new holding - validate required fields
+          if (!newHolding.symbol || !newHolding.sector || !newHolding.buyPrice || 
+              !newHolding.quantity || !newHolding.minimumInvestmentValueStock) {
+            return res.status(400).json({ 
+              error: `New holding ${newHolding.symbol} missing required fields (symbol, sector, buyPrice, quantity, minimumInvestmentValueStock)` 
+            });
+          }
+          updatedHoldings.push(newHolding);
+        }
+
+        // Validate minimumInvestmentValueStock
+        if (newHolding.minimumInvestmentValueStock && newHolding.minimumInvestmentValueStock < 1) {
+          return res.status(400).json({ 
+            error: `Holding ${newHolding.symbol}: minimumInvestmentValueStock must be >= 1` 
+          });
+        }
+      }
+    }
+
+    // Update portfolio holdings
+    portfolio.holdings = updatedHoldings;
+    
+    // Recalculate cash balance
+    const totalHoldingsCost = updatedHoldings.reduce((sum, holding) => 
+      sum + (holding.buyPrice * holding.quantity), 0);
+    portfolio.cashBalance = parseFloat((portfolio.minInvestment - totalHoldingsCost).toFixed(2));
+    
+    // Remove holdings and stockAction from further processing
+    delete req.body.holdings;
+    delete req.body.stockAction;
+  }
+
+  // Update other allowed fields
   const allowedUpdates = [
-    'name', 'description', 'subscriptionFee', 'expiryDate', 'holdings', 
+    'name', 'description', 'subscriptionFee', 'expiryDate', 
     'PortfolioCategory', 'downloadLinks', 'youTubeLinks', 'timeHorizon', 
     'rebalancing', 'index', 'details', 'compareWith', 
     'lastRebalanceDate', 'nextRebalanceDate', 'monthlyContribution'
@@ -234,19 +341,19 @@ exports.updatePortfolio = asyncHandler(async (req, res) => {
     }
   });
 
-  // Validate holdings cost doesn't exceed available funds
-  const totalCost = portfolio.holdings.reduce((sum, holding) => 
-    sum + (holding.buyPrice * holding.quantity), 0);
-  
-  if (totalCost > (portfolio.minInvestment + portfolio.currentValue - portfolio.holdingsValue)) {
-    return res.status(400).json({ 
-      error: 'Total holdings cost exceeds available funds' 
-    });
-  }
-
+  // Save portfolio (this will trigger pre-save hooks to recalculate weights and values)
   await portfolio.save();
-  res.status(200).json(portfolio);
+  
+  // Return updated portfolio with calculated values
+  const populatedPortfolio = await Portfolio.findById(portfolio._id);
+  
+  res.status(200).json({
+    ...populatedPortfolio.toObject(),
+    holdingsValue: populatedPortfolio.holdingsValue
+  });
 });
+
+
 
 exports.deletePortfolio = asyncHandler(async (req, res) => {
   const portfolio = await Portfolio.findByIdAndDelete(req.params.id);

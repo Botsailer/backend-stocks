@@ -61,8 +61,6 @@ dbAdapter.connect()
   .then(() => {
     console.log('✅ Database connected successfully');
     CronLogger.info('Database connection established');
-
-
     // Initialize Passport and routes after DB connection
     app.use(passport.initialize());
     require('./config/passport')(passport, dbAdapter);
@@ -83,7 +81,6 @@ dbAdapter.connect()
     // Global error handling middleware
     app.use((err, req, res, next) => {
       console.error('🚨 Global error handler:', err);
-      CronLogger.error('Global error handler caught error', err);
       
       // Don't expose internal error details in production
       const isDevelopment = process.env.NODE_ENV !== 'production';
@@ -281,7 +278,6 @@ const gracefulShutdown = (signal) => {
       })
       .catch((error) => {
         console.error('❌ Error closing database connection:', error);
-        CronLogger.error('Error closing database connection', error);
         process.exit(1);
       });
   } catch (error) {
@@ -298,15 +294,13 @@ process.on('SIGINT', () => gracefulShutdown('SIGINT'));
 // Handle uncaught exceptions
 process.on('uncaughtException', (error) => {
   console.error('💥 Uncaught Exception:', error);
-  CronLogger.error('Uncaught Exception', error);
+  
   gracefulShutdown('UNCAUGHT_EXCEPTION');
 });
 
 // Handle unhandled promise rejections
 process.on('unhandledRejection', (reason, promise) => {
   console.error('💥 Unhandled Rejection at:', promise, 'reason:', reason);
-  CronLogger.error('Unhandled Rejection', new Error(reason));
-  
   // Check if this is a critical error that should cause shutdown
   const errorString = String(reason);
   const criticalErrors = [

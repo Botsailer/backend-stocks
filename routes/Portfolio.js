@@ -429,8 +429,14 @@ router.post('/portfolios', requireAdmin, portfolioController.createPortfolio);
 /**
  * @swagger
  * /api/portfolios/{id}:
- *   put:
- *     summary: Update portfolio by ID
+ *   patch:
+ *     summary: Update portfolio by ID with flexible stock management
+ *     description: |
+ *       Update portfolio with different stock actions:
+ *       - **Default/Update**: Merge holdings - update existing stocks by symbol, add new ones
+ *       - **Add**: Add new holdings to existing portfolio without affecting current holdings
+ *       - **Delete**: Remove specified holdings by symbol from portfolio
+ *       - **Replace**: Completely replace all holdings with provided ones
  *     tags: [Portfolios]
  *     security:
  *       - bearerAuth: []
@@ -446,26 +452,75 @@ router.post('/portfolios', requireAdmin, portfolioController.createPortfolio);
  *       content:
  *         application/json:
  *           schema:
- *             $ref: '#/components/schemas/Portfolio'
- *           example:
- *             name: "Updated Tech Growth"
- *             description: 
- *               - key: "Strategy"
- *                 value: "Updated tech focus"
- *             holdings:
- *               - symbol: "TSLA"
- *                 sector: "Automotive"
- *                 buyPrice: 260.75
- *                 quantity: 22
- *                 minimumInvestmentValueStock: 1000
- *                 stockCapType: "large cap"
- *             downloadLinks:
- *               - linkType: "excel"
- *                 linkUrl: "https://example.com/data.xlsx"
- *                 linkDiscription: "Portfolio holdings"
+ *             type: object
+ *             properties:
+ *               stockAction:
+ *                 type: string
+ *                 enum: [update, add, delete, replace]
+ *                 description: |
+ *                   Action to perform on holdings:
+ *                   - **update** (default): Update existing holdings by symbol, add new ones
+ *                   - **add**: Add new holdings without affecting existing ones
+ *                   - **delete**: Remove holdings by symbol
+ *                   - **replace**: Replace entire holdings array
+ *               holdings:
+ *                 type: array
+ *                 items:
+ *                   $ref: '#/components/schemas/StockHolding'
+ *               name:
+ *                 type: string
+ *               description:
+ *                 type: array
+ *                 items:
+ *                   type: object
+ *                   properties:
+ *                     key:
+ *                       type: string
+ *                     value:
+ *                       type: string
+ *           examples:
+ *             updateHoldings:
+ *               summary: Update existing holdings (default behavior)
+ *               value:
+ *                 holdings:
+ *                   - symbol: "POLYMED"
+ *                     quantity: 2
+ *                     buyPrice: 2100
+ *                   - symbol: "NEWSTOCK"
+ *                     sector: "TECHNOLOGY"
+ *                     buyPrice: 1500
+ *                     quantity: 1
+ *                     minimumInvestmentValueStock: 1500
+ *             addHoldings:
+ *               summary: Add new holdings
+ *               value:
+ *                 stockAction: "add"
+ *                 holdings:
+ *                   - symbol: "NEWTECH"
+ *                     sector: "TECHNOLOGY"
+ *                     buyPrice: 2000
+ *                     quantity: 1
+ *                     minimumInvestmentValueStock: 2000
+ *             deleteHoldings:
+ *               summary: Delete holdings by symbol
+ *               value:
+ *                 stockAction: "delete"
+ *                 holdings:
+ *                   - symbol: "POLYMED"
+ *                   - symbol: "INDIASHLTR"
+ *             replaceAllHoldings:
+ *               summary: Replace entire holdings array
+ *               value:
+ *                 stockAction: "replace"
+ *                 holdings:
+ *                   - symbol: "ONLYSTOCK"
+ *                     sector: "FINANCE"
+ *                     buyPrice: 1000
+ *                     quantity: 5
+ *                     minimumInvestmentValueStock: 5000
  *     responses:
  *       200:
- *         description: Portfolio updated
+ *         description: Portfolio updated successfully
  *         content:
  *           application/json:
  *             schema:
@@ -479,7 +534,7 @@ router.post('/portfolios', requireAdmin, portfolioController.createPortfolio);
  *       404:
  *         $ref: '#/components/responses/NotFound'
  */
-router.put('/portfolios/:id', requireAdmin, portfolioController.updatePortfolio);
+router.patch('/portfolios/:id', requireAdmin, portfolioController.updatePortfolio);
 
 /**
  * @swagger
