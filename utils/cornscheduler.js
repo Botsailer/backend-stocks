@@ -86,11 +86,19 @@ class TradingViewService {
   }
 
   async initialize() {
-    if (!this.client) {
-      this.client = new TradingViewAPI();
-      await this.client.setup();
+    try {
+      if (!this.client) {
+        CronLogger.info('Initializing TradingView client...');
+        this.client = new TradingViewAPI();
+        await this.client.setup();
+        CronLogger.success('TradingView client initialized successfully');
+      }
+      return this;
+    } catch (error) {
+      CronLogger.error('Failed to initialize TradingView client', error);
+      this.client = null;
+      throw error;
     }
-    return this;
   }
 
   async fetchPriceWithRetry(stock) {
@@ -99,15 +107,35 @@ class TradingViewService {
     
     while (retries < this.maxRetries) {
       try {
+        // Ensure client is initialized before each request in cron context
+        if (!this.client) {
+          CronLogger.info(`Reinitializing TradingView client for ${symbolKey}`);
+          await this.initialize();
+        }
+        
         const ticker = await this.client.getTicker(symbolKey);
+        
+        // Add safety check for ticker and fetch method
+        if (!ticker) {
+          throw new Error(`No ticker returned for ${symbolKey}`);
+        }
+        
+        if (typeof ticker.fetch !== 'function') {
+          throw new Error(`ticker.fetch is not a function for ${symbolKey}`);
+        }
+        
         const data = await ticker.fetch();
-        if (data.lp) {
+        if (data && data.lp) {
           return {
             price: data.lp.toString(),
             error: null
           };
+        } else {
+          throw new Error(`No price data (lp) found for ${symbolKey}`);
         }
       } catch (error) {
+        CronLogger.error(`Attempt ${retries + 1} failed for ${symbolKey}: ${error.message}`);
+        
         if (retries === this.maxRetries - 1) {
           return {
             price: null,
@@ -160,7 +188,11 @@ class PriceUpdater {
         throw new Error('Database not connected');
       }
 
+      // Reinitialize TradingView service for each cron run
+      CronLogger.info('Reinitializing TradingView service for cron execution...');
+      this.tvService = new TradingViewService();
       await this.tvService.initialize();
+      
       const stocks = await StockSymbol.find({ isActive: true }, '_id symbol exchange currentPrice todayClosingPrice');
       
       if (!stocks.length) {
@@ -320,6 +352,7 @@ async function updateClosingPrices() {
 
     const tvService = new TradingViewService();
     await tvService.initialize();
+    CronLogger.info('TradingView service initialized for closing price update');
 
     const today = new Date();
     today.setHours(0, 0, 0, 0); // Start of today
@@ -484,14 +517,19 @@ async function runPriceUpdate(jobName, updateType = 'regular') {
       throw new Error('Database connection not ready');
     }
 
-    const result = await priceUpdater.executeUpdate(updateType);
+    // Create a fresh PriceUpdater instance for each cron run
+    const cronPriceUpdater = new PriceUpdater();
+    const result = await cronPriceUpdater.executeUpdate(updateType);
     
     if (result.success) {
       CronLogger.success(`✅ ${jobName} update completed: ${result.message} (${result.duration}ms)`);
       
       // Log detailed results
       if (result.failed.length > 0) {
-        CronLogger.error(`${jobName} update had ${result.failed.length} failures`);
+        CronLogger.error(`${jobName} update had ${result.failed.length} failures:`);
+        result.failed.forEach(failure => {
+          CronLogger.error(`  - ${failure.symbol} (${failure.exchange}): ${failure.error}`);
+        });
       }
       
     } else {
