@@ -4,7 +4,9 @@ const Subscription = require("../models/subscription");
 const PaymentHistory = require("../models/paymenthistory");
 const winston = require("winston");
 const { getRazorpayInstance } = require("../utils/configSettings");
-const updateUserPremiumStatus = require("../controllers/subscriptionController").updateUserPremiumStatus;
+const TelegramService = require("../services/tgservice");
+const User = require("../models/user");
+const { sendEmail } = require("../services/emailServices");
 
 // Logger configuration
 const logger = winston.createLogger({
@@ -61,11 +63,147 @@ const checkRecurringPaymentsJob = cron.schedule("0 * * * *", async () => {
   logger.info("Recurring payment check completed");
 }, { timezone: "Asia/Kolkata", scheduled: false });
 
+async function updateUserPremiumStatus(userId) {
+  try {
+    const now = new Date();
+    const hasPremiumSubscription = await Subscription.exists({
+      user: userId,
+      status: "active",
+      category: { $regex: /^premium$/i },
+      expiresAt: { $gt: now }
+    });
+    
+    await User.findByIdAndUpdate(userId, { hasPremium: !!hasPremiumSubscription });
+    return !!hasPremiumSubscription;
+  } catch (error) {
+    logger.error('Error updating premium status:', error);
+    return false;
+  }
+}
+
+async function processExpiredSubscriptions() {
+  try {
+    const now = new Date();
+    logger.info(`Starting expired subscription processing at ${now.toISOString()}`);
+    
+    // Find subscriptions that expired but haven't been processed
+    const expiredSubs = await Subscription.find({
+      status: 'active',
+      expiresAt: { $lt: now },
+      telegram_kicked: { $ne: true } // Only unprocessed
+    }).populate('portfolio');
+    
+    logger.info(`Found ${expiredSubs.length} expired subscriptions to process`);
+    
+    let processedCount = 0;
+    let kickSuccessCount = 0;
+    
+    for (const sub of expiredSubs) {
+      try {
+        // Attempt to kick user from Telegram group
+        let kickResult = { success: false };
+        
+        if (sub.telegram_user_id) {
+          kickResult = await TelegramService.kickUser(sub.productId, sub.telegram_user_id);
+          
+          if (kickResult.success) {
+            kickSuccessCount++;
+            logger.info(`Kicked Telegram user ${sub.telegram_user_id} from product ${sub.productId}`);
+          } else {
+            logger.warn(`Failed to kick Telegram user ${sub.telegram_user_id}: ${kickResult.error}`);
+          }
+        }
+        
+        // Update subscription status
+        sub.status = 'expired';
+        sub.telegram_kicked = true;
+        sub.expiredAt = now;
+        await sub.save();
+        
+        processedCount++;
+        
+        // Send expiration notification
+        if (sub.portfolio) {
+          await sendExpirationEmail(sub.user, sub, sub.portfolio);
+        }
+        
+      } catch (error) {
+        logger.error(`Error processing subscription ${sub._id}:`, {
+          error: error.message,
+          stack: error.stack
+        });
+      }
+    }
+    
+    logger.info(`Expired subscription processing complete. Processed: ${processedCount}, Kicked: ${kickSuccessCount}`);
+    
+    return {
+      success: true,
+      processedCount,
+      kickSuccessCount
+    };
+    
+  } catch (error) {
+    logger.error('Error in processExpiredSubscriptions:', {
+      error: error.message,
+      stack: error.stack
+    });
+    return { success: false, error: error.message };
+  }
+}
+
+async function sendExpirationEmail(userId, subscription, portfolio) {
+  try {
+    const user = await User.findById(userId);
+    if (!user) return;
+    
+    const subject = `Subscription Expired - ${portfolio.name}`;
+    const text = `Your subscription to ${portfolio.name} has expired.`;
+    const html = `
+      <div style="max-width:600px; margin:0 auto; padding:20px; font-family:sans-serif;">
+        <h2 style="color:#e67e22;">Subscription Expired</h2>
+        <p>Dear ${user.fullName || user.username},</p>
+        <p>Your subscription to <strong>${portfolio.name}</strong> expired on ${subscription.expiresAt.toLocaleDateString()}.</p>
+        
+        <div style="background-color:#f8f9fa; padding:15px; border-radius:5px; margin:20px 0;">
+          <h3 style="color:#e67e22; margin-top:0;">Details:</h3>
+          <p><strong>Portfolio:</strong> ${portfolio.name}</p>
+          <p><strong>Expiration Date:</strong> ${subscription.expiresAt.toLocaleDateString()}</p>
+          ${subscription.type === 'recurring' ? 
+            `<p><strong>Note:</strong> Your recurring payments have been stopped.</p>` : ''}
+        </div>
+        
+        <p>To continue your access, please renew your subscription:</p>
+        <p style="margin:25px 0;">
+          <a href="${process.env.FRONTEND_URL}/subscribe/${portfolio._id}" 
+             style="background-color:#2e86c1; color:white; padding:12px 24px; text-decoration:none; border-radius:4px;">
+            Renew Subscription
+          </a>
+        </p>
+        
+        <hr style="margin:30px 0; border:none; border-top:1px solid #eee;">
+        <p style="color:#666; font-size:12px;">This is an automated notification.</p>
+      </div>
+    `;
+    
+    await sendEmail(user.email, subject, text, html);
+    logger.info(`Expiration email sent to ${user.email}`);
+  } catch (error) {
+    logger.error('Failed to send expiration email', {
+      userId,
+      error: error.message
+    });
+  }
+}
+
 // Main cleanup function for expired and unpaid subscriptions
 const cleanupExpiredSubscriptions = async () => {
   try {
     const now = new Date();
     logger.info("Starting subscription cleanup job", { timestamp: now });
+
+    // Process expired subscriptions
+    const expirationResult = await processExpiredSubscriptions();
 
     // Step 1: Mark expired one-time subscriptions as expired
     const expiredOneTimeResult = await Subscription.updateMany(
@@ -81,7 +219,7 @@ const cleanupExpiredSubscriptions = async () => {
     );
     logger.info(`Expired ${expiredOneTimeResult.modifiedCount} one-time subscriptions`);
 
-    // Step 2: Cancel stalled recurring subscriptions (handled by recurring job, but double-check here)
+    // Step 2: Cancel stalled recurring subscriptions
     const thirtyDaysAgo = new Date(now.getTime() - (30 * 24 * 60 * 60 * 1000));
     const stalledRecurringSubscriptions = await Subscription.find({
       status: "active",
@@ -252,7 +390,8 @@ const startSubscriptionCleanupJob = () => {
     scheduled: true,
     timezone: "Asia/Kolkata"
   });
-  // Also schedule a daily summary report at 6 AM
+  
+  // Daily summary report at 6 AM
   cron.schedule("0 6 * * *", async () => {
     logger.info("Daily subscription summary job triggered");
     try {
@@ -273,18 +412,21 @@ const startSubscriptionCleanupJob = () => {
     scheduled: true,
     timezone: "Asia/Kolkata"
   });
-  logger.info("Subscription cleanup cron jobs scheduled:");
-  logger.info("- Cleanup job: Every 5 hours (0 */5 * * *)");
-  logger.info("- Daily summary: 6:00 AM daily (0 6 * * *)");
-  logger.info("Cron jobs initialized successfully");
-  logger.info("starting recurring payment check job every hour");
+  
+  logger.info("Subscription cleanup cron jobs scheduled");
+  logger.info("Starting recurring payment check job every hour");
   checkRecurringPaymentsJob.start();
   logger.info("Recurring payment check job started");
 };
 
-// Export functions for manual execution and testing
+//testing call all functions
+startSubscriptionCleanupJob();
+cleanupExpiredSubscriptions();
+
+// Export functions
 module.exports = {
   startSubscriptionCleanupJob,
   cleanupExpiredSubscriptions,
-  enhancedCleanupExpiredSubscriptions
+  enhancedCleanupExpiredSubscriptions,
+  processExpiredSubscriptions
 };

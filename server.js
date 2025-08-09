@@ -188,6 +188,10 @@ dbAdapter.connect()
       }
     });
 
+
+
+    
+
     app.post('/api/cron/trigger-stock-update', async (req, res) => {
       try {
         CronLogger.info('Manual stock price update triggered via API');

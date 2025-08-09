@@ -11,6 +11,7 @@ const Bundle = require("../models/bundle");
 const User = require("../models/user");
 const { getPaymentConfig } = require("../utils/configSettings");
 const { sendEmail } = require("../services/emailServices"); // Add your email service
+const TelegramService = require("../services/tgservice");
 const winston = require("winston");
 
 // Logger setup
@@ -77,6 +78,43 @@ const calculateEndDate = (planType, startDate = new Date()) => {
   }
   return endDate;
 };
+
+async function handleTelegramIntegration(user, productType, productId, subscription) {
+  try {
+    if (productType !== 'Portfolio') return; // Only for portfolios
+    
+    const telegramGroup = await TelegramService.getGroupMapping(productId);
+    if (!telegramGroup) return;
+    
+    const inviteResult = await TelegramService.generateInviteLink(productId);
+    if (!inviteResult.success) {
+      throw new Error('Telegram invite generation failed');
+    }
+    
+    // Update subscription with Telegram info
+    subscription.invite_link_url = inviteResult.invite_link;
+    subscription.invite_link_expires_at = inviteResult.expires_at;
+    await subscription.save();
+    
+    // Send invitation email
+    const product = await Product.findById(productId);
+    if (product) {
+      await EmailService.sendInviteEmail(
+        user, 
+        product, 
+        inviteResult.invite_link, 
+        inviteResult.expires_at
+      );
+    }
+  } catch (error) {
+    logger.error('Telegram integration error:', {
+      userId: user._id,
+      productId,
+      error: error.message,
+      stack: error.stack
+    });
+  }
+}
 
 /**
  * ✨ ENHANCED: Check subscription status with renewal logic
@@ -558,14 +596,18 @@ exports.createEmandate = async (req, res) => {
  */
 exports.verifyPayment = async (req, res) => {
   const session = await mongoose.startSession();
+  session.startTransaction();
+  
   try {
     const { paymentId, orderId, signature } = req.body;
     if (!paymentId || !orderId || !signature) {
+      await session.abortTransaction();
       return res.status(400).json({ success: false, error: "Missing payment details" });
     }
 
     // Prevent duplicate processing
     if (await PaymentHistory.findOne({ paymentId })) {
+      await session.abortTransaction();
       return res.status(409).json({ success: false, error: "Payment already processed" });
     }
 
@@ -575,7 +617,9 @@ exports.verifyPayment = async (req, res) => {
       .createHmac("sha256", key_secret)
       .update(`${orderId}|${paymentId}`)
       .digest("hex");
+      
     if (expected !== signature) {
+      await session.abortTransaction();
       return res.status(400).json({ success: false, error: "Invalid payment signature" });
     }
 
@@ -583,6 +627,7 @@ exports.verifyPayment = async (req, res) => {
     const razorpay = await getRazorpayInstance();
     const order = await razorpay.orders.fetch(orderId);
     if (!order) {
+      await session.abortTransaction();
       return res.status(404).json({ success: false, error: "Order not found" });
     }
 
@@ -605,79 +650,40 @@ exports.verifyPayment = async (req, res) => {
     }
 
     let responseData = {};
+    let newSubscriptions = [];
+    let telegramInviteLinks = [];
 
-    await session.withTransaction(async () => {
-      if (productType === "Bundle") {
-        const bundle = await Bundle.findById(productId).populate("portfolios");
-        if (!bundle) throw new Error("Bundle not found");
+    if (productType === "Bundle") {
+      // Bundle processing logic
+      const bundle = await Bundle.findById(productId).populate("portfolios");
+      if (!bundle) throw new Error("Bundle not found");
 
-        // If bundle has portfolios, distribute per-portfolio
-        const portfolios = bundle.portfolios || [];
-        if (portfolios.length > 0) {
-          const amountPer = paidAmount / portfolios.length;
-          // Cancel old if renewal
-          if (isRenewal === "true" && existingSubscriptionId) {
-            await Subscription.updateMany(
-              { user: userId, productType: "Portfolio", productId: { $in: portfolios.map(p => p._id) }, status: "active" },
-              { status: "cancelled", cancelledAt: new Date(), cancelReason: "Renewed" },
-              { session }
-            );
-          }
-          // Upsert subscriptions & histories
-          for (let i = 0; i < portfolios.length; i++) {
-            const port = portfolios[i];
-            await Subscription.findOneAndUpdate(
-              { user: userId, productType: "Portfolio", productId: port._id, type: "one_time" },
-              {
-                user: userId,
-                productType: "Portfolio",
-                productId: port._id,
-                portfolio: port._id,
-                type: "one_time",
-                status: "active",
-                amount: amountPer,
-                category: bundle.category,
-                planType,
-                expiresAt: expiryDate,
-                paymentId,
-                orderId,
-                isRenewal: isRenewal === "true",
-                compensationDays,
-                previousSubscriptionId: existingSubscriptionId || null
-              },
-              { upsert: true, new: true, session }
-            );
-            await PaymentHistory.create([{
-              user: userId,
-              subscription: null,
-              portfolio: port._id,
-              amount: amountPer,
-              paymentId: `${paymentId}_port_${i}`,
-              orderId,
-              signature,
-              status: "VERIFIED",
-              description: `Bundle payment - ${bundle.name}`
-            }], { session });
-          }
-        } else {
-          // No portfolios: single bundle subscription record
-          if (isRenewal === "true" && existingSubscriptionId) {
-            await Subscription.findByIdAndUpdate(
-              existingSubscriptionId,
-              { status: "cancelled", cancelledAt: new Date(), cancelReason: "Renewed" },
-              { session }
-            );
-          }
-          const sub = await Subscription.findOneAndUpdate(
-            { user: userId, productType: "Bundle", productId, type: "one_time" },
+      const portfolios = bundle.portfolios || [];
+      if (portfolios.length > 0) {
+        const amountPer = paidAmount / portfolios.length;
+        
+        // Cancel old if renewal
+        if (isRenewal === "true" && existingSubscriptionId) {
+          await Subscription.updateMany(
+            { user: userId, productType: "Portfolio", productId: { $in: portfolios.map(p => p._id) }, status: "active" },
+            { status: "cancelled", cancelledAt: new Date(), cancelReason: "Renewed" },
+            { session }
+          );
+        }
+        
+        // Create subscriptions for each portfolio
+        for (let i = 0; i < portfolios.length; i++) {
+          const port = portfolios[i];
+          const newSub = await Subscription.findOneAndUpdate(
+            { user: userId, productType: "Portfolio", productId: port._id, type: "one_time" },
             {
               user: userId,
-              productType: "Bundle",
-              productId,
-              bundleId: productId,
+              productType: "Portfolio",
+              productId: port._id,
+              portfolio: port._id,
               type: "one_time",
               status: "active",
-              amount: paidAmount,
+              amount: amountPer,
               category: bundle.category,
               planType,
               expiresAt: expiryDate,
@@ -689,29 +695,22 @@ exports.verifyPayment = async (req, res) => {
             },
             { upsert: true, new: true, session }
           );
+          newSubscriptions.push(newSub);
+          
           await PaymentHistory.create([{
             user: userId,
-            subscription: sub._id,
-            portfolio: null,
-            amount: paidAmount,
-            paymentId,
+            subscription: null,
+            portfolio: port._id,
+            amount: amountPer,
+            paymentId: `${paymentId}_port_${i}`,
             orderId,
             signature,
             status: "VERIFIED",
-            description: `Bundle (${bundle.name}) payment`
+            description: `Bundle payment - ${bundle.name}`
           }], { session });
         }
-
-        responseData = {
-          success: true,
-          message: `Bundle payment verified${isRenewal === "true" ? " (Renewal)" : ""}`,
-          category: bundle.category,
-          isRenewal: isRenewal === "true",
-          compensationDays,
-          newExpiryDate: expiryDate
-        };
       } else {
-        // Single portfolio
+        // Bundle without portfolios
         if (isRenewal === "true" && existingSubscriptionId) {
           await Subscription.findByIdAndUpdate(
             existingSubscriptionId,
@@ -719,17 +718,18 @@ exports.verifyPayment = async (req, res) => {
             { session }
           );
         }
-        const newSub = await Subscription.findOneAndUpdate(
-          { user: userId, productType: "Portfolio", productId, type: "one_time" },
+        
+        const sub = await Subscription.findOneAndUpdate(
+          { user: userId, productType: "Bundle", productId, type: "one_time" },
           {
             user: userId,
-            productType: "Portfolio",
+            productType: "Bundle",
             productId,
-            portfolio: productId,
+            bundleId: productId,
             type: "one_time",
             status: "active",
             amount: paidAmount,
-            category: notes.category,
+            category: bundle.category,
             planType,
             expiresAt: expiryDate,
             paymentId,
@@ -740,43 +740,186 @@ exports.verifyPayment = async (req, res) => {
           },
           { upsert: true, new: true, session }
         );
+        newSubscriptions.push(sub);
+        
         await PaymentHistory.create([{
           user: userId,
-          subscription: newSub._id,
-          portfolio: productId,
+          subscription: sub._id,
+          portfolio: null,
           amount: paidAmount,
           paymentId,
           orderId,
           signature,
           status: "VERIFIED",
-          description: `Portfolio payment${isRenewal === "true" ? " (Renewal)" : ""}`
+          description: `Bundle (${bundle.name}) payment`
         }], { session });
+      }
 
-        responseData = {
-          success: true,
-          message: `Portfolio payment verified${isRenewal === "true" ? " (Renewal)" : ""}`,
-          subscriptionId: newSub._id,
+      responseData = {
+        success: true,
+        message: `Bundle payment verified${isRenewal ? " (Renewal)" : ""}`,
+        category: bundle.category,
+        isRenewal: isRenewal === "true",
+        compensationDays,
+        newExpiryDate: expiryDate
+      };
+    } else {
+      // Single portfolio
+      if (isRenewal === "true" && existingSubscriptionId) {
+        await Subscription.findByIdAndUpdate(
+          existingSubscriptionId,
+          { status: "cancelled", cancelledAt: new Date(), cancelReason: "Renewed" },
+          { session }
+        );
+      }
+      
+      const newSub = await Subscription.findOneAndUpdate(
+        { user: userId, productType, productId, type: "one_time" },
+        {
+          user: userId,
+          productType,
+          productId,
+          portfolio: productType === "Portfolio" ? productId : null,
+          type: "one_time",
+          status: "active",
+          amount: paidAmount,
           category: notes.category,
+          planType,
+          expiresAt: expiryDate,
+          paymentId,
+          orderId,
           isRenewal: isRenewal === "true",
           compensationDays,
-          newExpiryDate: expiryDate
-        };
-      }
-    });
-    await session.endSession();
+          previousSubscriptionId: existingSubscriptionId || null
+        },
+        { upsert: true, new: true, session }
+      );
+      newSubscriptions.push(newSub);
+      
+      await PaymentHistory.create([{
+        user: userId,
+        subscription: newSub._id,
+        portfolio: productType === "Portfolio" ? productId : null,
+        amount: paidAmount,
+        paymentId,
+        orderId,
+        signature,
+        status: "VERIFIED",
+        description: `${productType} payment${isRenewal ? " (Renewal)" : ""}`
+      }], { session });
 
-    // Update user premium flag
+      responseData = {
+        success: true,
+        message: `${productType} payment verified${isRenewal ? " (Renewal)" : ""}`,
+        subscriptionId: newSub._id,
+        category: notes.category,
+        isRenewal: isRenewal === "true",
+        compensationDays,
+        newExpiryDate: expiryDate
+      };
+    }
+
+    await session.commitTransaction();
+    
+    // Telegram integration for portfolio subscriptions
+    for (const sub of newSubscriptions) {
+      if (sub.productType === "Portfolio") {
+        try {
+          const telegramGroup = await TelegramService.getGroupMapping(sub.productId);
+          if (telegramGroup) {
+            const inviteResult = await TelegramService.generateInviteLink(sub.productId);
+            if (inviteResult.success) {
+              // Update subscription
+              await Subscription.findByIdAndUpdate(sub._id, {
+                invite_link_url: inviteResult.invite_link,
+                invite_link_expires_at: inviteResult.expires_at
+              });
+              
+              // Add to response
+              telegramInviteLinks.push({
+                productId: sub.productId,
+                invite_link: inviteResult.invite_link,
+                expires_at: inviteResult.expires_at
+              });
+              
+              // Send email
+              const product = await Portfolio.findById(sub.productId);
+              if (product) {
+                await sendTelegramInviteEmail(
+                  req.user, 
+                  product, 
+                  inviteResult.invite_link, 
+                  inviteResult.expires_at
+                );
+              }
+            }
+          }
+        } catch (error) {
+          logger.error('Telegram integration error:', {
+            subscriptionId: sub._id,
+            error: error.message
+          });
+        }
+      }
+    }
+
+    // Add Telegram links to response
+    responseData.telegramInviteLinks = telegramInviteLinks;
+
+    // Update user premium status
     await updateUserPremiumStatus(req.user._id);
+    
     return res.json(responseData);
+    
   } catch (error) {
-    await session.endSession();
-    logger.error("Error in verifyPayment:", error);
+    await session.abortTransaction();
+    
+    logger.error("Error in verifyPayment:", {
+      error: error.message,
+      stack: error.stack,
+      paymentId: req.body.paymentId,
+      orderId: req.body.orderId
+    });
+    
     if (error.code === 11000) {
       return res.status(409).json({ success: false, error: "Duplicate subscription" });
     }
-    return res.status(500).json({ success: false, error: error.message || "Payment verification failed" });
+    
+    return res.status(500).json({ 
+      success: false, 
+      error: error.message || "Payment verification failed" 
+    });
+  } finally {
+    session.endSession();
   }
 };
+
+async function sendTelegramInviteEmail(user, product, inviteLink, expiresAt) {
+  try {
+    const subject = `Your ${product.name} Telegram Group Access`;
+    const text = `You've been granted access to the ${product.name} Telegram group.\n\nJoin here: ${inviteLink}\n\nLink expires on ${expiresAt.toDateString()}`;
+    
+    const html = `
+      <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
+        <h2 style="color: #2E86C1;">Welcome to ${product.name}!</h2>
+        <p>You've been granted access to the exclusive Telegram group for ${product.name} subscribers.</p>
+        <p style="margin: 25px 0;">
+          <a href="${inviteLink}" 
+             style="background-color: #2E86C1; color: white; padding: 12px 24px; text-decoration: none; border-radius: 4px; font-weight: bold;">
+            Join Telegram Group
+          </a>
+        </p>
+        <p><strong>Important:</strong> This invite link will expire on ${expiresAt.toDateString()}</p>
+        <p>If you have any issues joining, please contact our support team.</p>
+      </div>
+    `;
+    
+    await sendEmail(user.email, subject, text, html);
+    logger.info(`Telegram invite sent to ${user.email}`);
+  } catch (error) {
+    logger.error(`Failed to send Telegram invite to ${user.email}:`, error);
+  }
+}
 
 
 /**
@@ -798,6 +941,7 @@ exports.verifyEmandate = async (req, res) => {
     if (!rSub || !rSub.notes || rSub.notes.user_id !== userId.toString()) {
       return res.status(403).json({ success: false, error: "Unauthorized access" });
     }
+    
     const existingSubs = await Subscription.find({ razorpaySubscriptionId: subscription_id });
     if (!existingSubs.length) {
       return res.status(404).json({ success: false, error: "No matching subscriptions" });
@@ -807,44 +951,90 @@ exports.verifyEmandate = async (req, res) => {
     const isRenewal = rSub.notes.isRenewal === "true";
     const existingId = rSub.notes.existingSubscriptionId;
     let activatedCount = 0;
+    let telegramInviteLinks = [];
 
     if (["authenticated", "active"].includes(status)) {
-      const session2 = await mongoose.startSession();
-      await session2.withTransaction(async () => {
+      const session = await mongoose.startSession();
+      await session.withTransaction(async () => {
         // Cancel old if renewal
         if (isRenewal && existingId) {
           await Subscription.findByIdAndUpdate(
             existingId,
             { status: "cancelled", cancelledAt: new Date(), cancelReason: "Renewed via eMandate" },
-            { session: session2 }
+            { session }
           );
         }
 
         const update = await Subscription.updateMany(
           { razorpaySubscriptionId: subscription_id, user: userId },
           { status: "active", lastPaymentAt: new Date() },
-          { session: session2 }
+          { session }
         );
         activatedCount = update.modifiedCount;
       });
-      await session2.endSession();
+      await session.endSession();
+
+      // Generate Telegram invites for portfolio subscriptions
+      for (const sub of existingSubs) {
+        if (sub.productType === "Portfolio") {
+          try {
+            const telegramGroup = await TelegramService.getGroupMapping(sub.productId);
+            if (telegramGroup) {
+              const inviteResult = await TelegramService.generateInviteLink(sub.productId);
+              if (inviteResult.success) {
+                // Update subscription
+                await Subscription.findByIdAndUpdate(sub._id, {
+                  invite_link_url: inviteResult.invite_link,
+                  invite_link_expires_at: inviteResult.expires_at
+                });
+                
+                // Add to response
+                telegramInviteLinks.push({
+                  productId: sub.productId,
+                  invite_link: inviteResult.invite_link,
+                  expires_at: inviteResult.expires_at
+                });
+                
+                // Send email
+                const product = await Portfolio.findById(sub.productId);
+                if (product) {
+                  await sendTelegramInviteEmail(
+                    req.user, 
+                    product, 
+                    inviteResult.invite_link, 
+                    inviteResult.expires_at
+                  );
+                }
+              }
+            }
+          } catch (error) {
+            logger.error('Telegram integration error:', {
+              subscriptionId: sub._id,
+              error: error.message
+            });
+          }
+        }
+      }
 
       // Renewal emails
       if (isRenewal) {
         const user = await User.findById(userId);
         for (const sub of existingSubs) {
-          const portfolio = sub.productType === "Portfolio" ? await Portfolio.findById(sub.portfolio) : null;
+          const portfolio = sub.productType === "Portfolio" ? 
+            await Portfolio.findById(sub.portfolio) : null;
           await sendRenewalConfirmationEmail(user, sub, portfolio, sub.compensationDays || 0);
         }
       }
 
       await updateUserPremiumStatus(userId);
+      
       return res.json({
         success: true,
         message: `eMandate ${status}. Activated ${activatedCount} subscriptions${isRenewal ? " (Renewal)" : ""}`,
         subscriptionStatus: status,
         activatedSubscriptions: activatedCount,
         isRenewal,
+        telegramInviteLinks,
         requiresAction: ["pending", "created"].includes(status)
       });
     }
@@ -855,22 +1045,75 @@ exports.verifyEmandate = async (req, res) => {
         { razorpaySubscriptionId: subscription_id, user: userId },
         { status: "cancelled" }
       );
+      
+      // Kick users from Telegram groups
+      for (const sub of existingSubs) {
+        if (sub.telegram_user_id) {
+          try {
+            await TelegramService.kickUser(sub.productId, sub.telegram_user_id);
+            logger.info(`Kicked user ${sub.telegram_user_id} from product ${sub.productId}`);
+          } catch (error) {
+            logger.error(`Failed to kick user ${sub.telegram_user_id}:`, error);
+          }
+        }
+      }
+      
       await updateUserPremiumStatus(userId);
-      return res.json({ success: false, message: `Subscription ${status}.`, subscriptionStatus: status });
+      return res.json({ 
+        success: false, 
+        message: `Subscription ${status}.`, 
+        subscriptionStatus: status 
+      });
     }
 
-    // Other states
-    return res.json({
+    // Pending states
+    if (["pending_authentication", "pending", "created"].includes(status)) {
+      // Send pending authentication email
+      const user = await User.findById(userId);
+      if (user) {
+        const subject = `Action Required: eMandate Subscription Pending`;
+        const text = `Your eMandate subscription is pending authentication. Please complete the process to activate your subscription.`;
+        const html = `
+          <div style="max-width:600px; margin:0 auto; padding:20px; font-family:sans-serif;">
+            <h2 style="color:#4a77e5;">Action Required: eMandate Subscription Pending</h2>
+            <p>Dear ${user.fullName || user.username},</p>
+            <p>Your eMandate subscription is currently pending authentication. Please complete the process to activate your subscription.</p>
+            <p>Subscription ID: <strong>${subscription_id}</strong></p>
+            <p>To complete the authentication, please visit:</p>
+            <p><a href="${rSub.short_url}" style="color:#4a77e5;">Complete Authentication</a></p>  
+            <hr style="margin:30px 0; border:none; border-top:1px solid #eee;">
+            <p style="color:#666; font-size:12px;">Automated notification</p>
+          </div>
+        `;
+        await sendEmail(user.email, subject, text, html);
+      }
+
+      return res.json({
+        success: false,
+        message: `Subscription in ${status} state.`,
+        subscriptionStatus: status,
+        requiresAction: true,
+        authenticationUrl: rSub.short_url
+      });
+    }
+
+    // Unknown state
+    return res.status(400).json({
       success: false,
-      message: `Subscription in ${status} state.`,
-      subscriptionStatus: status,
-      activatedSubscriptions: activatedCount,
-      isRenewal,
-      requiresAction: ["pending", "created"].includes(status)
+      error: `Unknown subscription status: ${status}`
     });
+    
   } catch (error) {
-    logger.error("Error in verifyEmandate:", error);
-    return res.status(500).json({ success: false, error: error.message || "eMandate verification failed" });
+    logger.error("Error in verifyEmandate:", {
+      error: error.message,
+      stack: error.stack,
+      subscription_id: req.body.subscription_id
+    });
+    
+    return res.status(500).json({ 
+      success: false, 
+      error: error.message || "eMandate verification failed" 
+    });
   }
 };
 /**
@@ -961,30 +1204,33 @@ exports.getUserSubscriptions = async (req, res) => {
  */
 exports.cancelSubscription = async (req, res) => {
   try {
-    const subscription = await Subscription.findOne({ 
-      _id: req.params.subscriptionId, 
-      user: req.user._id 
-    });
+    const subscription = await Subscription.findOne({
+      _id: req.params.subscriptionId,
+      user: req.user._id
+    }).populate('portfolio');
     
     if (!subscription) {
-      return res.status(404).json({ 
-        success: false, 
-        error: "Subscription not found" 
+      return res.status(404).json({
+        success: false,
+        error: 'Subscription not found'
       });
     }
-
-    // Cancel recurring subscription in Razorpay
-    if (subscription.type === "recurring" && subscription.razorpaySubscriptionId) {
+    
+    // Cancel recurring in Razorpay
+    if (subscription.type === 'recurring' && subscription.razorpaySubscriptionId) {
       try {
         const razorpay = await getRazorpayInstance();
-        await razorpay.subscriptions.cancel(subscription.razorpaySubscriptionId, { 
-          cancel_at_cycle_end: false 
+        await razorpay.subscriptions.cancel(subscription.razorpaySubscriptionId, {
+          cancel_at_cycle_end: false
         });
-      } catch(error) {
-        logger.error("Razorpay cancellation error", error);
+      } catch (error) {
+        logger.error('Razorpay cancellation error', {
+          subscriptionId: subscription._id,
+          error: error.message
+        });
       }
     }
-
+    
     // Cancel all related subscriptions
     const updateResult = await Subscription.updateMany(
       {
@@ -994,25 +1240,98 @@ exports.cancelSubscription = async (req, res) => {
           { razorpaySubscriptionId: subscription.razorpaySubscriptionId }
         ]
       },
-      { status: "cancelled" }
+      { status: 'cancelled', cancelledAt: new Date() }
     );
     
+    // Kick user from Telegram if applicable
+    if (subscription.telegram_user_id) {
+      try {
+        const kickResult = await TelegramService.kickUser(
+          subscription.productId,
+          subscription.telegram_user_id
+        );
+        
+        if (kickResult.success) {
+          logger.info(`Kicked Telegram user ${subscription.telegram_user_id} from product ${subscription.productId}`);
+          
+          // Update subscription status
+          await Subscription.updateOne(
+            { _id: subscription._id },
+            { telegram_kicked: true }
+          );
+        } else {
+          logger.warn(`Failed to kick Telegram user ${subscription.telegram_user_id}: ${kickResult.error}`);
+        }
+      } catch (error) {
+        logger.error('Telegram kick error on cancellation', {
+          subscriptionId: subscription._id,
+          error: error.message
+        });
+      }
+    }
+    
+    // Send cancellation confirmation
+    if (subscription.portfolio) {
+      await sendCancellationEmail(req.user, subscription, subscription.portfolio);
+    }
+    
+    // Update user premium status
     await updateUserPremiumStatus(req.user._id);
-
-    res.json({ 
-      success: true, 
-      message: "Subscription cancelled successfully",
-      cancelledSubscriptions: updateResult.modifiedCount
+    
+    res.json({
+      success: true,
+      message: 'Subscription cancelled successfully',
+      cancelledSubscriptions: updateResult.nModified
     });
-  } catch(error) {
-    logger.error("Error in cancelSubscription", error);
-    res.status(500).json({ 
-      success: false, 
-      error: error.message || "Failed to cancel subscription" 
+    
+  } catch (error) {
+    logger.error('Error in cancelSubscription', {
+      error: error.message,
+      stack: error.stack,
+      subscriptionId: req.params.subscriptionId
+    });
+    
+    res.status(500).json({
+      success: false,
+      error: error.message || 'Failed to cancel subscription'
     });
   }
 };
 
+async function sendCancellationEmail(user, subscription, portfolio) {
+  try {
+    const subject = `Subscription Cancelled - ${portfolio.name}`;
+    const text = `Your subscription to ${portfolio.name} has been cancelled.`;
+    const html = `
+      <div style="max-width:600px; margin:0 auto; padding:20px; font-family:sans-serif;">
+        <h2 style="color:#e74c3c;">Subscription Cancelled</h2>
+        <p>Dear ${user.fullName || user.username},</p>
+        <p>Your subscription to <strong>${portfolio.name}</strong> has been successfully cancelled.</p>
+        
+        <div style="background-color:#f8f9fa; padding:15px; border-radius:5px; margin:20px 0;">
+          <h3 style="color:#e74c3c; margin-top:0;">Details:</h3>
+          <p><strong>Portfolio:</strong> ${portfolio.name}</p>
+          <p><strong>Cancellation Date:</strong> ${new Date().toLocaleDateString()}</p>
+          <p><strong>Access Ends:</strong> ${subscription.expiresAt.toLocaleDateString()}</p>
+        </div>
+        
+        <p>You will retain access until your subscription expiration date. 
+        If you wish to resubscribe, you can do so at any time.</p>
+        
+        <hr style="margin:30px 0; border:none; border-top:1px solid #eee;">
+        <p style="color:#666; font-size:12px;">This is an automated notification.</p>
+      </div>
+    `;
+    
+    await sendEmail(user.email, subject, text, html);
+    logger.info(`Cancellation email sent to ${user.email}`);
+  } catch (error) {
+    logger.error('Failed to send cancellation email', {
+      userId: user._id,
+      error: error.message
+    });
+  }
+}
 /**
  * Razorpay webhook handler
  */

@@ -21,6 +21,49 @@ const requireAdmin = async (req, res, next) => {
   next();
 };
 
+
+//route to delete all the server logs files 
+/**
+ * @swagger
+ * /admin/files/logs:
+ *   delete:
+ *     tags: [AdminUsers]
+ *     summary: Delete all server logs files
+ *     security:
+ *       - bearerAuth: []
+ *     responses:
+ *       200:
+ *         description: Logs deleted successfully
+ *       500:
+ *         description: Error deleting logs
+ */
+
+
+
+router.delete(
+  '/files/logs',
+  passport.authenticate('jwt', { session: false }),
+  requireAdmin,
+  async (req, res) => {
+    try {
+      const fs = require('fs');
+      const path = require('path');
+      const logsDir = path.join(__dirname, '../logs');
+
+      // Check if logs directory exists
+      if (fs.existsSync(logsDir)) {
+        fs.rmSync(logsDir, { recursive: true, force: true });
+        res.json({ message: 'Logs deleted successfully' });
+      } else {
+        res.status(404).json({ error: 'Logs directory not found' });
+      }
+    } catch (err) {
+      res.status(500).json({ error: 'Error deleting logs: ' + err.message });
+    }
+  }
+);
+
+
 // --- Swagger Security Scheme (declare once globally) ---
 /**
  * @swagger
@@ -618,5 +661,25 @@ router.post(
   requireAdmin,
   userCtl.unbanUser
 );
+
+
+//logs files delete  the whole folder ./logs on server
+/**
+ * @swagger
+ * /admin/users/logs:
+ *   delete:
+ *     tags: [AdminUsers]
+ *     summary: Delete all user logs
+ *     security:
+ *       - bearerAuth: []
+ *     responses:
+ *       200:
+ *         description: Logs deleted successfully
+ *       500:
+ *         description: Error deleting logs
+ */
+
+
+
 
 module.exports = router;
