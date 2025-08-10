@@ -248,6 +248,7 @@ exports.getAllPortfolios = async (req, res) => {
         minInvestment: p.minInvestment,
         durationMonths: p.durationMonths,
         PortfolioCategory: p.PortfolioCategory,
+        monthlyContribution: p.monthlyContribution,
         createdAt: p.createdAt,
         message: "Login to view details"
       }));
@@ -282,6 +283,7 @@ exports.getAllPortfolios = async (req, res) => {
         subscriptionFee: p.subscriptionFee,
         minInvestment: p.minInvestment,
         durationMonths: p.durationMonths,
+        monthlyContribution: p.monthlyContribution,
         PortfolioCategory: p.PortfolioCategory,
         createdAt: p.createdAt,
         message: "Subscribe to view complete details"
@@ -311,6 +313,7 @@ exports.getPortfolioById = async (req, res) => {
         subscriptionFee: portfolio.subscriptionFee,
         minInvestment: portfolio.minInvestment,
         durationMonths: portfolio.durationMonths,
+         monthlyContribution: p.monthlyContribution,
         PortfolioCategory: portfolio.PortfolioCategory,
         createdAt: portfolio.createdAt,
         message: "Login to view details"
@@ -332,6 +335,7 @@ exports.getPortfolioById = async (req, res) => {
       description: portfolio.description,
       subscriptionFee: portfolio.subscriptionFee,
       minInvestment: portfolio.minInvestment,
+       monthlyContribution: p.monthlyContribution,
       durationMonths: portfolio.durationMonths,
       PortfolioCategory: portfolio.PortfolioCategory,
       createdAt: portfolio.createdAt,
