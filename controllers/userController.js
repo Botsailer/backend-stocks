@@ -16,7 +16,7 @@ const updateUserPremiumStatus = async (userId) => {
     const hasPremiumSubscription = await Subscription.exists({
       user: userId,
       status: "active",
-      category: { $regex: /^premium$/i },  // Case-insensitive match
+      category: { $regex: /^premium$/i },
       expiresAt: { $gt: now }
     });
     

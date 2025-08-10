@@ -218,11 +218,7 @@ dbAdapter.connect()
 
     // Start server
     app.listen(config.server.port, async () => {
-  const { spawn } = require('child_process');
-  const child = spawn('node', ['-e', `require("./scripts/index.js")`], {
-    detached: true,
-      stdio: ['ignore', 'inherit', 'inherit']
-  });
+
       console.log(`Auth service running on port ${config.server.port}`);
       console.log(`Swagger docs available at http://${config.server.host}:${config.server.port}/api-docs`);
       
