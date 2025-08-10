@@ -1,6 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const portfolioController = require('../controllers/portfolioController');
+const chartDataController = require('../controllers/chartDataController');
 const requireAdmin = require('../middleware/requirreAdmin');
 const cronController = require('../controllers/portfoliocroncontroller');
 
@@ -777,5 +778,285 @@ router.post('/portfolios/trigger-daily-valuation', requireAdmin, async (req, res
     res.status(500).json({ error: error.message });
   }
 });
+
+// ================================
+// Chart Data CRUD Operations
+// ================================
+
+/**
+ * @swagger
+ * tags:
+ *   name: ChartData
+ *   description: Portfolio performance chart data management
+ */
+
+/**
+ * @swagger
+ * /api/portfolios/{portfolioId}/chart-data:
+ *   get:
+ *     summary: Get price logs for a portfolio
+ *     tags: [ChartData]
+ *     parameters:
+ *       - in: path
+ *         name: portfolioId
+ *         schema:
+ *           type: string
+ *         required: true
+ *         description: Portfolio ID
+ *       - in: query
+ *         name: startDate
+ *         schema:
+ *           type: string
+ *           format: date
+ *         description: Start date for filtering
+ *       - in: query
+ *         name: endDate
+ *         schema:
+ *           type: string
+ *           format: date
+ *         description: End date for filtering
+ *       - in: query
+ *         name: limit
+ *         schema:
+ *           type: integer
+ *           default: 100
+ *         description: Number of records to return
+ *       - in: query
+ *         name: page
+ *         schema:
+ *           type: integer
+ *           default: 1
+ *         description: Page number
+ *     responses:
+ *       200:
+ *         description: List of price logs
+ */
+router.get('/portfolios/:portfolioId/chart-data', chartDataController.getAllPriceLogs);
+
+/**
+ * @swagger
+ * /api/chart-data/{id}:
+ *   get:
+ *     summary: Get a price log by ID
+ *     tags: [ChartData]
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         schema:
+ *           type: string
+ *         required: true
+ *         description: Price log ID
+ *     responses:
+ *       200:
+ *         description: Price log data
+ *       404:
+ *         description: Price log not found
+ */
+router.get('/chart-data/:id', chartDataController.getPriceLogById);
+
+/**
+ * @swagger
+ * /api/portfolios/{portfolioId}/chart-data:
+ *   post:
+ *     summary: Create a new price log
+ *     tags: [ChartData]
+ *     parameters:
+ *       - in: path
+ *         name: portfolioId
+ *         schema:
+ *           type: string
+ *         required: true
+ *         description: Portfolio ID
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required:
+ *               - portfolioValue
+ *               - cashRemaining
+ *             properties:
+ *               date:
+ *                 type: string
+ *                 format: date-time
+ *                 description: Date and time of the price log (defaults to current time if not provided)
+ *                 example: "2025-08-01T12:00:00Z"
+ *               portfolioValue:
+ *                 type: number
+ *                 description: Total value of the portfolio
+ *                 example: 125000.50
+ *               cashRemaining:
+ *                 type: number
+ *                 description: Cash remaining in the portfolio
+ *                 example: 12500.75
+ *               compareIndexValue:
+ *                 type: number
+ *                 description: Value of the comparison index
+ *                 example: 18045.22
+ *               compareIndexPriceSource:
+ *                 type: string
+ *                 enum: [closing, current]
+ *                 description: Source of the comparison index price
+ *                 example: "closing"
+ *               usedClosingPrices:
+ *                 type: boolean
+ *                 description: Whether closing prices were used
+ *                 example: true
+ *               dataVerified:
+ *                 type: boolean
+ *                 description: Whether the data has been verified
+ *                 example: true
+ *               dataQualityIssues:
+ *                 type: array
+ *                 items:
+ *                   type: string
+ *                 description: List of data quality issues
+ *                 example: ["Missing some stock data"]
+ *     security:
+ *       - bearerAuth: []
+ *     responses:
+ *       201:
+ *         description: Price log created
+ *       400:
+ *         description: Invalid input
+ */
+router.post('/portfolios/:portfolioId/chart-data', requireAdmin, chartDataController.createPriceLog);
+
+/**
+ * @swagger
+ * /api/chart-data/{id}:
+ *   patch:
+ *     summary: Update a price log (partial update)
+ *     tags: [ChartData]
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         schema:
+ *           type: string
+ *         required: true
+ *         description: Price log ID
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               date:
+ *                 type: string
+ *                 format: date-time
+ *                 description: Date and time of the price log
+ *                 example: "2025-08-01T12:00:00Z"
+ *               portfolioValue:
+ *                 type: number
+ *                 description: Total value of the portfolio
+ *                 example: 125000.50
+ *               cashRemaining:
+ *                 type: number
+ *                 description: Cash remaining in the portfolio
+ *                 example: 12500.75
+ *               compareIndexValue:
+ *                 type: number
+ *                 description: Value of the comparison index
+ *                 example: 18045.22
+ *               compareIndexPriceSource:
+ *                 type: string
+ *                 enum: [closing, current]
+ *                 description: Source of the comparison index price
+ *                 example: "closing"
+ *               usedClosingPrices:
+ *                 type: boolean
+ *                 description: Whether closing prices were used
+ *                 example: true
+ *               dataVerified:
+ *                 type: boolean
+ *                 description: Whether the data has been verified
+ *                 example: true
+ *               dataQualityIssues:
+ *                 type: array
+ *                 items:
+ *                   type: string
+ *                 description: List of data quality issues
+ *                 example: ["Missing some stock data"]
+ *     security:
+ *       - bearerAuth: []
+ *     responses:
+ *       200:
+ *         description: Price log updated
+ *       404:
+ *         description: Price log not found
+ */
+router.patch('/chart-data/:id', requireAdmin, chartDataController.updatePriceLog);
+
+/**
+ * @swagger
+ * /api/chart-data/{id}:
+ *   delete:
+ *     summary: Delete a price log
+ *     tags: [ChartData]
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         schema:
+ *           type: string
+ *         required: true
+ *         description: Price log ID
+ *     security:
+ *       - bearerAuth: []
+ *     responses:
+ *       200:
+ *         description: Price log deleted
+ *       404:
+ *         description: Price log not found
+ */
+router.delete('/chart-data/:id', requireAdmin, chartDataController.deletePriceLog);
+
+/**
+ * @swagger
+ * /api/portfolios/{portfolioId}/performance:
+ *   get:
+ *     summary: Get portfolio performance data
+ *     tags: [ChartData]
+ *     parameters:
+ *       - in: path
+ *         name: portfolioId
+ *         schema:
+ *           type: string
+ *         required: true
+ *         description: Portfolio ID
+ *       - in: query
+ *         name: startDate
+ *         schema:
+ *           type: string
+ *           format: date
+ *         description: Start date for filtering
+ *       - in: query
+ *         name: endDate
+ *         schema:
+ *           type: string
+ *           format: date
+ *         description: End date for filtering
+ *     responses:
+ *       200:
+ *         description: Portfolio performance data
+ *       404:
+ *         description: Portfolio not found
+ */
+router.get('/portfolios/:portfolioId/performance', chartDataController.getPortfolioPerformance);
+
+/**
+ * @swagger
+ * /api/chart-data/cleanup-duplicates:
+ *   post:
+ *     summary: Clean up duplicate price logs
+ *     tags: [ChartData]
+ *     security:
+ *       - bearerAuth: []
+ *     responses:
+ *       200:
+ *         description: Cleanup results
+ */
+router.post('/chart-data/cleanup-duplicates', requireAdmin, chartDataController.cleanupDuplicates);
 
 module.exports = router;

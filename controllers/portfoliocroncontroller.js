@@ -7,23 +7,6 @@ const config = require('../config/config');
 const PriceLog = require('../models/PriceLog'); // Import at top level
 const modelPortFolio = require('../models/modelPortFolio');
 const CRON_SCHEDULE = '45 15 * * *';  // 3:45 PM IST daily
-
-// Production constants
-const PRODUCTION_CONFIG = {
-  MAX_RETRIES: 3,
-  RETRY_DELAY: 30000, // 30 seconds
-  TIMEOUT_MS: 300000, // 5 minutes timeout for valuation
-  CIRCUIT_BREAKER_THRESHOLD: 5, // Fail after 5 consecutive errors
-  HEALTH_CHECK_INTERVAL: 60000 // 1 minute
-};
-
-// Circuit breaker state
-let circuitBreakerState = {
-  consecutiveFailures: 0,
-  lastFailureTime: null,
-  isOpen: false
-};
-
 // Enhanced logger configuration
 const logger = winston.createLogger({
   level: config.env === 'development' ? 'debug' : 'info',
@@ -49,47 +32,6 @@ const logger = winston.createLogger({
     })
   ]
 });
-
-// Circuit breaker functions
-const resetCircuitBreaker = () => {
-  circuitBreakerState.consecutiveFailures = 0;
-  circuitBreakerState.lastFailureTime = null;
-  circuitBreakerState.isOpen = false;
-  logger.info('🔧 Circuit breaker reset');
-};
-
-const recordFailure = () => {
-  circuitBreakerState.consecutiveFailures++;
-  circuitBreakerState.lastFailureTime = new Date();
-  
-  if (circuitBreakerState.consecutiveFailures >= PRODUCTION_CONFIG.CIRCUIT_BREAKER_THRESHOLD) {
-    circuitBreakerState.isOpen = true;
-    logger.error(`⚡ Circuit breaker OPENED after ${PRODUCTION_CONFIG.CIRCUIT_BREAKER_THRESHOLD} consecutive failures`);
-  }
-};
-
-const isCircuitBreakerOpen = () => {
-  if (!circuitBreakerState.isOpen) return false;
-  
-  // Auto-reset circuit breaker after 10 minutes
-  const timeSinceLastFailure = Date.now() - circuitBreakerState.lastFailureTime;
-  if (timeSinceLastFailure > 600000) { // 10 minutes
-    resetCircuitBreaker();
-    return false;
-  }
-  
-  return true;
-};
-
-// Timeout wrapper for operations
-const withTimeout = (promise, timeoutMs = PRODUCTION_CONFIG.TIMEOUT_MS) => {
-  return Promise.race([
-    promise,
-    new Promise((_, reject) => 
-      setTimeout(() => reject(new Error(`Operation timed out after ${timeoutMs}ms`)), timeoutMs)
-    )
-  ]);
-};
 
 // Centralized daily valuation runner
 const runDailyValuation = async (triggerType = 'Scheduled', useClosingPrices = true) => {
@@ -179,68 +121,43 @@ const sendCriticalAlert = async (error) => {
   logger.info('📧 Sent critical alert');
 };
 
-// Cron job scheduler with enhanced error handling and retry logic
+// Cron job scheduler
 exports.initScheduledJobs = () => {
   // Schedule at 3:45 PM IST
   cron.schedule(CRON_SCHEDULE, async () => {
-    const MAX_RETRIES = 3;
-    const RETRY_DELAY = 30000; // 30 seconds between retries
     const now = new Date();
-    
     logger.info(`⌚ Daily portfolio valuation started at ${now.toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' })} IST`);
     
-    for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
-      try {
-        logger.info(`🔄 Attempt ${attempt}/${MAX_RETRIES} for daily portfolio valuation`);
-        
-        // Use the robust runDailyValuation function
-        const result = await runDailyValuation('Scheduled', true); // Use closing prices for daily run
-        
-        if (result.success) {
-          logger.info(`✅ Daily portfolio valuation completed successfully on attempt ${attempt}`);
+    try {
+      const portfolios = await modelPortFolio.find();
+      
+      for (const portfolio of portfolios) {
+        try {
+          // 1. Calculate with real-time prices
+          const portfolioValue = await portfolioService.calculateRealTimeValue(portfolio);
           
-          // Log summary
-          const portfolioResults = result.portfolioResults || [];
-          const successCount = portfolioResults.filter(r => r.status === 'success').length;
-          const failedCount = portfolioResults.filter(r => r.status === 'failed').length;
+          // 2. Update portfolio current value (triggers historical tracking)
+          await Portfolio.findByIdAndUpdate(portfolio._id, { currentValue: portfolioValue });
           
-          logger.info(`📊 Summary: ${successCount} successful, ${failedCount} failed out of ${portfolioResults.length} portfolios`);
+          // 3. Save daily log
+          await PriceLog.createOrUpdateDailyLog(portfolio._id, {
+            portfolioValue,
+            date: now,
+            usedClosingPrices: false
+          });
           
-          // Send failure report if there are failures
-          if (failedCount > 0) {
-            await sendFailureReport(portfolioResults);
-          }
-          
-          break; // Success, exit retry loop
-        } else {
-          throw new Error(result.error || 'Unknown error in daily valuation');
-        }
-        
-      } catch (error) {
-        logger.error(`💥 Attempt ${attempt} failed: ${error.message}`);
-        
-        if (attempt < MAX_RETRIES) {
-          logger.info(`⌛ Retrying in ${RETRY_DELAY / 1000} seconds...`);
-          await new Promise(resolve => setTimeout(resolve, RETRY_DELAY));
-        } else {
-          // All retries exhausted
-          logger.error(`🔥 CRITICAL: Daily portfolio valuation FAILED after ${MAX_RETRIES} attempts`);
-          
-          // Send critical failure alert
-          try {
-            await sendCriticalAlert(error);
-          } catch (alertError) {
-            logger.error(`� Failed to send critical alert: ${alertError.message}`);
-          }
+          logger.info(`✅ ${portfolio.name}: ₹${portfolioValue.toFixed(2)} logged`);
+        } catch (error) {
+          logger.error(`❌ Failed ${portfolio.name}: ${error.message}`);
         }
       }
+    } catch (error) {
+      logger.error(`🔥 Critical error in daily valuation: ${error.stack}`);
     }
   }, {
     scheduled: true,
     timezone: 'Asia/Kolkata' // Force IST timezone
   });
-  
-  logger.info(`📅 Scheduled daily portfolio valuation at ${CRON_SCHEDULE} IST`);
 };
 
 // Manual trigger with enhanced retry

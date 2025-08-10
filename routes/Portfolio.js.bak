@@ -1,0 +1,193 @@
+const express = require('express');
+const router = express.Router();
+const portfolioController = require('../controllers/portfolioController');
+const requireAdmin = require('../middleware/requirreAdmin');
+
+/**
+ * @swagger
+ * tags:
+ *   name: ChartData
+ *   description: Portfolio performance chart data management
+ */
+
+/**
+ * @swagger
+ * /api/portfolios/{portfolioId}/chart-data:
+ *   get:
+ *     summary: Get price logs for a portfolio
+ *     tags: [ChartData]
+ *     parameters:
+ *       - in: path
+ *         name: portfolioId
+ *         schema:
+ *           type: string
+ *         required: true
+ *         description: Portfolio ID
+ *       - in: query
+ *         name: startDate
+ *         schema:
+ *           type: string
+ *           format: date
+ *         description: Start date for filtering
+ *       - in: query
+ *         name: endDate
+ *         schema:
+ *           type: string
+ *           format: date
+ *         description: End date for filtering
+ *       - in: query
+ *         name: limit
+ *         schema:
+ *           type: integer
+ *           default: 100
+ *         description: Number of records to return
+ *       - in: query
+ *         name: page
+ *         schema:
+ *           type: integer
+ *           default: 1
+ *         description: Page number
+ *     responses:
+ *       200:
+ *         description: List of price logs
+ */
+router.get('/portfolios/:portfolioId/chart-data', portfolioController.getAllPriceLogs);
+
+/**
+ * @swagger
+ * /api/chart-data/{id}:
+ *   get:
+ *     summary: Get a price log by ID
+ *     tags: [ChartData]
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         schema:
+ *           type: string
+ *         required: true
+ *         description: Price log ID
+ *     responses:
+ *       200:
+ *         description: Price log data
+ *       404:
+ *         description: Price log not found
+ */
+router.get('/chart-data/:id', portfolioController.getPriceLogById);
+
+/**
+ * @swagger
+ * /api/portfolios/{portfolioId}/chart-data:
+ *   post:
+ *     summary: Create a new price log
+ *     tags: [ChartData]
+ *     parameters:
+ *       - in: path
+ *         name: portfolioId
+ *         schema:
+ *           type: string
+ *         required: true
+ *         description: Portfolio ID
+ *     security:
+ *       - bearerAuth: []
+ *     responses:
+ *       201:
+ *         description: Price log created
+ *       400:
+ *         description: Invalid input
+ */
+router.post('/portfolios/:portfolioId/chart-data', requireAdmin, portfolioController.createPriceLog);
+
+/**
+ * @swagger
+ * /api/chart-data/{id}:
+ *   patch:
+ *     summary: Update a price log (partial update)
+ *     tags: [ChartData]
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         schema:
+ *           type: string
+ *         required: true
+ *         description: Price log ID
+ *     security:
+ *       - bearerAuth: []
+ *     responses:
+ *       200:
+ *         description: Price log updated
+ *       404:
+ *         description: Price log not found
+ */
+router.patch('/chart-data/:id', requireAdmin, portfolioController.updatePriceLog);
+
+/**
+ * @swagger
+ * /api/chart-data/{id}:
+ *   delete:
+ *     summary: Delete a price log
+ *     tags: [ChartData]
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         schema:
+ *           type: string
+ *         required: true
+ *         description: Price log ID
+ *     security:
+ *       - bearerAuth: []
+ *     responses:
+ *       200:
+ *         description: Price log deleted
+ *       404:
+ *         description: Price log not found
+ */
+router.delete('/chart-data/:id', requireAdmin, portfolioController.deletePriceLog);
+
+/**
+ * @swagger
+ * /api/portfolios/{portfolioId}/performance:
+ *   get:
+ *     summary: Get portfolio performance data
+ *     tags: [ChartData]
+ *     parameters:
+ *       - in: path
+ *         name: portfolioId
+ *         schema:
+ *           type: string
+ *         required: true
+ *         description: Portfolio ID
+ *       - in: query
+ *         name: startDate
+ *         schema:
+ *           type: string
+ *           format: date
+ *         description: Start date for filtering
+ *       - in: query
+ *         name: endDate
+ *         schema:
+ *           type: string
+ *           format: date
+ *         description: End date for filtering
+ *     responses:
+ *       200:
+ *         description: Portfolio performance data
+ *       404:
+ *         description: Portfolio not found
+ */
+router.get('/portfolios/:portfolioId/performance', portfolioController.getPortfolioPerformance);
+
+/**
+ * @swagger
+ * /api/chart-data/cleanup-duplicates:
+ *   post:
+ *     summary: Clean up duplicate price logs
+ *     tags: [ChartData]
+ *     security:
+ *       - bearerAuth: []
+ *     responses:
+ *       200:
+ *         description: Cleanup results
+ */
+router.post('/chart-data/cleanup-duplicates', requireAdmin, portfolioController.cleanupDuplicates);
+
+module.exports = router;
