@@ -5,7 +5,7 @@ const emailService = require('../services/emailServices');
 const { runPriceUpdate, updateClosingPrices } = require('../utils/cornscheduler');
 const config = require('../config/config');
 const PriceLog = require('../models/PriceLog'); // Import at top level
-
+const CRON_SCHEDULE = '45 15 * * *';  // 3:45 PM IST daily
 // Enhanced logger configuration
 const logger = winston.createLogger({
   level: config.env === 'development' ? 'debug' : 'info',
@@ -122,37 +122,40 @@ const sendCriticalAlert = async (error) => {
 
 // Cron job scheduler
 exports.initScheduledJobs = () => {
-  // Schedule at 10:20 UTC (3:50 PM IST)
-  const cronSchedule = '20 10 * * *'; // UTC: 10:20 AM
-  logger.info(`⏰ Scheduling daily job at ${cronSchedule} UTC (3:50 PM IST)`);
-  
-  cron.schedule(cronSchedule, async () => {
+  // Schedule at 3:45 PM IST
+  cron.schedule(CRON_SCHEDULE, async () => {
+    const now = new Date();
+    logger.info(`⌚ Daily portfolio valuation started at ${now.toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' })} IST`);
+    
     try {
-      const result = await runDailyValuation('Scheduled', true);
+      const portfolios = await Portfolio.find();
       
-      // Send failure reports if needed
-      if (!result.success) throw new Error(result.error);
-      
-      // Process results
-      if (result.portfolioResults) {
-        await sendFailureReport(result.portfolioResults);
-        
-        // Log cleanup results
-        if (result.cleanupResults.duplicatesRemoved > 0) {
-          logger.info(`🗑️ Removed ${result.cleanupResults.duplicatesRemoved} duplicates`);
-        }
-        if (result.cleanupResults.errors.length > 0) {
-          logger.warn(`⚠️ Cleanup errors: ${result.cleanupResults.errors.length}`);
+      for (const portfolio of portfolios) {
+        try {
+          // 1. Calculate with real-time prices
+          const portfolioValue = await portfolioService.calculateRealTimeValue(portfolio);
+          
+          // 2. Update portfolio current value (triggers historical tracking)
+          await Portfolio.findByIdAndUpdate(portfolio._id, { currentValue: portfolioValue });
+          
+          // 3. Save daily log
+          await PriceLog.createOrUpdateDailyLog(portfolio._id, {
+            portfolioValue,
+            date: now,
+            usedClosingPrices: false
+          });
+          
+          logger.info(`✅ ${portfolio.name}: ₹${portfolioValue.toFixed(2)} logged`);
+        } catch (error) {
+          logger.error(`❌ Failed ${portfolio.name}: ${error.message}`);
         }
       }
-      
     } catch (error) {
-      logger.error(`🔥 CRITICAL: ${error.message}\n${error.stack}`);
-      await sendCriticalAlert(error);
+      logger.error(`🔥 Critical error in daily valuation: ${error.stack}`);
     }
   }, {
     scheduled: true,
-    timezone: 'UTC' // Cron uses UTC timezone
+    timezone: 'Asia/Kolkata' // Force IST timezone
   });
 };
 

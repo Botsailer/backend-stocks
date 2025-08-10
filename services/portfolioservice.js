@@ -4,6 +4,7 @@ const PriceLog = require('../models/PriceLog');
 const winston = require('winston');
 const { default: mongoose } = require('mongoose');
 
+
 // Configure logger
 const logger = winston.createLogger({
   level: 'info',
@@ -389,6 +390,86 @@ exports.downsampleLogs = (logs, config) => {
       current.date > latest.date ? current : latest
     );
   });
+};
+
+
+
+exports.calculateRealTimeValue = async (portfolio) => {
+  try {
+    let totalValue = parseFloat(portfolio.cashBalance) || 0;
+    const priceMap = new Map();
+    
+    // Get all symbols in portfolio
+    const symbols = portfolio.holdings.map(h => h.symbol);
+    
+    // Batch fetch current prices from database
+    const stocks = await StockSymbol.find({ symbol: { $in: symbols } });
+    stocks.forEach(stock => {
+      priceMap.set(stock.symbol, stock.currentPrice);
+    });
+
+    portfolio.holdings.forEach(holding => {
+      const realTimePrice = priceMap.get(holding.symbol) || holding.buyPrice;
+      const holdingValue = realTimePrice * holding.quantity;
+      totalValue += holdingValue;
+    });
+
+    return parseFloat(totalValue.toFixed(2));
+  } catch (error) {
+    logger.error(`Real-time calculation failed: ${error.message}`);
+    throw error;
+  }
+};
+
+exports.generateChartData = async (portfolioId, days = 30) => {
+  const endDate = new Date();
+  const startDate = new Date();
+  startDate.setDate(endDate.getDate() - days);
+  
+  // Get historical logs
+  const logs = await PriceLog.find({
+    portfolio: portfolioId,
+    date: { $gte: startDate }
+  }).sort({ date: 1 });
+
+  const chartData = [];
+  let previousValue = null;
+
+  for (const log of logs) {
+    const dailyValue = log.portfolioValue;
+    
+    // Calculate percentage change
+    let changePercent = 0;
+    if (previousValue !== null && previousValue > 0) {
+      changePercent = ((dailyValue - previousValue) / previousValue) * 100;
+    }
+    
+    chartData.push({
+      date: log.date,
+      portfolioValue: dailyValue,
+      benchmarkValue: log.compareIndexValue,
+      changePercent: parseFloat(changePercent.toFixed(2))
+    });
+    
+    previousValue = dailyValue;
+  }
+
+  return chartData;
+};
+
+exports.updatePortfolioValue = async (portfolioId) => {
+  try {
+    const portfolio = await Portfolio.findById(portfolioId);
+    if (!portfolio) return null;
+    
+    const realTimeValue = await this.calculateRealTimeValue(portfolio);
+    await Portfolio.findByIdAndUpdate(portfolioId, { currentValue: realTimeValue });
+    
+    return realTimeValue;
+  } catch (error) {
+    logger.error(`Portfolio value update failed: ${error.message}`);
+    throw error;
+  }
 };
 
 // Manual portfolio recalculation

@@ -54,8 +54,9 @@ const validatePhoneNumber = (phone) => {
   if (!phone || typeof phone !== "string") return "";
   let digits = phone.replace(/\D/g, "");
   if (digits.length === 10 && /^[6-9]/.test(digits)) return digits;
-  if (digits.length === 12 && digits.startsWith("91") && /^[6-9]/.test(digits.substring(2))) 
+  if (digits.length === 12 && digits.startsWith("91") && /^[6-9]/.test(digits.substring(2))) {
     return digits.substring(2);
+  }
   if (digits.length === 13 && digits.startsWith("091")) return digits.substring(3);
   return "";
 };
@@ -81,39 +82,199 @@ const calculateEndDate = (planType, startDate = new Date()) => {
 
 async function handleTelegramIntegration(user, productType, productId, subscription) {
   try {
-    if (productType !== 'Portfolio') return; // Only for portfolios
+    const telegramInvites = [];
     
-    const telegramGroup = await TelegramService.getGroupMapping(productId);
-    if (!telegramGroup) return;
-    
-    const inviteResult = await TelegramService.generateInviteLink(productId);
-    if (!inviteResult.success) {
-      throw new Error('Telegram invite generation failed');
+    if (productType === 'Portfolio') {
+      // Single portfolio telegram integration
+      const telegramGroup = await TelegramService.getGroupMapping(productId);
+      if (!telegramGroup) return [];
+      
+      const inviteResult = await TelegramService.generateInviteLink(productId);
+      if (!inviteResult.success) {
+        throw new Error('Telegram invite generation failed');
+      }
+      
+      // Update subscription with Telegram info
+      subscription.invite_link_url = inviteResult.invite_link;
+      subscription.invite_link_expires_at = inviteResult.expires_at;
+      await subscription.save();
+      
+      telegramInvites.push({
+        portfolioId: productId,
+        portfolioName: subscription.productId?.portfolioName || 'Portfolio',
+        inviteLink: inviteResult.invite_link,
+        expiresAt: inviteResult.expires_at
+      });
+      
+    } else if (productType === 'Bundle') {
+      // Bundle telegram integration - generate links for each portfolio
+      const bundle = await Bundle.findById(productId).populate('portfolios');
+      if (!bundle || !bundle.portfolios || bundle.portfolios.length === 0) {
+        logger.warn('Bundle has no portfolios for telegram integration', { bundleId: productId });
+        return [];
+      }
+      
+      // Generate telegram invite for each portfolio in the bundle
+      for (const portfolio of bundle.portfolios) {
+        try {
+          const telegramGroup = await TelegramService.getGroupMapping(portfolio._id);
+          if (!telegramGroup) {
+            logger.warn('No telegram group mapping for portfolio', { 
+              portfolioId: portfolio._id,
+              portfolioName: portfolio.portfolioName 
+            });
+            // Still add to the list but without invite link
+            telegramInvites.push({
+              portfolioId: portfolio._id,
+              portfolioName: portfolio.portfolioName || 'Portfolio',
+              inviteLink: null,
+              expiresAt: null,
+              error: 'No telegram group configured'
+            });
+            continue;
+          }
+          
+          const inviteResult = await TelegramService.generateInviteLink(portfolio._id);
+          if (inviteResult.success) {
+            telegramInvites.push({
+              portfolioId: portfolio._id,
+              portfolioName: portfolio.portfolioName || 'Portfolio',
+              inviteLink: inviteResult.invite_link,
+              expiresAt: inviteResult.expires_at
+            });
+            
+            logger.info('Generated telegram invite for portfolio in bundle', {
+              bundleId: productId,
+              portfolioId: portfolio._id,
+              portfolioName: portfolio.portfolioName
+            });
+          } else {
+            // Add failed portfolio to list with error info
+            telegramInvites.push({
+              portfolioId: portfolio._id,
+              portfolioName: portfolio.portfolioName || 'Portfolio',
+              inviteLink: null,
+              expiresAt: null,
+              error: inviteResult.message || 'Failed to generate invite link'
+            });
+            
+            logger.warn('Failed to generate telegram invite for portfolio', {
+              bundleId: productId,
+              portfolioId: portfolio._id,
+              portfolioName: portfolio.portfolioName,
+              error: inviteResult.message
+            });
+          }
+        } catch (portfolioError) {
+          // Add failed portfolio to list with error info
+          telegramInvites.push({
+            portfolioId: portfolio._id,
+            portfolioName: portfolio.portfolioName || 'Portfolio',
+            inviteLink: null,
+            expiresAt: null,
+            error: portfolioError.message || 'Unknown error'
+          });
+          
+          logger.error('Failed to generate telegram invite for portfolio', {
+            bundleId: productId,
+            portfolioId: portfolio._id,
+            portfolioName: portfolio.portfolioName,
+            error: portfolioError.message,
+            stack: portfolioError.stack
+          });
+        }
+      }
     }
     
-    // Update subscription with Telegram info
-    subscription.invite_link_url = inviteResult.invite_link;
-    subscription.invite_link_expires_at = inviteResult.expires_at;
-    await subscription.save();
-    
-    // Send invitation email
-    const product = await Product.findById(productId);
-    if (product) {
-      await EmailService.sendInviteEmail(
-        user, 
-        product, 
-        inviteResult.invite_link, 
-        inviteResult.expires_at
-      );
+    // Send invitation email with all telegram links
+    if (telegramInvites.length > 0 && user.email) {
+      try {
+        const subject = `Telegram Access - ${productType === 'Bundle' ? 'Bundle' : 'Portfolio'} Subscription`;
+        const htmlContent = generateTelegramInviteEmail(user, telegramInvites, productType);
+        
+        logger.info('Sending telegram invite email', {
+          userId: user._id,
+          email: user.email,
+          inviteCount: telegramInvites.length
+        });
+        
+        await sendEmail(user.email, subject, '', htmlContent);
+        
+        logger.info('Telegram invite email sent successfully', {
+          userId: user._id,
+          email: user.email
+        });
+        
+      } catch (emailError) {
+        logger.error('Failed to send telegram invite email', {
+          userId: user._id,
+          email: user.email,
+          error: emailError.message,
+          stack: emailError.stack
+        });
+      }
+    } else if (!user.email) {
+      logger.warn('Cannot send telegram invite email - no user email', {
+        userId: user._id
+      });
     }
+    
+    return telegramInvites;
+    
   } catch (error) {
     logger.error('Telegram integration error:', {
       userId: user._id,
+      productType,
       productId,
       error: error.message,
       stack: error.stack
     });
+    return [];
   }
+}
+
+// Helper function to generate telegram invite email
+function generateTelegramInviteEmail(user, telegramInvites, productType) {
+  const inviteLinks = telegramInvites.map(invite => {
+    if (invite.inviteLink) {
+      return `
+        <div style="margin: 10px 0; padding: 10px; border: 1px solid #ddd; border-radius: 5px;">
+          <h4>${invite.portfolioName}</h4>
+          <p><a href="${invite.inviteLink}" style="background: #0088cc; color: white; padding: 8px 16px; text-decoration: none; border-radius: 4px;">Join Telegram Group</a></p>
+          <p><small>Link expires: ${new Date(invite.expiresAt).toLocaleString()}</small></p>
+        </div>
+      `;
+    } else {
+      return `
+        <div style="margin: 10px 0; padding: 10px; border: 1px solid #ffebcc; border-radius: 5px; background-color: #fff3cd;">
+          <h4>${invite.portfolioName}</h4>
+          <p style="color: #856404;"><strong>Note:</strong> ${invite.error || 'Telegram group not available for this portfolio'}</p>
+          <p><small>Please contact support if you need access to this group</small></p>
+        </div>
+      `;
+    }
+  }).join('');
+  
+  const successCount = telegramInvites.filter(invite => invite.inviteLink).length;
+  const totalCount = telegramInvites.length;
+  
+  return `
+    <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
+      <h2>Welcome to Your ${productType} Subscription!</h2>
+      <p>Hi ${user.fullName || user.username || 'Valued Customer'},</p>
+      <p>Your subscription has been activated successfully. Below is your Telegram access information:</p>
+      ${successCount > 0 ? `<p><strong>✅ Available Telegram Groups (${successCount}/${totalCount}):</strong></p>` : ''}
+      ${inviteLinks}
+      ${successCount > 0 ? `
+        <p><strong>Important:</strong> Please join the available groups using the links above. These links are time-limited and will expire as indicated.</p>
+      ` : ''}
+      ${successCount < totalCount ? `
+        <p><strong>Note:</strong> Some portfolios in your bundle don't have telegram groups configured yet. Our team is working to set these up.</p>
+      ` : ''}
+      <p>If you have any questions, please contact our support team.</p>
+      <p>Happy investing!</p>
+    </div>
+  `;
 }
 
 /**
@@ -217,46 +378,209 @@ const createOrFetchCustomer = async (razorpay, user) => {
     const sanitizedName = validateAndSanitizeName(user.fullName || user.username || "User");
     const phone = validatePhoneNumber(user.phone || user.mobile || "");
     
-    const existingCustomers = await razorpay.customers.all({ email: user.email, count: 1 });
-    if (existingCustomers.items.length > 0) return existingCustomers.items[0];
+    // Enhanced validation for emandate
+    if (!user.email || !user.email.includes('@')) {
+      throw new Error("Valid email is required for emandate subscription");
+    }
     
-    const customerData = { name: sanitizedName, email: user.email };
-    if (phone) customerData.contact = phone;
-    return await razorpay.customers.create(customerData);
-  } catch (err) {
-    const simpleName = (user.fullName || user.username || "User").replace(/[^a-zA-Z\s]/g, "").trim();
-    const finalName = simpleName.length >= 4 ? simpleName : "User Account";
-    return await razorpay.customers.create({
-      name: finalName,
-      email: user.email,
-      contact: validatePhoneNumber(user.phone || user.mobile || "") || undefined
+    if (!phone) {
+      logger.warn("Creating customer without phone number", { 
+        userId: user._id?.toString(),
+        email: user.email 
+      });
+    }
+    
+    // Check for existing customer first
+    try {
+      const existingCustomers = await razorpay.customers.all({ 
+        email: user.email, 
+        count: 1 
+      });
+      
+      if (existingCustomers.items && existingCustomers.items.length > 0) {
+        const existingCustomer = existingCustomers.items[0];
+        logger.info("Using existing Razorpay customer", {
+          customerId: existingCustomer.id,
+          email: user.email
+        });
+        return existingCustomer;
+      }
+    } catch (fetchError) {
+      logger.warn("Failed to fetch existing customers, creating new", {
+        error: fetchError.message,
+        email: user.email
+      });
+    }
+    
+    // Create new customer with enhanced data
+    const customerData = { 
+      name: sanitizedName, 
+      email: user.email.toLowerCase().trim()
+    };
+    
+    if (phone) {
+      customerData.contact = phone;
+    }
+    
+    // Add additional metadata for emandate
+    customerData.notes = {
+      user_id: user._id?.toString() || 'unknown',
+      created_for: 'emandate_subscription',
+      created_at: new Date().toISOString()
+    };
+    
+    logger.info("Creating new Razorpay customer", {
+      email: customerData.email,
+      name: customerData.name,
+      hasPhone: !!customerData.contact
     });
+    
+    const newCustomer = await razorpay.customers.create(customerData);
+    
+    if (!newCustomer || !newCustomer.id) {
+      throw new Error("Razorpay customer creation returned invalid response");
+    }
+    
+    logger.info("Successfully created Razorpay customer", {
+      customerId: newCustomer.id,
+      email: newCustomer.email
+    });
+    
+    return newCustomer;
+    
+  } catch (err) {
+    logger.error("Customer creation/fetch failed", {
+      error: err.message,
+      stack: err.stack,
+      userEmail: user.email,
+      userId: user._id?.toString()
+    });
+    
+    // Fallback: try with minimal data
+    try {
+      const simpleName = (user.fullName || user.username || "User").replace(/[^a-zA-Z\s]/g, "").trim();
+      const finalName = simpleName.length >= 4 ? simpleName : "User Account";
+      const phone = validatePhoneNumber(user.phone || user.mobile || "");
+      
+      const fallbackData = {
+        name: finalName,
+        email: user.email.toLowerCase().trim()
+      };
+      
+      if (phone) {
+        fallbackData.contact = phone;
+      }
+      
+      logger.info("Attempting customer creation with fallback data", {
+        name: fallbackData.name,
+        email: fallbackData.email,
+        hasPhone: !!fallbackData.contact
+      });
+      
+      const fallbackCustomer = await razorpay.customers.create(fallbackData);
+      
+      if (!fallbackCustomer || !fallbackCustomer.id) {
+        throw new Error("Fallback customer creation also failed");
+      }
+      
+      return fallbackCustomer;
+      
+    } catch (fallbackError) {
+      logger.error("Both primary and fallback customer creation failed", {
+        primaryError: err.message,
+        fallbackError: fallbackError.message,
+        userEmail: user.email
+      });
+      throw new Error("Unable to create customer profile. Please verify your email address and try again.");
+    }
   }
 };
 
 const createSubscriptionPlan = async (amountInPaisa) => {
   const razorpay = await getRazorpayInstance();
-  try {
-    const existingPlans = await razorpay.plans.all({ count: 100 });
-    const found = existingPlans.items.find(p => 
-      p.item.amount === amountInPaisa && p.period === "monthly" && p.interval === 1
-    );
-    if (found) return found;
-  } catch(e) {
-    logger.warn("Error fetching plans", e);
+  
+  // Validate amount
+  if (!amountInPaisa || amountInPaisa < 100) {
+    throw new Error(`Invalid plan amount: ₹${amountInPaisa/100}. Minimum ₹1 required.`);
   }
   
-  return await razorpay.plans.create({
-    period: "monthly",
-    interval: 1,
-    item: {
-      name: "Subscription Plan",
-      amount: amountInPaisa,
-      currency: "INR",
-      description: "Monthly billing for yearly commitment",
-    },
-    notes: { commitment: "yearly", total_months: "12" }
-  });
+  if (amountInPaisa > 100000000) { // ₹10,00,000
+    throw new Error(`Plan amount too high: ₹${amountInPaisa/100}. Maximum ₹10,00,000 allowed.`);
+  }
+  
+  try {
+    // Check for existing plans first
+    logger.info("Checking for existing subscription plans", { amountInPaisa });
+    
+    const existingPlans = await razorpay.plans.all({ count: 100 });
+    const found = existingPlans.items.find(p => 
+      p.item.amount === amountInPaisa && 
+      p.period === "monthly" && 
+      p.interval === 1 &&
+      p.item.currency === "INR"
+    );
+    
+    if (found) {
+      logger.info("Using existing subscription plan", {
+        planId: found.id,
+        amount: found.item.amount,
+        period: found.period
+      });
+      return found;
+    }
+    
+    logger.info("Creating new subscription plan", { amountInPaisa });
+    
+  } catch(planFetchError) {
+    logger.warn("Error fetching existing plans, proceeding with creation", {
+      error: planFetchError.message
+    });
+  }
+  
+  try {
+    // Create new plan with enhanced metadata
+    const planData = {
+      period: "monthly",
+      interval: 1,
+      item: {
+        name: `Monthly Subscription Plan - ₹${amountInPaisa/100}`,
+        amount: amountInPaisa,
+        currency: "INR",
+        description: "Monthly billing for yearly commitment - Stock Portfolio Subscription",
+      },
+      notes: { 
+        commitment: "yearly", 
+        total_months: "12",
+        created_at: new Date().toISOString(),
+        plan_type: "emandate_monthly"
+      }
+    };
+    
+    const newPlan = await razorpay.plans.create(planData);
+    
+    if (!newPlan || !newPlan.id) {
+      throw new Error("Plan creation returned invalid response");
+    }
+    
+    logger.info("Successfully created new subscription plan", {
+      planId: newPlan.id,
+      amount: newPlan.item.amount,
+      period: newPlan.period,
+      interval: newPlan.interval
+    });
+    
+    return newPlan;
+    
+  } catch (planCreateError) {
+    logger.error("Failed to create subscription plan", {
+      error: planCreateError.message,
+      stack: planCreateError.stack,
+      amountInPaisa,
+      razorpayError: planCreateError.error || null
+    });
+    
+    throw new Error(`Failed to create subscription plan: ${planCreateError.message}`);
+  }
 };
 
 const updateUserPremiumStatus = async (userId) => {
@@ -351,7 +675,7 @@ const sendRenewalConfirmationEmail = async (user, subscription, portfolio, compe
       
       <div style="margin:30px 0;">
         <a href="${process.env.FRONTEND_URL}/dashboard" style="background-color:#28a745; color:white; padding:12px 24px; text-decoration:none; border-radius:5px; display:inline-block;">Access Dashboard</a>
-      </div>
+     
       
       <p>Thank you for continuing with us! You now have uninterrupted access to all features.</p>
       
@@ -444,38 +768,179 @@ exports.createOrder = async (req, res) => {
 
 /**
  * Create eMandate for recurring payments
- * ✨ ENHANCED: Supports renewal with compensation logic
+ * ✨ ENHANCED: Supports renewal with compensation logic + Enhanced Error Handling
  */
 exports.createEmandate = async (req, res) => {
   const { productType, productId } = req.body;
   const userId = req.user._id;
   
   try {
+    // Validate required fields
     if (!productType || !productId) {
+      logger.error("EMandate creation failed: Missing required fields", {
+        userId: userId.toString(),
+        productType,
+        productId,
+        timestamp: new Date().toISOString()
+      });
       return res.status(400).json({ 
         success: false, 
-        error: "Missing required fields: productType and productId" 
+        error: "Missing required fields: productType and productId",
+        code: "MISSING_FIELDS"
       });
     }
+
+    // Log emandate creation attempt
+    logger.info("EMandate creation started", {
+      userId: userId.toString(),
+      productType,
+      productId: productId.toString(),
+      userEmail: req.user.email,
+      timestamp: new Date().toISOString()
+    });
 
     // ✨ ENHANCED: Check subscription status with renewal logic
     const subscriptionStatus = await checkSubscriptionStatus(userId, productType, productId);
     
     if (subscriptionStatus.hasActiveSubscription && !subscriptionStatus.canRenew) {
+      logger.warn("EMandate creation blocked: Active subscription exists", {
+        userId: userId.toString(),
+        productType,
+        productId: productId.toString(),
+        existingExpiry: subscriptionStatus.existingSubscription.expiresAt
+      });
       return res.status(409).json({ 
         success: false, 
         error: subscriptionStatus.message,
+        code: "ACTIVE_SUBSCRIPTION_EXISTS",
         canRenewAfter: new Date(subscriptionStatus.existingSubscription.expiresAt.getTime() - (7 * 24 * 60 * 60 * 1000)),
         currentExpiry: subscriptionStatus.existingSubscription.expiresAt
       });
     }
 
-    const { product, amount: yearlyAmount, category } = await getProductInfo(productType, productId, "yearly");
-    const monthlyAmount = Math.round(yearlyAmount / 12);
-    const razorpay = await getRazorpayInstance();
+    // Get product info with enhanced validation
+    let product, yearlyAmount, category;
+    try {
+      const productInfo = await getProductInfo(productType, productId, "yearly");
+      product = productInfo.product;
+      yearlyAmount = productInfo.amount;
+      category = productInfo.category;
+      
+      // Validate amount for emandate
+      if (!yearlyAmount || yearlyAmount < 100) {
+        throw new Error(`Invalid yearly amount: ${yearlyAmount}. Minimum ₹100 required for emandate.`);
+      }
+      
+      if (yearlyAmount > 1000000) {
+        throw new Error(`Amount too high: ₹${yearlyAmount}. Maximum ₹10,00,000 allowed for emandate.`);
+      }
+      
+    } catch (error) {
+      logger.error("EMandate creation failed: Product validation error", {
+        userId: userId.toString(),
+        productType,
+        productId: productId.toString(),
+        error: error.message
+      });
+      return res.status(400).json({
+        success: false,
+        error: error.message,
+        code: "PRODUCT_VALIDATION_ERROR"
+      });
+    }
 
-    const customer = await createOrFetchCustomer(razorpay, req.user);
-    const plan = await createSubscriptionPlan(monthlyAmount * 100);
+    const monthlyAmount = Math.round(yearlyAmount / 12);
+    
+    // Validate monthly amount
+    if (monthlyAmount < 10) {
+      logger.error("EMandate creation failed: Monthly amount too low", {
+        userId: userId.toString(),
+        yearlyAmount,
+        monthlyAmount,
+        productType,
+        productId: productId.toString()
+      });
+      return res.status(400).json({
+        success: false,
+        error: `Monthly amount (₹${monthlyAmount}) is too low. Minimum ₹10 required.`,
+        code: "AMOUNT_TOO_LOW"
+      });
+    }
+
+    // Get Razorpay instance with error handling
+    let razorpay;
+    try {
+      razorpay = await getRazorpayInstance();
+    } catch (error) {
+      logger.error("EMandate creation failed: Razorpay configuration error", {
+        userId: userId.toString(),
+        error: error.message
+      });
+      return res.status(500).json({
+        success: false,
+        error: "Payment service configuration error. Please try again later.",
+        code: "PAYMENT_CONFIG_ERROR"
+      });
+    }
+
+    // Create or fetch customer with enhanced error handling
+    let customer;
+    try {
+      customer = await createOrFetchCustomer(razorpay, req.user);
+      
+      if (!customer || !customer.id) {
+        throw new Error("Failed to create or fetch customer");
+      }
+      
+      logger.info("Customer created/fetched successfully", {
+        userId: userId.toString(),
+        customerId: customer.id,
+        customerEmail: customer.email
+      });
+      
+    } catch (error) {
+      logger.error("EMandate creation failed: Customer creation error", {
+        userId: userId.toString(),
+        userEmail: req.user.email,
+        error: error.message,
+        stack: error.stack
+      });
+      return res.status(500).json({
+        success: false,
+        error: "Failed to create customer profile. Please check your details and try again.",
+        code: "CUSTOMER_CREATION_ERROR"
+      });
+    }
+
+    // Create subscription plan with enhanced error handling
+    let plan;
+    try {
+      plan = await createSubscriptionPlan(monthlyAmount * 100);
+      
+      if (!plan || !plan.id) {
+        throw new Error("Failed to create subscription plan");
+      }
+      
+      logger.info("Subscription plan created successfully", {
+        userId: userId.toString(),
+        planId: plan.id,
+        monthlyAmount,
+        planAmount: plan.item.amount
+      });
+      
+    } catch (error) {
+      logger.error("EMandate creation failed: Plan creation error", {
+        userId: userId.toString(),
+        monthlyAmount,
+        error: error.message,
+        stack: error.stack
+      });
+      return res.status(500).json({
+        success: false,
+        error: "Failed to create subscription plan. Please try again later.",
+        code: "PLAN_CREATION_ERROR"
+      });
+    }
 
     const startDate = new Date();
     const commitmentEndDate = new Date();
@@ -487,84 +952,224 @@ exports.createEmandate = async (req, res) => {
       commitmentEndDate.setTime(compensation.endDate.getTime());
     }
 
+    // Validate dates with proper buffer time
+    const now = Math.floor(Date.now() / 1000);
+    const startAt = now + 300; // Start 5 minutes from now to avoid timing issues
+    const expireBy = Math.floor(commitmentEndDate.getTime() / 1000);
+    
+    if (expireBy <= startAt) {
+      logger.error("EMandate creation failed: Invalid date range", {
+        userId: userId.toString(),
+        startAt,
+        expireBy,
+        commitmentEndDate: commitmentEndDate.toISOString(),
+        nowTimestamp: now,
+        bufferMinutes: 5
+      });
+      return res.status(400).json({
+        success: false,
+        error: "Invalid subscription period. Please try again.",
+        code: "INVALID_DATE_RANGE"
+      });
+    }
+
     const subscriptionParams = {
       plan_id: plan.id,
       customer_id: customer.id,
       total_count: 12,
       quantity: 1,
-      start_at: Math.floor(Date.now() / 1000) + 60,
-      expire_by: Math.floor(commitmentEndDate.getTime() / 1000),
+      start_at: startAt,
+      expire_by: expireBy,
       notes: {
         user_id: userId.toString(),
         product_type: productType,
         product_id: productId.toString(),
         category,
         isRenewal: subscriptionStatus.canRenew.toString(),
-        existingSubscriptionId: subscriptionStatus.existingSubscription?._id?.toString() || null
+        existingSubscriptionId: subscriptionStatus.existingSubscription?._id?.toString() || null,
+        created_at: new Date().toISOString(),
+        user_email: req.user.email
       }
     };
 
-    const razorpaySubscription = await razorpay.subscriptions.create(subscriptionParams);
+    logger.info("Creating Razorpay subscription with params", {
+      userId: userId.toString(),
+      planId: plan.id,
+      customerId: customer.id,
+      totalCount: 12,
+      startAt,
+      expireBy,
+      monthlyAmount,
+      yearlyAmount
+    });
+
+    // Create Razorpay subscription with enhanced error handling
+    let razorpaySubscription;
+    try {
+      razorpaySubscription = await razorpay.subscriptions.create(subscriptionParams);
+      
+      if (!razorpaySubscription || !razorpaySubscription.id) {
+        throw new Error("Invalid subscription response from Razorpay");
+      }
+      
+      logger.info("Razorpay subscription created successfully", {
+        userId: userId.toString(),
+        subscriptionId: razorpaySubscription.id,
+        status: razorpaySubscription.status,
+        shortUrl: razorpaySubscription.short_url
+      });
+      
+    } catch (error) {
+      logger.error("EMandate creation failed: Razorpay subscription error", {
+        userId: userId.toString(),
+        subscriptionParams: JSON.stringify(subscriptionParams, null, 2),
+        error: error.message,
+        stack: error.stack,
+        razorpayError: error.error || null
+      });
+      
+      // Handle specific Razorpay errors
+      let userMessage = "Failed to create emandate subscription. Please try again later.";
+      let errorCode = "RAZORPAY_ERROR";
+      
+      if (error.message?.includes('BAD_REQUEST')) {
+        userMessage = "Invalid request parameters. Please check your details and try again.";
+        errorCode = "BAD_REQUEST";
+      } else if (error.message?.includes('SERVER_ERROR')) {
+        userMessage = "Payment service is temporarily unavailable. Please try again in a few minutes.";
+        errorCode = "SERVER_ERROR";
+      } else if (error.message?.includes('customer')) {
+        userMessage = "Customer validation failed. Please update your profile and try again.";
+        errorCode = "CUSTOMER_ERROR";
+      } else if (error.message?.includes('plan')) {
+        userMessage = "Subscription plan error. Please try a different payment method.";
+        errorCode = "PLAN_ERROR";
+      }
+      
+      return res.status(500).json({
+        success: false,
+        error: userMessage,
+        code: errorCode,
+        suggestion: "Try using one-time payment instead, or contact support if the issue persists."
+      });
+    }
     
-    // ✨ ENHANCED: Save to DB with compensation logic
+    // ✨ ENHANCED: Save to DB with compensation logic and enhanced error handling
     const session = await mongoose.startSession();
-    await session.withTransaction(async () => {
-      if (productType === "Bundle") {
-        for (const portfolio of product.portfolios) {
-          await Subscription.findOneAndUpdate(
+    let dbSubscriptions = [];
+    
+    try {
+      await session.withTransaction(async () => {
+        if (productType === "Bundle") {
+          if (!product.portfolios || product.portfolios.length === 0) {
+            throw new Error("Bundle has no portfolios associated");
+          }
+          
+          for (const portfolio of product.portfolios) {
+            const dbSubscription = await Subscription.findOneAndUpdate(
+              { 
+                user: userId, 
+                productType: "Portfolio", 
+                productId: portfolio._id, 
+                type: "recurring" 
+              },
+              {
+                user: userId,
+                productType: "Portfolio",
+                productId: portfolio._id,
+                portfolio: portfolio._id,
+                type: "recurring",
+                status: "pending",
+                amount: Math.round(monthlyAmount / product.portfolios.length),
+                category: portfolio.PortfolioCategory ? portfolio.PortfolioCategory.toLowerCase() : category,
+                planType: "yearly",
+                expiresAt: commitmentEndDate,
+                razorpaySubscriptionId: razorpaySubscription.id,
+                bundleId: productId,
+                isRenewal: subscriptionStatus.canRenew,
+                previousSubscriptionId: subscriptionStatus.existingSubscription?._id || null,
+                createdAt: new Date(),
+                updatedAt: new Date()
+              },
+              { upsert: true, new: true, session }
+            );
+            dbSubscriptions.push(dbSubscription);
+          }
+          
+          logger.info("Bundle subscriptions saved to database", {
+            userId: userId.toString(),
+            bundleId: productId.toString(),
+            portfolioCount: product.portfolios.length,
+            razorpaySubscriptionId: razorpaySubscription.id
+          });
+          
+        } else {
+          const dbSubscription = await Subscription.findOneAndUpdate(
             { 
               user: userId, 
-              productType: "Portfolio", 
-              productId: portfolio._id, 
+              productType, 
+              productId, 
               type: "recurring" 
             },
             {
               user: userId,
-              productType: "Portfolio",
-              productId: portfolio._id,
-              portfolio: portfolio._id,
+              productType,
+              productId,
+              portfolio: productType === "Portfolio" ? productId : null,
               type: "recurring",
               status: "pending",
-              amount: Math.round(monthlyAmount / product.portfolios.length),
-              category: portfolio.PortfolioCategory ? portfolio.PortfolioCategory.toLowerCase() : category,
+              amount: monthlyAmount,
+              category,
               planType: "yearly",
               expiresAt: commitmentEndDate,
               razorpaySubscriptionId: razorpaySubscription.id,
-              bundleId: productId,
               isRenewal: subscriptionStatus.canRenew,
-              previousSubscriptionId: subscriptionStatus.existingSubscription?._id || null
+              previousSubscriptionId: subscriptionStatus.existingSubscription?._id || null,
+              createdAt: new Date(),
+              updatedAt: new Date()
             },
             { upsert: true, new: true, session }
           );
-        }
-      } else {
-        await Subscription.findOneAndUpdate(
-          { 
-            user: userId, 
-            productType, 
-            productId, 
-            type: "recurring" 
-          },
-          {
-            user: userId,
+          dbSubscriptions.push(dbSubscription);
+          
+          logger.info("Single subscription saved to database", {
+            userId: userId.toString(),
             productType,
-            productId,
-            portfolio: productType === "Portfolio" ? productId : null,
-            type: "recurring",
-            status: "pending",
-            amount: monthlyAmount,
-            category,
-            planType: "yearly",
-            expiresAt: commitmentEndDate,
-            razorpaySubscriptionId: razorpaySubscription.id,
-            isRenewal: subscriptionStatus.canRenew,
-            previousSubscriptionId: subscriptionStatus.existingSubscription?._id || null
-          },
-          { upsert: true, new: true, session }
-        );
+            productId: productId.toString(),
+            subscriptionId: dbSubscription._id.toString(),
+            razorpaySubscriptionId: razorpaySubscription.id
+          });
+        }
+      });
+    } catch (dbError) {
+      logger.error("EMandate creation failed: Database transaction error", {
+        userId: userId.toString(),
+        razorpaySubscriptionId: razorpaySubscription.id,
+        error: dbError.message,
+        stack: dbError.stack
+      });
+      
+      // Try to cancel the Razorpay subscription if DB save failed
+      try {
+        await razorpay.subscriptions.cancel(razorpaySubscription.id);
+        logger.info("Cancelled Razorpay subscription due to DB error", {
+          subscriptionId: razorpaySubscription.id
+        });
+      } catch (cancelError) {
+        logger.error("Failed to cancel Razorpay subscription after DB error", {
+          subscriptionId: razorpaySubscription.id,
+          cancelError: cancelError.message
+        });
       }
-    });
-    await session.endSession();
+      
+      return res.status(500).json({
+        success: false,
+        error: "Failed to save subscription details. Please contact support.",
+        code: "DATABASE_ERROR"
+      });
+    } finally {
+      await session.endSession();
+    }
 
     const responseData = { 
       success: true, 
@@ -573,20 +1178,64 @@ exports.createEmandate = async (req, res) => {
       amount: monthlyAmount,
       yearlyAmount,
       category,
-      status: "pending_authentication"
+      status: razorpaySubscription.status || "pending_authentication",
+      totalCount: 12,
+      createdAt: new Date().toISOString()
     };
 
     // Add renewal information if applicable
     if (subscriptionStatus.canRenew) {
       responseData.isRenewal = true;
       responseData.compensationDays = Math.ceil((subscriptionStatus.existingSubscription.expiresAt - new Date()) / (24 * 60 * 60 * 1000));
-      responseData.message = `eMandate renewal created. You will get ${responseData.compensationDays} bonus days added to your new subscription.`;
+      responseData.message = `eMandate renewal created successfully. You will get ${responseData.compensationDays} bonus days added to your new subscription.`;
+    } else {
+      responseData.message = "eMandate subscription created successfully. Please complete the authentication process.";
     }
 
+    logger.info("EMandate creation completed successfully", {
+      userId: userId.toString(),
+      subscriptionId: razorpaySubscription.id,
+      productType,
+      productId: productId.toString(),
+      monthlyAmount,
+      yearlyAmount,
+      isRenewal: subscriptionStatus.canRenew
+    });
+
     res.status(201).json(responseData);
+    
   } catch(err) {
-    logger.error("Error in createEmandate", err);
-    res.status(500).json({ success: false, error: err.message || "eMandate creation failed" });
+    logger.error("EMandate creation failed: Unexpected error", {
+      userId: userId.toString(),
+      productType,
+      productId: productId?.toString(),
+      error: err.message,
+      stack: err.stack,
+      timestamp: new Date().toISOString()
+    });
+    
+    // Provide specific error messages based on error type
+    let userMessage = "eMandate creation failed. Please try again later.";
+    let errorCode = "INTERNAL_ERROR";
+    
+    if (err.message?.includes('network') || err.message?.includes('timeout')) {
+      userMessage = "Network error. Please check your connection and try again.";
+      errorCode = "NETWORK_ERROR";
+    } else if (err.message?.includes('validation') || err.message?.includes('required')) {
+      userMessage = "Validation error. Please check your information and try again.";
+      errorCode = "VALIDATION_ERROR";
+    } else if (err.message?.includes('duplicate') || err.code === 11000) {
+      userMessage = "Duplicate subscription detected. Please refresh and try again.";
+      errorCode = "DUPLICATE_ERROR";
+    }
+    
+    res.status(500).json({ 
+      success: false, 
+      error: userMessage,
+      code: errorCode,
+      suggestion: "Try using one-time payment instead, or contact support if the issue persists.",
+      timestamp: new Date().toISOString()
+    });
   }
 };
 
@@ -767,7 +1416,7 @@ exports.verifyPayment = async (req, res) => {
       // Single portfolio
       if (isRenewal === "true" && existingSubscriptionId) {
         await Subscription.findByIdAndUpdate(
-          existingSubscriptionId,
+         
           { status: "cancelled", cancelledAt: new Date(), cancelReason: "Renewed" },
           { session }
         );
@@ -821,50 +1470,19 @@ exports.verifyPayment = async (req, res) => {
 
     await session.commitTransaction();
     
-    // Telegram integration for portfolio subscriptions
-    for (const sub of newSubscriptions) {
-      if (sub.productType === "Portfolio") {
-        try {
-          const telegramGroup = await TelegramService.getGroupMapping(sub.productId);
-          if (telegramGroup) {
-            const inviteResult = await TelegramService.generateInviteLink(sub.productId);
-            if (inviteResult.success) {
-              // Update subscription
-              await Subscription.findByIdAndUpdate(sub._id, {
-                invite_link_url: inviteResult.invite_link,
-                invite_link_expires_at: inviteResult.expires_at
-              });
-              
-              // Add to response
-              telegramInviteLinks.push({
-                productId: sub.productId,
-                invite_link: inviteResult.invite_link,
-                expires_at: inviteResult.expires_at
-              });
-              
-              // Send email
-              const product = await Portfolio.findById(sub.productId);
-              if (product) {
-                await sendTelegramInviteEmail(
-                  req.user, 
-                  product, 
-                  inviteResult.invite_link, 
-                  inviteResult.expires_at
-                );
-              }
-            }
-          }
-        } catch (error) {
-          logger.error('Telegram integration error:', {
-            subscriptionId: sub._id,
-            error: error.message
-          });
-        }
-      }
-    }
-
+    // Enhanced Telegram integration for both portfolios and bundles
+    const telegramInvites = await handleTelegramIntegration(
+      req.user, 
+      productType, 
+      productId, 
+      newSubscriptions[0]
+    );
+    
     // Add Telegram links to response
-    responseData.telegramInviteLinks = telegramInviteLinks;
+    if (telegramInvites && telegramInvites.length > 0) {
+      responseData.telegramInviteLinks = telegramInvites;
+      responseData.telegramMessage = `You have access to ${telegramInvites.length} Telegram group${telegramInvites.length > 1 ? 's' : ''}. Check your email for invite links.`;
+    }
 
     // Update user premium status
     await updateUserPremiumStatus(req.user._id);
@@ -1457,7 +2075,90 @@ async function handleSubscriptionCancelled(payload) {
 }
 
 async function handlePaymentFailed(payload) {
-  logger.warn("Payment failed webhook received", payload);
+  logger.error("Payment failed webhook received", {
+    payload: JSON.stringify(payload, null, 2),
+    timestamp: new Date().toISOString()
+  });
+  
+  try {
+    const paymentId = payload.payment?.entity?.id;
+    const subscriptionId = payload.subscription?.id;
+    const userId = payload.subscription?.notes?.user_id;
+    const errorCode = payload.payment?.entity?.error_code;
+    const errorDescription = payload.payment?.entity?.error_description;
+    
+    if (userId && subscriptionId) {
+      // Update subscription status to failed
+      await Subscription.updateMany(
+        { razorpaySubscriptionId: subscriptionId, user: userId },
+        { 
+          status: "payment_failed",
+          lastPaymentError: {
+            code: errorCode,
+            description: errorDescription,
+            failedAt: new Date(),
+            paymentId
+          }
+        }
+      );
+      
+      // Send failure notification email
+      const user = await User.findById(userId);
+      if (user) {
+        await sendPaymentFailureEmail(user, subscriptionId, errorCode, errorDescription);
+      }
+      
+      logger.info("Updated subscription status for payment failure", {
+        userId,
+        subscriptionId,
+        errorCode,
+        errorDescription
+      });
+    }
+  } catch (error) {
+    logger.error("Error handling payment failure webhook", {
+      error: error.message,
+      stack: error.stack
+    });
+  }
+}
+
+async function sendPaymentFailureEmail(user, subscriptionId, errorCode, errorDescription) {
+  try {
+    const subject = "Payment Failed - Action Required";
+    const text = `Your subscription payment failed. Please update your payment method or contact support.`;
+    const html = `
+      <div style="max-width:600px; margin:0 auto; padding:20px; font-family:sans-serif;">
+        <h2 style="color:#e74c3c;">Payment Failed</h2>
+        <p>Dear ${user.fullName || user.username},</p>
+        <p>We were unable to process your subscription payment.</p>
+        
+        <div style="background-color:#f8f9fa; padding:15px; border-radius:5px; margin:20px 0;">
+          <h3 style="color:#e74c3c; margin-top:0;">Details:</h3>
+          <p><strong>Subscription ID:</strong> ${subscriptionId}</p>
+          <p><strong>Error:</strong> ${errorDescription || 'Payment processing failed'}</p>
+          <p><strong>Date:</strong> ${new Date().toLocaleDateString()}</p>
+        </div>
+        
+        <div style="margin:30px 0;">
+          <a href="${process.env.FRONTEND_URL}/subscription/retry" style="background-color:#4a77e5; color:white; padding:12px 24px; text-decoration:none; border-radius:5px; display:inline-block;">Retry Payment</a>
+        </div>
+        
+        <p>Please contact support if you continue to experience issues.</p>
+        
+        <hr style="margin:30px 0; border:none; border-top:1px solid #eee;">
+        <p style="color:#666; font-size:12px;">This is an automated notification.</p>
+      </div>
+    `;
+    
+    await sendEmail(user.email, subject, text, html);
+    logger.info(`Payment failure email sent to ${user.email}`);
+  } catch (error) {
+    logger.error('Failed to send payment failure email', {
+      userId: user._id,
+      error: error.message
+    });
+  }
 }
 
 // ===== ADDITIONAL FUNCTIONS =====

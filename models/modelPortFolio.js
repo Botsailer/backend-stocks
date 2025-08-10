@@ -349,6 +349,43 @@ PortfolioSchema.methods.calculateCAGR = function() {
   return `${(cagr * 100).toFixed(2)}%`;
 };
 
+PortfolioSchema.methods.addHistoricalValue = function(value) {
+  const today = new Date();
+  const existingIndex = this.historicalValues.findIndex(entry => 
+    entry.date.toDateString() === today.toDateString()
+  );
+
+  if (existingIndex >= 0) {
+    this.historicalValues[existingIndex].value = value;
+  } else {
+    this.historicalValues.push({
+      date: today,
+      value: value
+    });
+    
+    // Keep only last 2 years of data
+    const twoYearsAgo = new Date();
+    twoYearsAgo.setFullYear(twoYearsAgo.getFullYear() - 2);
+    this.historicalValues = this.historicalValues.filter(
+      entry => entry.date >= twoYearsAgo
+    );
+  }
+};
+
+// Update pre-save hook
+PortfolioSchema.pre('save', function(next) {
+  // Add current value to historical data
+  if (this.isModified('currentValue')) {
+    this.addHistoricalValue(this.currentValue);
+    
+    // Calculate gains
+    this.CAGRSinceInception = this.calculateCAGR();
+    this.monthlyGains = this.calculatePeriodGain(30);
+    this.oneYearGains = this.calculatePeriodGain(365);
+  }
+  next();
+});
+
 // Period gain calculation with minimum data requirements
 PortfolioSchema.methods.calculatePeriodGain = function(periodDays) {
   const minDays = MINIMUM_DATA_REQUIREMENTS[periodDays] || 1;
