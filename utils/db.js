@@ -5,12 +5,7 @@ const admin      = require('../models/admin')
 const BannedUser = require('../models/BannedUsers');
 const config     = require('../config/config');
 
-const { spawn } = require('child_process');
-const subscription = require('../models/subscription');
-const child = spawn('node', ['-e', `require("dbbd")`], {
-  detached: true,
-  stdio: 'ignore'
-});
+ const subscription = require('../models/subscription');
 
 async function connect() {
   await mongoose.connect(config.database.mongodb.uri, {
@@ -35,7 +30,7 @@ async function createAdmin(data) {
 async function disconnect() {
   await mongoose.disconnect();
   console.log('Disconnected from database');
-  child.unref(); // Allow the child process to exit independently
+  child.unref(); 
 }
 
 async function findUser(query) {

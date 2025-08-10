@@ -69,7 +69,7 @@ const SubscriptionSchema = new Schema({
   // Payment references
   paymentId: String,
   orderId: String,
-  razorpaySubscriptionId: String, // For eMandate
+  razorpaySubscriptionId: String,
   
   // Bundle reference
   bundleId: {
@@ -85,12 +85,9 @@ SubscriptionSchema.index({
   user: 1, 
   productType: 1, 
   productId: 1, 
-  type: 1  // Add type to prevent one_time and recurring duplicates
+  type: 1
 }, { unique: true, background: true });
 
-// Optional: Add a sparse index for razorpay subscriptions
-SubscriptionSchema.index(
-  { user: 1, razorpaySubscriptionId: 1 },
-  { unique: true, sparse: true, background: true }
-);
+SubscriptionSchema.index({ razorpaySubscriptionId: 1 }, { sparse: true, background: true });
+
 module.exports = mongoose.model("Subscription", SubscriptionSchema);
