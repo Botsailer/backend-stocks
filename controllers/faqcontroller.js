@@ -73,22 +73,29 @@ exports.getFAQById = asyncHandler(async (req, res) => {
 
 exports.updateFAQ = asyncHandler(async (req, res) => {
   const { id } = req.params;
-  const updateData = { ...req.body, lastUpdatedBy: req.user.id };
-  
-  const faq = await FAQ.findByIdAndUpdate(id, updateData, {
+  // Only update provided fields, always update lastUpdatedBy
+  const updateData = { ...req.body };
+  if (req.user && req.user.id) updateData.lastUpdatedBy = req.user.id;
+
+  // Remove undefined fields (PATCH semantics)
+  Object.keys(updateData).forEach(key => {
+    if (updateData[key] === undefined) delete updateData[key];
+  });
+
+  const faq = await FAQ.findByIdAndUpdate(id, { $set: updateData }, {
     new: true,
     runValidators: true
   })
     .populate('relatedFAQs', 'question')
     .populate('lastUpdatedBy', 'name email');
-  
+
   if (!faq) {
-    return res.status(404).json({ 
+    return res.status(404).json({
       error: 'FAQ not found',
-      message: `No FAQ found with ID: ${id}` 
+      message: `No FAQ found with ID: ${id}`
     });
   }
-  
+
   res.status(200).json(faq);
 });
 

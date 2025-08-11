@@ -63,7 +63,7 @@ const faqSchema = new Schema({
 });
 
 // Indexes for search optimization
-faqSchema.index({ question: 'text', tags: 1, category: 1 });
+faqSchema.index({ question: 'text', category: 1 });
 faqSchema.index({ createdAt: -1 });
 
 module.exports = mongoose.model('FAQ', faqSchema);
