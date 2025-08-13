@@ -29,7 +29,7 @@ const BundleSchema = new Schema({
     min: 0,
     default: null
   },
-  quarterlyPrice: {
+  monthlyemandateprice: {
     type: Number,
     min: 0,
     default: null
@@ -48,7 +48,7 @@ const BundleSchema = new Schema({
 
 BundleSchema.pre('validate', function(next) {
   if (this.monthlyPrice === null && 
-      this.quarterlyPrice === null && 
+      this.monthlyemandateprice === null && 
       this.yearlyPrice === null) {
     this.invalidate('pricing', 'At least one pricing option is required', this.pricing);
   }

@@ -12,7 +12,7 @@ exports.createBundle = asyncHandler(async (req, res) => {
     portfolios = [], 
     category, 
     monthlyPrice, 
-    quarterlyPrice, 
+    monthlyemandateprice, 
     yearlyPrice 
   } = req.body;
 
@@ -24,7 +24,7 @@ exports.createBundle = asyncHandler(async (req, res) => {
     return res.status(400).json({ error: 'Invalid category. Must be basic or premium' });
   }
 
-  if (monthlyPrice === undefined && quarterlyPrice === undefined && yearlyPrice === undefined) {
+  if (monthlyPrice === undefined && monthlyemandateprice === undefined && yearlyPrice === undefined) {
     return res.status(400).json({ error: 'At least one pricing option is required' });
   }
 
@@ -46,7 +46,7 @@ exports.createBundle = asyncHandler(async (req, res) => {
     portfolios,  
     category,
     monthlyPrice,
-    quarterlyPrice,
+    monthlyemandateprice,
     yearlyPrice
   });
 
@@ -67,7 +67,7 @@ exports.updateBundle = asyncHandler(async (req, res) => {
     portfolios, 
     category, 
     monthlyPrice, 
-    quarterlyPrice, 
+    monthlyemandateprice, 
     yearlyPrice 
   } = req.body;
 
@@ -100,12 +100,12 @@ exports.updateBundle = asyncHandler(async (req, res) => {
 
   // Update pricing fields
   if (monthlyPrice !== undefined) bundle.monthlyPrice = monthlyPrice;
-  if (quarterlyPrice !== undefined) bundle.quarterlyPrice = quarterlyPrice;
+  if (monthlyemandateprice !== undefined) bundle.monthlyemandateprice = monthlyemandateprice;
   if (yearlyPrice !== undefined) bundle.yearlyPrice = yearlyPrice;
 
   // Validate at least one price exists
   if (bundle.monthlyPrice === null && 
-      bundle.quarterlyPrice === null && 
+      bundle.monthlyemandateprice === null && 
       bundle.yearlyPrice === null) {
     return res.status(400).json({ error: 'At least one pricing option is required' });
   }

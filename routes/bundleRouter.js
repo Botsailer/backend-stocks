@@ -41,7 +41,7 @@ const requireAdmin = require('../middleware/requirreAdmin');
  *           type: number
  *           nullable: true
  *           example: 49.99
- *         quarterlyPrice:
+ *         monthlyemandateprice:
  *           type: number
  *           nullable: true
  *           example: 129.99
@@ -77,7 +77,7 @@ const requireAdmin = require('../middleware/requirreAdmin');
  *             portfolios: ["615a2d4b87d9c34f7d4f8a12"]
  *             category: "basic"
  *             monthlyPrice: 29.99
- *             quarterlyPrice: 79.99
+ *             monthlyemandateprice: 79.99
  *             yearlyPrice: 299.99
  *     responses:
  *       201:

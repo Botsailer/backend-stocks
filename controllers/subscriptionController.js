@@ -454,7 +454,7 @@ const getProductInfo = async (productType, productId, planType) => {
     if (!product) throw new Error("Bundle not found");
     switch(planType) {
       case "monthly": amount = product.monthlyPrice; break;
-      case "quarterly": amount = product.quarterlyPrice; break;
+      case "quarterly": amount = product.monthlyemandateprice; break;
       case "yearly": amount = product.yearlyPrice; break;
       default: throw new Error("Invalid planType");
     }
