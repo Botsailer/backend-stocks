@@ -8,7 +8,6 @@ const MainUserSchema = new Schema({
   firstName: { type: String, required: true },
   lastName: { type: String, required: true },
   phoneNumber: { type: String },
-  address: { type: String },
   companyName: { type: String },
   companyLogo: {
     data: Buffer,

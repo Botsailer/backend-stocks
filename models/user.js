@@ -13,9 +13,7 @@ const userSchema = new mongoose.Schema({
   mainUserId: { type: String, default: null },
   fullName: { type: String, default: null },
   dateofBirth: { type: Date, default: null },
-  adharcard: { type: String, default: null },
   phone: { type: String, default: null },
-  address: { type: String, default: null },
   pandetails: { 
     type: String, 
     default: null,

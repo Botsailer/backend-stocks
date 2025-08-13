@@ -57,7 +57,6 @@ async function generateBill(subscriptionId, paymentDetails = {}) {
       name: subscription.user.fullName || subscription.user.username,
       email: subscription.user.email,
       phone: subscription.user.phone || '',
-      address: subscription.user.address || '',
       panDetails: subscription.user.pandetails || ''
     };
 
@@ -222,7 +221,6 @@ function generateBillHTML(bill) {
           <div><strong>${bill.customerDetails.name}</strong></div>
           <div>${bill.customerDetails.email}</div>
           ${bill.customerDetails.phone ? `<div>Phone: ${bill.customerDetails.phone}</div>` : ''}
-          ${bill.customerDetails.address ? `<div>${bill.customerDetails.address}</div>` : ''}
           ${bill.customerDetails.panDetails ? `<div>PAN: ${bill.customerDetails.panDetails}</div>` : ''}
         </div>
 

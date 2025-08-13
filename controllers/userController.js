@@ -104,7 +104,7 @@ exports.getProfile = async (req, res) => {
     
     if (!user) return res.status(404).json({ error: 'User not found' });
 
-    const requiredFields = ['fullName', 'dateofBirth', 'phone', 'pandetails', 'address', 'adharcard'];
+    const requiredFields = ['fullName', 'dateofBirth', 'phone', 'pandetails'];
     const isComplete = requiredFields.every(field => user[field] && user[field] !== null);
     
     const hasActiveSubscription = await Subscription.exists({

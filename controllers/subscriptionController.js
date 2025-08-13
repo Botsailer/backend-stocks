@@ -208,12 +208,23 @@ async function handleTelegramIntegration(user, productType, productId, subscript
         });
         
         // Send bill email immediately after telegram email
+        logger.info('Attempting to send bill email after telegram', {
+          userId: user._id,
+          email: user.email
+        });
+        
         try {
           await sendBillEmailAfterTelegram(user, subscription);
+          logger.info('Bill email sent successfully after telegram', {
+            userId: user._id,
+            email: user.email
+          });
         } catch (billError) {
           logger.error('Failed to send bill email after telegram', {
             userId: user._id,
-            error: billError.message
+            email: user.email,
+            error: billError.message,
+            stack: billError.stack
           });
         }
         
@@ -416,39 +427,8 @@ Thank you for your business!
 ${COMPANY_INFO.name}
     `;
 
-    // Generate PDF attachment
-    const { generateSimplePDF } = require('../utils/simplePDF');
-    const pdfBuffer = generateSimplePDF(billData);
-    
-    // Send email with PDF attachment
-    const nodemailer = require('nodemailer');
-    const { getSmtpConfig } = require('../utils/configSettings');
-    
-    const config = await getSmtpConfig();
-    const transporter = nodemailer.createTransporter({
-      host: config.host,
-      port: Number(config.port),
-      secure: Number(config.port) === 465,
-      auth: {
-        user: config.user,
-        pass: config.pass
-      }
-    });
-
-    const mailOptions = {
-      from: `"${COMPANY_INFO.name}" <${config.user}>`,
-      to: user.email,
-      subject,
-      text: textContent,
-      html: htmlContent,
-      attachments: [{
-        filename: `Invoice-${billData.billNumber}.pdf`,
-        content: pdfBuffer,
-        contentType: 'application/pdf'
-      }]
-    };
-
-    await transporter.sendMail(mailOptions);
+    // Use the same email service as telegram emails
+    await sendEmail(user.email, subject, textContent, htmlContent);
     
     logger.info('Bill email sent successfully after telegram', {
       userId: user._id,
