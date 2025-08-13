@@ -1417,7 +1417,7 @@ exports.verifyPayment = async (req, res) => {
       // Single portfolio
       if (isRenewal === "true" && existingSubscriptionId) {
         await Subscription.findByIdAndUpdate(
-         
+          existingSubscriptionId,
           { status: "cancelled", cancelledAt: new Date(), cancelReason: "Renewed" },
           { session }
         );
@@ -1473,21 +1473,47 @@ exports.verifyPayment = async (req, res) => {
     
     // Generate and send bill for the subscription
     try {
-      await generateAndSendBill(newSubscriptions[0]._id, {
-        paymentId,
-        orderId
-      });
-      logger.info('Bill generated and sent successfully', {
-        subscriptionId: newSubscriptions[0]._id,
-        paymentId,
-        orderId
-      });
+      if (newSubscriptions && newSubscriptions.length > 0) {
+        logger.info('Starting bill generation process', {
+          subscriptionId: newSubscriptions[0]._id,
+          paymentId,
+          orderId,
+          subscriptionCount: newSubscriptions.length
+        });
+        
+        const bill = await generateAndSendBill(newSubscriptions[0]._id, {
+          paymentId,
+          orderId
+        });
+        
+        logger.info('Bill generated and sent successfully', {
+          subscriptionId: newSubscriptions[0]._id,
+          billId: bill._id,
+          billNumber: bill.billNumber,
+          paymentId,
+          orderId
+        });
+        
+        // Add bill info to response
+        responseData.billGenerated = true;
+        responseData.billNumber = bill.billNumber;
+      } else {
+        logger.warn('No subscriptions found for bill generation', {
+          paymentId,
+          orderId
+        });
+      }
     } catch (billError) {
       logger.error('Failed to generate bill', {
-        subscriptionId: newSubscriptions[0]._id,
-        error: billError.message
+        subscriptionId: newSubscriptions[0]?._id,
+        error: billError.message,
+        stack: billError.stack,
+        paymentId,
+        orderId
       });
       // Don't fail the payment verification if bill generation fails
+      responseData.billGenerated = false;
+      responseData.billError = billError.message;
     }
     
     // Enhanced Telegram integration for both portfolios and bundles
@@ -1655,23 +1681,41 @@ exports.verifyEmandate = async (req, res) => {
       }
 
       // Generate bills for activated subscriptions
+      let billsGenerated = 0;
       for (const sub of existingSubs) {
         try {
-          await generateAndSendBill(sub._id, {
-            paymentId: null, // eMandate doesn't have immediate payment ID
-            orderId: null
-          });
-          logger.info('Bill generated for eMandate subscription', {
+          logger.info('Starting eMandate bill generation', {
             subscriptionId: sub._id,
             razorpaySubscriptionId: subscription_id
           });
+          
+          const bill = await generateAndSendBill(sub._id, {
+            paymentId: null, // eMandate doesn't have immediate payment ID
+            orderId: null
+          });
+          
+          logger.info('Bill generated for eMandate subscription', {
+            subscriptionId: sub._id,
+            billId: bill._id,
+            billNumber: bill.billNumber,
+            razorpaySubscriptionId: subscription_id
+          });
+          
+          billsGenerated++;
         } catch (billError) {
           logger.error('Failed to generate bill for eMandate subscription', {
             subscriptionId: sub._id,
-            error: billError.message
+            error: billError.message,
+            stack: billError.stack,
+            razorpaySubscriptionId: subscription_id
           });
         }
       }
+      
+      logger.info(`Generated ${billsGenerated} bills for eMandate activation`, {
+        razorpaySubscriptionId: subscription_id,
+        totalSubscriptions: existingSubs.length
+      });
 
       // Renewal emails
       if (isRenewal) {

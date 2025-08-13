@@ -2,6 +2,7 @@ const Bill = require('../models/bill');
 const { 
   generateBill, 
   generateBillHTML, 
+  generateBillPDF,
   sendBillEmail, 
   generateAndSendBill, 
   getUserBills 
@@ -91,9 +92,47 @@ exports.getBillById = async (req, res) => {
 };
 
 /**
- * Download bill as HTML
+ * Download bill as PDF
  */
 exports.downloadBill = async (req, res) => {
+  try {
+    const { billId } = req.params;
+    const userId = req.user._id;
+
+    const bill = await Bill.findOne({ 
+      _id: billId, 
+      user: userId 
+    }).populate('subscription');
+
+    if (!bill) {
+      return res.status(404).json({
+        success: false,
+        error: 'Bill not found'
+      });
+    }
+
+    const pdfBuffer = await generateBillPDF(bill);
+
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', `attachment; filename="Invoice-${bill.billNumber}.pdf"`);
+    res.send(pdfBuffer);
+
+  } catch (error) {
+    logger.error('Error in downloadBill controller', { 
+      billId: req.params.billId, 
+      error: error.message 
+    });
+    res.status(500).json({
+      success: false,
+      error: 'Failed to download bill'
+    });
+  }
+};
+
+/**
+ * Download bill as HTML (alternative endpoint)
+ */
+exports.downloadBillHTML = async (req, res) => {
   try {
     const { billId } = req.params;
     const userId = req.user._id;
@@ -117,13 +156,13 @@ exports.downloadBill = async (req, res) => {
     res.send(htmlContent);
 
   } catch (error) {
-    logger.error('Error in downloadBill controller', { 
+    logger.error('Error in downloadBillHTML controller', { 
       billId: req.params.billId, 
       error: error.message 
     });
     res.status(500).json({
       success: false,
-      error: 'Failed to download bill'
+      error: 'Failed to download bill HTML'
     });
   }
 };
@@ -219,6 +258,26 @@ exports.testBillGeneration = async (req, res) => {
 
     const { subscriptionId } = req.params;
     
+    // Verify subscription exists and belongs to user
+    const Subscription = require('../models/subscription');
+    const subscription = await Subscription.findOne({
+      _id: subscriptionId,
+      user: req.user._id
+    }).populate('user');
+    
+    if (!subscription) {
+      return res.status(404).json({
+        success: false,
+        error: 'Subscription not found or access denied'
+      });
+    }
+    
+    logger.info('Testing bill generation', {
+      subscriptionId,
+      userId: req.user._id,
+      userEmail: req.user.email
+    });
+    
     const bill = await generateAndSendBill(subscriptionId, {
       paymentId: 'test_payment_' + Date.now(),
       orderId: 'test_order_' + Date.now()
@@ -232,18 +291,21 @@ exports.testBillGeneration = async (req, res) => {
         billNumber: bill.billNumber,
         totalAmount: bill.totalAmount,
         status: bill.status,
-        emailSent: bill.emailSent
+        emailSent: bill.emailSent,
+        customerEmail: bill.customerDetails.email
       }
     });
 
   } catch (error) {
     logger.error('Error in testBillGeneration controller', { 
       subscriptionId: req.params.subscriptionId, 
-      error: error.message 
+      userId: req.user?._id,
+      error: error.message,
+      stack: error.stack
     });
     res.status(500).json({
       success: false,
-      error: 'Failed to generate test bill'
+      error: 'Failed to generate test bill: ' + error.message
     });
   }
 };

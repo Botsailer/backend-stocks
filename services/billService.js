@@ -5,6 +5,9 @@ const Bundle = require('../models/bundle');
 const { sendEmail } = require('./emailServices');
 const { COMPANY_INFO, TAX_RATE, BILL_DUE_DAYS } = require('../config/billConfig');
 const winston = require('winston');
+const fs = require('fs');
+const path = require('path');
+const { generateSimplePDF } = require('../utils/simplePDF');
 
 // Logger setup
 const logger = winston.createLogger({
@@ -291,7 +294,25 @@ function generateBillHTML(bill) {
 }
 
 /**
- * Send bill via email
+ * Generate PDF using simple PDF creation
+ */
+async function generateBillPDF(bill) {
+  try {
+    // Generate actual PDF using simple PDF structure
+    const pdfBuffer = generateSimplePDF(bill);
+    return pdfBuffer;
+    
+  } catch (error) {
+    logger.error('Error generating PDF', { 
+      billId: bill._id,
+      error: error.message 
+    });
+    throw error;
+  }
+}
+
+/**
+ * Send bill via email with PDF attachment
  */
 async function sendBillEmail(billId) {
   try {
@@ -302,7 +323,7 @@ async function sendBillEmail(billId) {
     }
 
     const subject = `Invoice ${bill.billNumber} - ${COMPANY_INFO.name}`;
-    const htmlContent = generateBillHTML(bill);
+    const pdfBuffer = await generateBillPDF(bill);
     
     // Plain text version
     const textContent = `
@@ -322,12 +343,57 @@ ${COMPANY_INFO.name}
 ${COMPANY_INFO.email}
     `;
 
-    await sendEmail(
-      bill.customerDetails.email,
+    const htmlContent = `
+      <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px;">
+        <h2 style="color: #4a77e5;">Invoice ${bill.billNumber}</h2>
+        <p>Dear ${bill.customerDetails.name},</p>
+        <p>Please find attached your invoice for the subscription purchase.</p>
+        
+        <div style="background-color: #f8f9fa; padding: 15px; border-radius: 5px; margin: 20px 0;">
+          <h3 style="color: #4a77e5; margin-top: 0;">Invoice Details:</h3>
+          <p><strong>Invoice Number:</strong> ${bill.billNumber}</p>
+          <p><strong>Date:</strong> ${new Date(bill.billDate).toLocaleDateString('en-IN')}</p>
+          <p><strong>Amount:</strong> ₹${bill.totalAmount.toLocaleString('en-IN')}</p>
+          <p><strong>Status:</strong> ${bill.paymentStatus === 'paid' ? 'Paid' : 'Pending'}</p>
+        </div>
+        
+        <p>${bill.paymentStatus === 'paid' ? 'Payment has been received successfully.' : 'Payment is pending.'}</p>
+        <p>Thank you for your business!</p>
+        
+        <hr style="margin: 30px 0; border: none; border-top: 1px solid #eee;">
+        <p style="color: #666; font-size: 12px;">${COMPANY_INFO.name}<br>${COMPANY_INFO.email}</p>
+      </div>
+    `;
+
+    // Send email with PDF attachment
+    const nodemailer = require('nodemailer');
+    const { getSmtpConfig } = require('../utils/configSettings');
+    
+    const config = await getSmtpConfig();
+    const transporter = nodemailer.createTransporter({
+      host: config.host,
+      port: Number(config.port),
+      secure: Number(config.port) === 465,
+      auth: {
+        user: config.user,
+        pass: config.pass
+      }
+    });
+
+    const mailOptions = {
+      from: `"${COMPANY_INFO.name}" <${config.user}>`,
+      to: bill.customerDetails.email,
       subject,
-      textContent,
-      htmlContent
-    );
+      text: textContent,
+      html: htmlContent,
+      attachments: [{
+        filename: `Invoice-${bill.billNumber}.pdf`,
+        content: pdfBuffer,
+        contentType: 'application/pdf'
+      }]
+    };
+
+    await transporter.sendMail(mailOptions);
 
     // Update bill email status
     await Bill.findByIdAndUpdate(billId, {
@@ -336,16 +402,16 @@ ${COMPANY_INFO.email}
       status: bill.status === 'draft' ? 'sent' : bill.status
     });
 
-    logger.info('Bill email sent successfully', { 
+    logger.info('Bill PDF email sent successfully', { 
       billId, 
       billNumber: bill.billNumber,
       email: bill.customerDetails.email 
     });
 
-    return { success: true, message: 'Bill email sent successfully' };
+    return { success: true, message: 'Bill PDF email sent successfully' };
 
   } catch (error) {
-    logger.error('Error sending bill email', { 
+    logger.error('Error sending bill PDF email', { 
       billId, 
       error: error.message, 
       stack: error.stack 
@@ -427,6 +493,7 @@ async function getUserBills(userId, options = {}) {
 module.exports = {
   generateBill,
   generateBillHTML,
+  generateBillPDF,
   sendBillEmail,
   generateAndSendBill,
   getUserBills,

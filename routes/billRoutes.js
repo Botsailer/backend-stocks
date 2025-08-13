@@ -4,6 +4,8 @@ const billController = require('../controllers/billController');
 const { authenticateToken } = require('../utils/jwt');
 const requireAdmin = require('../middleware/requirreAdmin');
 
+// Bill routes with minimal setup
+
 // Public routes
 router.get('/config', billController.getBillingConfig);
 
@@ -12,6 +14,7 @@ router.get('/my-bills', authenticateToken, billController.getUserBills);
 router.get('/my-bills/stats', authenticateToken, billController.getBillStats);
 router.get('/:billId', authenticateToken, billController.getBillById);
 router.get('/:billId/download', authenticateToken, billController.downloadBill);
+router.get('/:billId/download-html', authenticateToken, billController.downloadBillHTML);
 router.post('/:billId/resend-email', authenticateToken, billController.resendBillEmail);
 
 // Admin routes (require admin authentication)
