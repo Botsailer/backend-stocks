@@ -12,7 +12,8 @@ const User = require("../models/user");
 const { getPaymentConfig } = require("../utils/configSettings");
 const { sendEmail } = require("../services/emailServices"); // Add your email service
 const TelegramService = require("../services/tgservice");
-const { generateAndSendBill } = require("../services/billService");
+const { generateAndSendBill, generateBillHTML } = require("../services/billService");
+const { COMPANY_INFO } = require("../config/billConfig");
 const winston = require("winston");
 
 // Logger setup
@@ -206,6 +207,16 @@ async function handleTelegramIntegration(user, productType, productId, subscript
           email: user.email
         });
         
+        // Send bill email immediately after telegram email
+        try {
+          await sendBillEmailAfterTelegram(user, subscription);
+        } catch (billError) {
+          logger.error('Failed to send bill email after telegram', {
+            userId: user._id,
+            error: billError.message
+          });
+        }
+        
       } catch (emailError) {
         logger.error('Failed to send telegram invite email', {
           userId: user._id,
@@ -231,6 +242,88 @@ async function handleTelegramIntegration(user, productType, productId, subscript
       stack: error.stack
     });
     return [];
+  }
+}
+
+// Helper function to send bill email using same email service
+async function sendBillEmailAfterTelegram(user, subscription) {
+  try {
+    // Create a simple bill data structure
+    const billData = {
+      billNumber: `INV-${Date.now()}`,
+      billDate: new Date(),
+      dueDate: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000),
+      customerDetails: {
+        name: user.fullName || user.username,
+        email: user.email,
+        phone: user.phone || '',
+        address: user.address || ''
+      },
+      items: [{
+        description: `Subscription - ${subscription.productType}`,
+        planType: subscription.planType || 'monthly',
+        quantity: 1,
+        unitPrice: subscription.amount,
+        totalPrice: subscription.amount
+      }],
+      subtotal: subscription.amount,
+      taxRate: 18,
+      taxAmount: Math.round(subscription.amount * 0.18),
+      totalAmount: subscription.amount + Math.round(subscription.amount * 0.18),
+      paymentStatus: 'paid',
+      status: 'paid'
+    };
+
+    const subject = `Invoice ${billData.billNumber} - ${COMPANY_INFO.name}`;
+    const htmlContent = `
+      <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px;">
+        <h2 style="color: #4a77e5;">Invoice ${billData.billNumber}</h2>
+        <p>Dear ${billData.customerDetails.name},</p>
+        <p>Thank you for your subscription purchase. Please find your invoice details below:</p>
+        
+        <div style="background-color: #f8f9fa; padding: 20px; border-radius: 5px; margin: 20px 0;">
+          <h3 style="color: #4a77e5; margin-top: 0;">Invoice Details:</h3>
+          <p><strong>Invoice Number:</strong> ${billData.billNumber}</p>
+          <p><strong>Date:</strong> ${billData.billDate.toLocaleDateString('en-IN')}</p>
+          <p><strong>Description:</strong> ${billData.items[0].description}</p>
+          <p><strong>Plan:</strong> ${billData.items[0].planType}</p>
+          <p><strong>Amount:</strong> ₹${billData.subtotal.toLocaleString('en-IN')}</p>
+          <p><strong>GST (18%):</strong> ₹${billData.taxAmount.toLocaleString('en-IN')}</p>
+          <p><strong>Total Amount:</strong> ₹${billData.totalAmount.toLocaleString('en-IN')}</p>
+          <p><strong>Status:</strong> <span style="color: #28a745; font-weight: bold;">PAID</span></p>
+        </div>
+        
+        <div style="background-color: #e8f5e8; padding: 15px; border-radius: 5px; margin: 20px 0;">
+          <p style="margin: 0; color: #155724;"><strong>✅ Payment Confirmed</strong></p>
+          <p style="margin: 5px 0 0 0; color: #155724;">Your subscription is now active!</p>
+        </div>
+        
+        <hr style="margin: 30px 0; border: none; border-top: 1px solid #eee;">
+        <div style="font-size: 12px; color: #666;">
+          <p><strong>${COMPANY_INFO.name}</strong></p>
+          <p>${COMPANY_INFO.address}</p>
+          <p>${COMPANY_INFO.city}, ${COMPANY_INFO.state} ${COMPANY_INFO.pincode}</p>
+          <p>Email: ${COMPANY_INFO.email} | Phone: ${COMPANY_INFO.phone}</p>
+          <p>GSTIN: ${COMPANY_INFO.gstin}</p>
+        </div>
+      </div>
+    `;
+
+    await sendEmail(user.email, subject, '', htmlContent);
+    
+    logger.info('Bill email sent successfully after telegram', {
+      userId: user._id,
+      email: user.email,
+      billNumber: billData.billNumber
+    });
+    
+  } catch (error) {
+    logger.error('Error sending bill email after telegram', {
+      userId: user._id,
+      error: error.message,
+      stack: error.stack
+    });
+    throw error;
   }
 }
 
@@ -1668,6 +1761,16 @@ exports.verifyEmandate = async (req, res) => {
                     inviteResult.invite_link, 
                     inviteResult.expires_at
                   );
+                  
+                  // Send bill email after telegram email
+                  try {
+                    await sendBillEmailAfterTelegram(req.user, sub);
+                  } catch (billError) {
+                    logger.error('Failed to send bill email for eMandate', {
+                      subscriptionId: sub._id,
+                      error: billError.message
+                    });
+                  }
                 }
               }
             }
