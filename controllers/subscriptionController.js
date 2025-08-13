@@ -276,40 +276,179 @@ async function sendBillEmailAfterTelegram(user, subscription) {
 
     const subject = `Invoice ${billData.billNumber} - ${COMPANY_INFO.name}`;
     const htmlContent = `
-      <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px;">
-        <h2 style="color: #4a77e5;">Invoice ${billData.billNumber}</h2>
-        <p>Dear ${billData.customerDetails.name},</p>
-        <p>Thank you for your subscription purchase. Please find your invoice details below:</p>
-        
-        <div style="background-color: #f8f9fa; padding: 20px; border-radius: 5px; margin: 20px 0;">
-          <h3 style="color: #4a77e5; margin-top: 0;">Invoice Details:</h3>
-          <p><strong>Invoice Number:</strong> ${billData.billNumber}</p>
-          <p><strong>Date:</strong> ${billData.billDate.toLocaleDateString('en-IN')}</p>
-          <p><strong>Description:</strong> ${billData.items[0].description}</p>
-          <p><strong>Plan:</strong> ${billData.items[0].planType}</p>
-          <p><strong>Amount:</strong> ₹${billData.subtotal.toLocaleString('en-IN')}</p>
-          <p><strong>GST (18%):</strong> ₹${billData.taxAmount.toLocaleString('en-IN')}</p>
-          <p><strong>Total Amount:</strong> ₹${billData.totalAmount.toLocaleString('en-IN')}</p>
-          <p><strong>Status:</strong> <span style="color: #28a745; font-weight: bold;">PAID</span></p>
+      <!DOCTYPE html>
+      <html>
+      <head>
+        <meta charset="utf-8">
+        <title>Invoice ${billData.billNumber}</title>
+        <style>
+          body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; margin: 0; padding: 20px; background-color: #f5f5f5; }
+          .invoice-container { max-width: 800px; margin: 0 auto; background: white; border-radius: 10px; box-shadow: 0 0 20px rgba(0,0,0,0.1); overflow: hidden; }
+          .header { background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; padding: 30px; }
+          .header-content { display: flex; justify-content: space-between; align-items: flex-start; }
+          .company-info h1 { margin: 0 0 10px 0; font-size: 28px; font-weight: 700; }
+          .company-info p { margin: 2px 0; opacity: 0.9; }
+          .invoice-info { text-align: right; }
+          .invoice-info h2 { margin: 0 0 15px 0; font-size: 32px; font-weight: 300; }
+          .invoice-details { background: #f8f9ff; padding: 15px; border-radius: 8px; }
+          .invoice-details p { margin: 3px 0; font-size: 14px; }
+          .content { padding: 40px; }
+          .bill-to { background: #f8f9fa; padding: 25px; border-radius: 8px; margin-bottom: 30px; border-left: 4px solid #667eea; }
+          .bill-to h3 { margin: 0 0 15px 0; color: #667eea; font-size: 18px; }
+          .items-table { width: 100%; border-collapse: collapse; margin: 30px 0; }
+          .items-table th { background: #667eea; color: white; padding: 15px; text-align: left; font-weight: 600; }
+          .items-table td { padding: 15px; border-bottom: 1px solid #eee; }
+          .items-table tr:hover { background: #f8f9ff; }
+          .totals { float: right; width: 300px; margin-top: 20px; }
+          .totals table { width: 100%; }
+          .totals td { padding: 10px 15px; border-bottom: 1px solid #eee; }
+          .totals .subtotal { font-weight: 500; }
+          .totals .tax { color: #666; }
+          .totals .total { background: #667eea; color: white; font-weight: 700; font-size: 18px; }
+          .payment-status { text-align: center; margin: 30px 0; }
+          .status-paid { background: #d4edda; color: #155724; padding: 15px 30px; border-radius: 25px; display: inline-block; font-weight: 600; }
+          .footer { background: #f8f9fa; padding: 30px; text-align: center; color: #666; border-top: 1px solid #eee; }
+          .footer h4 { margin: 0 0 15px 0; color: #333; }
+          @media print { body { background: white; } .invoice-container { box-shadow: none; } }
+        </style>
+      </head>
+      <body>
+        <div class="invoice-container">
+          <div class="header">
+            <div class="header-content">
+              <div class="company-info">
+                <h1>${COMPANY_INFO.name}</h1>
+                <p>${COMPANY_INFO.address}</p>
+                <p>${COMPANY_INFO.city}, ${COMPANY_INFO.state} ${COMPANY_INFO.pincode}</p>
+                <p>Phone: ${COMPANY_INFO.phone}</p>
+                <p>Email: ${COMPANY_INFO.email}</p>
+                <p>GSTIN: ${COMPANY_INFO.gstin}</p>
+              </div>
+              <div class="invoice-info">
+                <h2>INVOICE</h2>
+                <div class="invoice-details">
+                  <p><strong>Invoice #:</strong> ${billData.billNumber}</p>
+                  <p><strong>Date:</strong> ${billData.billDate.toLocaleDateString('en-IN')}</p>
+                  <p><strong>Due Date:</strong> ${billData.dueDate.toLocaleDateString('en-IN')}</p>
+                </div>
+              </div>
+            </div>
+          </div>
+          
+          <div class="content">
+            <div class="bill-to">
+              <h3>BILL TO:</h3>
+              <p><strong>${billData.customerDetails.name}</strong></p>
+              <p>${billData.customerDetails.email}</p>
+              ${billData.customerDetails.phone ? `<p>Phone: ${billData.customerDetails.phone}</p>` : ''}
+              ${billData.customerDetails.address ? `<p>${billData.customerDetails.address}</p>` : ''}
+            </div>
+            
+            <table class="items-table">
+              <thead>
+                <tr>
+                  <th>Description</th>
+                  <th>Plan Type</th>
+                  <th>Payment Method</th>
+                  <th style="text-align: right;">Amount</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <td>${billData.items[0].description}</td>
+                  <td>${subscription.productType === 'Bundle' ? 'Monthly/Yearly' : 'Quarterly/Yearly'}</td>
+                  <td>eMandate (Recurring)</td>
+                  <td style="text-align: right;">₹${billData.subtotal.toLocaleString('en-IN')}</td>
+                </tr>
+              </tbody>
+            </table>
+            
+            <div class="totals">
+              <table>
+                <tr class="subtotal">
+                  <td>Subtotal:</td>
+                  <td style="text-align: right;">₹${billData.subtotal.toLocaleString('en-IN')}</td>
+                </tr>
+                <tr class="tax">
+                  <td>GST (${billData.taxRate}%):</td>
+                  <td style="text-align: right;">₹${billData.taxAmount.toLocaleString('en-IN')}</td>
+                </tr>
+                <tr class="total">
+                  <td>Total Amount:</td>
+                  <td style="text-align: right;">₹${billData.totalAmount.toLocaleString('en-IN')}</td>
+                </tr>
+              </table>
+            </div>
+            
+            <div style="clear: both;"></div>
+            
+            <div class="payment-status">
+              <span class="status-paid">✓ PAYMENT CONFIRMED - SUBSCRIPTION ACTIVE</span>
+            </div>
+          </div>
+          
+          <div class="footer">
+            <h4>Thank you for your business!</h4>
+            <p>This is a computer-generated invoice. For any queries, please contact us at ${COMPANY_INFO.email}</p>
+            <p><strong>${COMPANY_INFO.name}</strong> | ${COMPANY_INFO.website}</p>
+          </div>
         </div>
-        
-        <div style="background-color: #e8f5e8; padding: 15px; border-radius: 5px; margin: 20px 0;">
-          <p style="margin: 0; color: #155724;"><strong>✅ Payment Confirmed</strong></p>
-          <p style="margin: 5px 0 0 0; color: #155724;">Your subscription is now active!</p>
-        </div>
-        
-        <hr style="margin: 30px 0; border: none; border-top: 1px solid #eee;">
-        <div style="font-size: 12px; color: #666;">
-          <p><strong>${COMPANY_INFO.name}</strong></p>
-          <p>${COMPANY_INFO.address}</p>
-          <p>${COMPANY_INFO.city}, ${COMPANY_INFO.state} ${COMPANY_INFO.pincode}</p>
-          <p>Email: ${COMPANY_INFO.email} | Phone: ${COMPANY_INFO.phone}</p>
-          <p>GSTIN: ${COMPANY_INFO.gstin}</p>
-        </div>
-      </div>
+      </body>
+      </html>
     `;
 
-    await sendEmail(user.email, subject, '', htmlContent);
+    const textContent = `
+INVOICE ${billData.billNumber}
+
+From: ${COMPANY_INFO.name}
+To: ${billData.customerDetails.name}
+Email: ${billData.customerDetails.email}
+
+Description: ${billData.items[0].description}
+Plan: ${subscription.productType === 'Bundle' ? 'Monthly/Yearly' : 'Quarterly/Yearly'} eMandate
+Amount: ₹${billData.subtotal.toLocaleString('en-IN')}
+GST (18%): ₹${billData.taxAmount.toLocaleString('en-IN')}
+Total: ₹${billData.totalAmount.toLocaleString('en-IN')}
+
+Status: PAID - Subscription Active
+
+Thank you for your business!
+${COMPANY_INFO.name}
+    `;
+
+    // Generate PDF attachment
+    const { generateSimplePDF } = require('../utils/simplePDF');
+    const pdfBuffer = generateSimplePDF(billData);
+    
+    // Send email with PDF attachment
+    const nodemailer = require('nodemailer');
+    const { getSmtpConfig } = require('../utils/configSettings');
+    
+    const config = await getSmtpConfig();
+    const transporter = nodemailer.createTransporter({
+      host: config.host,
+      port: Number(config.port),
+      secure: Number(config.port) === 465,
+      auth: {
+        user: config.user,
+        pass: config.pass
+      }
+    });
+
+    const mailOptions = {
+      from: `"${COMPANY_INFO.name}" <${config.user}>`,
+      to: user.email,
+      subject,
+      text: textContent,
+      html: htmlContent,
+      attachments: [{
+        filename: `Invoice-${billData.billNumber}.pdf`,
+        content: pdfBuffer,
+        contentType: 'application/pdf'
+      }]
+    };
+
+    await transporter.sendMail(mailOptions);
     
     logger.info('Bill email sent successfully after telegram', {
       userId: user._id,
