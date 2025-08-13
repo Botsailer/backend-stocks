@@ -12,6 +12,7 @@ const User = require("../models/user");
 const { getPaymentConfig } = require("../utils/configSettings");
 const { sendEmail } = require("../services/emailServices"); // Add your email service
 const TelegramService = require("../services/tgservice");
+const { generateAndSendBill } = require("../services/billService");
 const winston = require("winston");
 
 // Logger setup
@@ -1470,6 +1471,25 @@ exports.verifyPayment = async (req, res) => {
 
     await session.commitTransaction();
     
+    // Generate and send bill for the subscription
+    try {
+      await generateAndSendBill(newSubscriptions[0]._id, {
+        paymentId,
+        orderId
+      });
+      logger.info('Bill generated and sent successfully', {
+        subscriptionId: newSubscriptions[0]._id,
+        paymentId,
+        orderId
+      });
+    } catch (billError) {
+      logger.error('Failed to generate bill', {
+        subscriptionId: newSubscriptions[0]._id,
+        error: billError.message
+      });
+      // Don't fail the payment verification if bill generation fails
+    }
+    
     // Enhanced Telegram integration for both portfolios and bundles
     const telegramInvites = await handleTelegramIntegration(
       req.user, 
@@ -1631,6 +1651,25 @@ exports.verifyEmandate = async (req, res) => {
               error: error.message
             });
           }
+        }
+      }
+
+      // Generate bills for activated subscriptions
+      for (const sub of existingSubs) {
+        try {
+          await generateAndSendBill(sub._id, {
+            paymentId: null, // eMandate doesn't have immediate payment ID
+            orderId: null
+          });
+          logger.info('Bill generated for eMandate subscription', {
+            subscriptionId: sub._id,
+            razorpaySubscriptionId: subscription_id
+          });
+        } catch (billError) {
+          logger.error('Failed to generate bill for eMandate subscription', {
+            subscriptionId: sub._id,
+            error: billError.message
+          });
         }
       }
 
@@ -2413,6 +2452,7 @@ exports.startCleanupJob = () => {
   logger.info("Subscription cron jobs initialized:");
   logger.info("- Cleanup: Every 5 hours (0 */5 * * *)");
   logger.info("- Renewal reminders: Daily at 9 AM (0 9 * * *)");
+  logger.info("- Bill generation: Automatic on payment verification");
 };
 
 /**

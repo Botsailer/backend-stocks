@@ -82,6 +82,7 @@ dbAdapter.connect()
     app.use('/api/tips', require('./routes/tips')); 
     app.use('/api/bundles', require('./routes/bundleRouter'));
     app.use('/api/admin/configs', require('./routes/configRoute'));
+    app.use('/api/bills', require('./routes/billRoutes'));
 
     // Global error handling middleware
     app.use((err, req, res, next) => {
