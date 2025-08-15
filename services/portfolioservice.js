@@ -739,26 +739,55 @@ exports.processStockSaleWithLogging = async (portfolioId, saleData) => {
         profitLoss: saleResult.operation.profitLoss
       });
     } else {
-      // For partial sales, update the holding with proper validation
-      const updatedHolding = saleResult.updatedHolding;
+      // For partial sales, create the updated holding manually with all required fields
+      const remainingQuantity = existingHolding.quantity - actualQuantityToSell;
+      const newInvestmentValue = remainingQuantity * existingHolding.buyPrice;
+      const profitLoss = (currentMarketPrice - existingHolding.buyPrice) * actualQuantityToSell;
+      const saleValue = actualQuantityToSell * currentMarketPrice;
       
-      // Ensure all required fields are present and valid
+      // Create a clean updated holding object with all required fields
+      const updatedHolding = {
+        symbol: existingHolding.symbol,
+        sector: existingHolding.sector,
+        buyPrice: existingHolding.buyPrice,
+        quantity: remainingQuantity,
+        minimumInvestmentValueStock: Number(newInvestmentValue.toFixed(2)),
+        weight: existingHolding.weight || 0,
+        stockCapType: existingHolding.stockCapType,
+        status: 'Hold', // Reset to Hold after partial sale
+        originalBuyPrice: existingHolding.originalBuyPrice || existingHolding.buyPrice,
+        realizedPnL: (existingHolding.realizedPnL || 0) + profitLoss,
+        priceHistory: [
+          ...(existingHolding.priceHistory || []),
+          {
+            date: new Date().toISOString(),
+            price: currentMarketPrice,
+            quantity: -actualQuantityToSell, // Negative for sale
+            saleValue: saleValue,
+            profitLoss: profitLoss,
+            action: 'partial_sell'
+          }
+        ],
+        lastSaleDate: new Date().toISOString(),
+        lastUpdated: new Date().toISOString(),
+        createdAt: existingHolding.createdAt
+      };
+      
+      // Validate the manually created holding
       if (!updatedHolding.symbol || !updatedHolding.sector || 
           !updatedHolding.buyPrice || updatedHolding.buyPrice <= 0 ||
           !updatedHolding.quantity || updatedHolding.quantity <= 0 ||
           !updatedHolding.minimumInvestmentValueStock || updatedHolding.minimumInvestmentValueStock <= 0) {
         
-        logger.error(`❌ Invalid updated holding after partial sale:`, {
+        logger.error(`❌ Manual holding creation failed:`, {
           symbol: updatedHolding.symbol || 'MISSING',
           sector: updatedHolding.sector || 'MISSING',
           buyPrice: updatedHolding.buyPrice || 'MISSING',
           quantity: updatedHolding.quantity || 'MISSING',
-          minimumInvestmentValueStock: updatedHolding.minimumInvestmentValueStock || 'MISSING',
-          status: updatedHolding.status || 'MISSING',
-          allFields: Object.keys(updatedHolding)
+          minimumInvestmentValueStock: updatedHolding.minimumInvestmentValueStock || 'MISSING'
         });
         
-        throw new Error(`Invalid holding data after partial sale for ${symbol}: Missing required fields`);
+        throw new Error(`Failed to create valid holding data after partial sale for ${symbol}`);
       }
       
       portfolio.holdings[holdingIndex] = updatedHolding;
@@ -767,7 +796,9 @@ exports.processStockSaleWithLogging = async (portfolioId, saleData) => {
         portfolioId,
         remainingQuantity: updatedHolding.quantity,
         newInvestmentValue: updatedHolding.minimumInvestmentValueStock,
-        realizedPnL: updatedHolding.realizedPnL
+        realizedPnL: updatedHolding.realizedPnL,
+        profitLoss: profitLoss,
+        saleValue: saleValue
       });
     }
     

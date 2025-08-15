@@ -79,13 +79,13 @@ const options = {
       {
         url: process.env.NODE_ENV === 'production' 
           ? 'https://stocks-backend-cmjxc.ondigitalocean.app/' 
-          : 'http://localhost:3000',
+          : 'http://localhost:3012',
         description: process.env.NODE_ENV === 'production' 
           ? 'Production Server' 
           : 'Development Server'
       },
       {
-        url: 'http://localhost:3000',
+        url: 'http://localhost:3012',
         description: 'Local Development Server'
       }
     ],
