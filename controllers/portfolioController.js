@@ -536,30 +536,107 @@ exports.updatePortfolio = asyncHandler(async (req, res) => {
       }
       updatedHoldings = req.body.holdings;
 
+    } else if (stockAction.includes('sell')) {
+      // SELL: Process stock sales using portfolio service
+      const portfolioService = require('../services/portfolioservice');
+      
+      for (const saleRequest of req.body.holdings) {
+        // Validate required fields for sell action
+        if (!saleRequest.symbol) {
+          return res.status(400).json({ 
+            error: `Sale request missing required field: symbol` 
+          });
+        }
+
+        // Set default saleType to 'complete' if not specified
+        const saleType = saleRequest.saleType || 'complete';
+        
+        // Find the existing holding to get quantity information
+        const existingHolding = portfolio.holdings.find(
+          h => h.symbol.toUpperCase() === saleRequest.symbol.toUpperCase() && h.status !== 'Sell'
+        );
+
+        if (!existingHolding) {
+          return res.status(400).json({ 
+            error: `Holding not found for symbol: ${saleRequest.symbol}` 
+          });
+        }
+
+        // Determine quantity to sell
+        let quantityToSell = saleRequest.quantity || existingHolding.quantity;
+        if (saleType === 'complete') {
+          quantityToSell = existingHolding.quantity;
+        }
+
+        // Process the sale
+        try {
+          const saleResult = await portfolioService.processStockSaleWithLogging(portfolio._id, {
+            symbol: saleRequest.symbol,
+            quantityToSell: quantityToSell,
+            saleType: saleType
+          });
+
+          console.log(`✅ Processed ${saleType} sale for ${saleRequest.symbol}:`, saleResult);
+        } catch (saleError) {
+          console.error(`❌ Failed to process sale for ${saleRequest.symbol}:`, saleError);
+          return res.status(400).json({ 
+            error: `Failed to process sale for ${saleRequest.symbol}: ${saleError.message}` 
+          });
+        }
+      }
+
+      // Refresh the portfolio to get updated holdings and cash balance after sales
+      const refreshedPortfolio = await Portfolio.findById(portfolio._id);
+      updatedHoldings = refreshedPortfolio.holdings;
+      
+      // Update the local portfolio object with the new cash balance
+      portfolio.cashBalance = refreshedPortfolio.cashBalance;
+
     } else {
       // DEFAULT/UPDATE: Merge holdings - update existing by symbol, add new ones
       for (const newHolding of req.body.holdings) {
-        const existingIndex = updatedHoldings.findIndex(h => h.symbol === newHolding.symbol);
-        
-        if (existingIndex >= 0) {
-          // Update existing holding
-          updatedHoldings[existingIndex] = { ...updatedHoldings[existingIndex], ...newHolding };
-        } else {
-          // Add new holding - validate required fields
-          if (!newHolding.symbol || !newHolding.sector || !newHolding.buyPrice || 
-              !newHolding.quantity || !newHolding.minimumInvestmentValueStock) {
-            return res.status(400).json({ 
-              error: `New holding ${newHolding.symbol} missing required fields (symbol, sector, buyPrice, quantity, minimumInvestmentValueStock)` 
-            });
-          }
-          updatedHoldings.push(newHolding);
+        // Sanitize and validate numeric fields
+        const sanitizedHolding = {
+          ...newHolding,
+          buyPrice: parseFloat(newHolding.buyPrice) || 0,
+          quantity: parseFloat(newHolding.quantity) || 0,
+          minimumInvestmentValueStock: parseFloat(newHolding.minimumInvestmentValueStock) || 0,
+          weight: parseFloat(newHolding.weight) || 0,
+          realizedPnL: parseFloat(newHolding.realizedPnL) || 0
+        };
+
+        // Validate that numeric fields are valid numbers (not NaN or negative where inappropriate)
+        if (isNaN(sanitizedHolding.buyPrice) || sanitizedHolding.buyPrice <= 0) {
+          return res.status(400).json({ 
+            error: `Holding ${newHolding.symbol}: buyPrice must be a valid positive number` 
+          });
         }
 
-        // Validate minimumInvestmentValueStock
-        if (newHolding.minimumInvestmentValueStock && newHolding.minimumInvestmentValueStock < 1) {
+        if (isNaN(sanitizedHolding.quantity) || sanitizedHolding.quantity <= 0) {
+          return res.status(400).json({ 
+            error: `Holding ${newHolding.symbol}: quantity must be a valid positive number` 
+          });
+        }
+
+        if (isNaN(sanitizedHolding.minimumInvestmentValueStock) || sanitizedHolding.minimumInvestmentValueStock < 1) {
           return res.status(400).json({ 
             error: `Holding ${newHolding.symbol}: minimumInvestmentValueStock must be >= 1` 
           });
+        }
+
+        const existingIndex = updatedHoldings.findIndex(h => h.symbol === sanitizedHolding.symbol);
+        
+        if (existingIndex >= 0) {
+          // Update existing holding
+          updatedHoldings[existingIndex] = { ...updatedHoldings[existingIndex], ...sanitizedHolding };
+        } else {
+          // Add new holding - validate required fields
+          if (!sanitizedHolding.symbol || !sanitizedHolding.sector) {
+            return res.status(400).json({ 
+              error: `New holding ${sanitizedHolding.symbol} missing required fields (symbol, sector)` 
+            });
+          }
+          updatedHoldings.push(sanitizedHolding);
         }
       }
     }
@@ -567,17 +644,29 @@ exports.updatePortfolio = asyncHandler(async (req, res) => {
     // Update portfolio holdings
     portfolio.holdings = updatedHoldings;
     
-    // Recalculate cash balance
-    const totalHoldingsCost = updatedHoldings.reduce((sum, holding) => 
-      sum + (holding.buyPrice * holding.quantity), 0);
-    portfolio.cashBalance = parseFloat((portfolio.minInvestment - totalHoldingsCost).toFixed(2));
+    // For sell actions, cash balance is already calculated by portfolioService
+    // For other actions, recalculate cash balance based on holdings only (ignore frontend data)
+    if (!stockAction.includes('sell')) {
+      const totalHoldingsCost = updatedHoldings.reduce((sum, holding) => {
+        const buyPrice = parseFloat(holding.buyPrice) || 0;
+        const quantity = parseFloat(holding.quantity) || 0;
+        return sum + (buyPrice * quantity);
+      }, 0);
+      
+      // Calculate cash balance from minInvestment minus actual holdings cost
+      const minInvestment = parseFloat(portfolio.minInvestment) || 0;
+      const calculatedCashBalance = minInvestment - totalHoldingsCost;
+      
+      // Ensure cash balance is valid and not negative
+      portfolio.cashBalance = Math.max(0, parseFloat(calculatedCashBalance.toFixed(2)));
+    }
     
     // Remove holdings and stockAction from further processing
     delete req.body.holdings;
     delete req.body.stockAction;
   }
 
-  // Update other allowed fields
+  // Update other allowed fields (ignore calculated fields from frontend)
   const allowedUpdates = [
     'name', 'description', 'subscriptionFee', 'expiryDate', 
     'PortfolioCategory', 'downloadLinks', 'youTubeLinks', 'timeHorizon', 
@@ -585,9 +674,23 @@ exports.updatePortfolio = asyncHandler(async (req, res) => {
     'lastRebalanceDate', 'nextRebalanceDate', 'monthlyContribution'
   ];
   
+  // Explicitly ignore calculated fields that should not come from frontend
+  const ignoredFields = [
+    'cashBalance', 'currentValue', 'holdingsValue', 'holdingsValueAtMarket',
+    'weight', 'CAGRSinceInception', 'monthlyGains', 'oneYearGains',
+    'historicalValues', 'daysSinceCreation'
+  ];
+  
   allowedUpdates.forEach(field => {
     if (req.body[field] !== undefined) {
       portfolio[field] = req.body[field];
+    }
+  });
+  
+  // Log warning if frontend tries to send calculated fields
+  ignoredFields.forEach(field => {
+    if (req.body[field] !== undefined) {
+      console.warn(`⚠️  Ignoring calculated field '${field}' from frontend - will be calculated by backend`);
     }
   });
 

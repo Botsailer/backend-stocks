@@ -334,8 +334,11 @@ const PortfolioSchema = new Schema({
 
 // Virtuals
 PortfolioSchema.virtual('holdingsValue').get(function() {
-  return this.holdings?.reduce((sum, holding) => 
-    sum + (holding.buyPrice * holding.quantity), 0);
+  return this.holdings?.reduce((sum, holding) => {
+    const buyPrice = parseFloat(holding.buyPrice) || 0;
+    const quantity = parseFloat(holding.quantity) || 0;
+    return sum + (buyPrice * quantity);
+  }, 0) || 0;
 });
 
 // Virtual for holdings value at current market prices (async helper needed)
@@ -352,17 +355,42 @@ PortfolioSchema.virtual('daysSinceCreation').get(function() {
 
 // Pre-save hook for data consistency
 PortfolioSchema.pre('save', function(next) {
+  // Sanitize holdings data to prevent NaN values
+  this.holdings.forEach(holding => {
+    holding.buyPrice = parseFloat(holding.buyPrice) || 0;
+    holding.quantity = parseFloat(holding.quantity) || 0;
+    holding.weight = parseFloat(holding.weight) || 0;
+    holding.minimumInvestmentValueStock = parseFloat(holding.minimumInvestmentValueStock) || 0;
+    holding.realizedPnL = parseFloat(holding.realizedPnL) || 0;
+  });
+
+  // Ensure cashBalance is valid
+  this.cashBalance = parseFloat(this.cashBalance) || 0;
+  if (isNaN(this.cashBalance)) {
+    this.cashBalance = 0;
+  }
+
   // Only auto-calculate currentValue if it's not explicitly being set
   // (allows manual updates from real-time calculations)
   if (!this.isModified('currentValue')) {
-    this.currentValue = this.cashBalance + this.holdingsValue;
+    const holdingsValue = this.holdingsValue || 0;
+    const cashBalance = this.cashBalance || 0;
+    this.currentValue = cashBalance + holdingsValue;
+  }
+
+  // Ensure currentValue is valid
+  this.currentValue = parseFloat(this.currentValue) || 0;
+  if (isNaN(this.currentValue)) {
+    this.currentValue = 0;
   }
 
   // Update holding weights based on CURRENT stored value
   this.holdings.forEach(holding => {
-    const holdingValue = holding.buyPrice * holding.quantity;
+    const buyPrice = parseFloat(holding.buyPrice) || 0;
+    const quantity = parseFloat(holding.quantity) || 0;
+    const holdingValue = buyPrice * quantity;
     holding.weight = this.currentValue > 0 ? 
-      (holdingValue / this.currentValue) * 100 : 0;
+      parseFloat(((holdingValue / this.currentValue) * 100).toFixed(2)) : 0;
   });
 
   // Set expiry date if not provided
