@@ -123,11 +123,81 @@ const cronController = require('../controllers/portfoliocroncontroller');
  *         buyPrice:
  *           type: number
  *           format: float
- *           example: 150.25
+ *           example: 150.75
+ *           description: "Current/average buy price per share"
+ *         originalBuyPrice:
+ *           type: number
+ *           format: float
+ *           example: 150.75
+ *           readOnly: true
+ *           description: "Preserved original buy price for reference"
+ *         averagePrice:
+ *           type: number
+ *           format: float
+ *           example: 148.50
+ *           readOnly: true
+ *           description: "Auto-calculated average price for multiple purchases"
  *         quantity:
  *           type: number
  *           format: float
  *           example: 10.5
+ *           description: "Number of shares (supports partial shares)"
+ *         totalQuantity:
+ *           type: number
+ *           format: float
+ *           example: 25.5
+ *           readOnly: true
+ *           description: "Total quantity including all purchases"
+ *         realizedPnL:
+ *           type: number
+ *           format: float
+ *           example: 125.50
+ *           readOnly: true
+ *           description: "Realized profit/loss from sales"
+ *         priceHistory:
+ *           type: array
+ *           readOnly: true
+ *           description: "History of all purchase prices for averaging calculations"
+ *           items:
+ *             type: object
+ *             properties:
+ *               price:
+ *                 type: number
+ *                 format: float
+ *                 example: 150.75
+ *               quantity:
+ *                 type: number
+ *                 format: float
+ *                 example: 10
+ *               date:
+ *                 type: string
+ *                 format: date-time
+ *               transactionType:
+ *                 type: string
+ *                 enum: ["buy", "sell"]
+ *                 example: "buy"
+ *         saleHistory:
+ *           type: array
+ *           readOnly: true
+ *           description: "History of sales transactions with P&L tracking"
+ *           items:
+ *             type: object
+ *             properties:
+ *               quantitySold:
+ *                 type: number
+ *                 format: float
+ *                 example: 5
+ *               salePrice:
+ *                 type: number
+ *                 format: float
+ *                 example: 165.25
+ *               pnL:
+ *                 type: number
+ *                 format: float
+ *                 example: 72.50
+ *               saleDate:
+ *                 type: string
+ *                 format: date-time
  *         minimumInvestmentValueStock:
  *           type: number
  *           example: 1000
@@ -155,10 +225,12 @@ const cronController = require('../controllers/portfoliocroncontroller');
  *           type: number
  *           example: 1200.50
  *           readOnly: true
+ *           description: "Remaining cash balance after stock purchases and including profits from sales"
  *         currentValue:
  *           type: number
  *           example: 10500.75
  *           readOnly: true
+ *           description: "Backend-calculated total portfolio value (auto-updated with market prices)"
  *         subscriptionFee:
  *           type: array
  *           items:
@@ -373,7 +445,15 @@ router.get('/portfolios/:id', requireAdmin, portfolioController.getPortfolioById
  * @swagger
  * /api/portfolios:
  *   post:
- *     summary: Create a new portfolio
+ *     summary: Create a new portfolio with production-level validation and stock market logic
+ *     description: |
+ *       Creates a new investment portfolio with comprehensive backend validation.
+ *       Features include:
+ *       - Automatic stock price averaging for multiple purchases of same stock
+ *       - Cash balance validation and tracking
+ *       - Real-time portfolio value calculation
+ *       - Anti-tampering validation
+ *       - Comprehensive financial integrity checks
  *     tags: [Portfolios]
  *     security:
  *       - bearerAuth: []
@@ -384,27 +464,48 @@ router.get('/portfolios/:id', requireAdmin, portfolioController.getPortfolioById
  *           schema:
  *             $ref: '#/components/schemas/Portfolio'
  *           example:
- *             name: "Tech Growth"
+ *             name: "Tech Growth Portfolio"
  *             description: 
  *               - key: "Strategy"
- *                 value: "Tech focused"
- *               - key: "Risk"
+ *                 value: "Tech-focused growth with dividend reinvestment"
+ *               - key: "Risk Level"
  *                 value: "High"
+ *               - key: "Target Return"
+ *                 value: "15-20% annually"
  *             subscriptionFee:
  *               - type: "monthly"
- *                 price: 19.99
+ *                 price: 29.99
  *               - type: "yearly"
- *                 price: 199.99
- *             minInvestment: 5000
- *             durationMonths: 12
+ *                 price: 299.99
+ *             minInvestment: 10000
+ *             durationMonths: 24
  *             PortfolioCategory: "Premium"
  *             holdings:
- *               - symbol: "TSLA"
+ *               - symbol: "AAPL"
+ *                 sector: "Technology"
+ *                 buyPrice: 150.75
+ *                 quantity: 15
+ *                 minimumInvestmentValueStock: 2261.25
+ *                 stockCapType: "large cap"
+ *                 status: "Hold"
+ *               - symbol: "TSLA" 
  *                 sector: "Automotive"
  *                 buyPrice: 250.50
- *                 quantity: 20
- *                 minimumInvestmentValueStock: 1000
+ *                 quantity: 10
+ *                 minimumInvestmentValueStock: 2505.00
  *                 stockCapType: "large cap"
+ *                 status: "Fresh-Buy"
+ *               - symbol: "NVDA"
+ *                 sector: "Technology"
+ *                 buyPrice: 420.80
+ *                 quantity: 12
+ *                 minimumInvestmentValueStock: 5049.60
+ *                 stockCapType: "large cap"
+ *                 status: "addon-buy"
+ *             timeHorizon: "Long-term (5+ years)"
+ *             rebalancing: "Quarterly review with threshold-based rebalancing"
+ *             index: "NASDAQ 100"
+ *             details: "Growth-oriented portfolio focusing on large-cap technology stocks"
  *             downloadLinks:
  *               - linkType: "pdf"
  *                 linkUrl: "https://example.com/prospectus.pdf"
@@ -413,13 +514,51 @@ router.get('/portfolios/:id', requireAdmin, portfolioController.getPortfolioById
  *               - link: "https://youtube.com/watch?v=xyz456"
  *     responses:
  *       201:
- *         description: Created portfolio
+ *         description: Portfolio created successfully with backend validation
  *         content:
  *           application/json:
  *             schema:
  *               $ref: '#/components/schemas/Portfolio'
+ *             example:
+ *               _id: "507f1f77bcf86cd799439011"
+ *               name: "Tech Growth Portfolio"
+ *               cashBalance: 184.15
+ *               currentValue: 9815.85
+ *               holdings:
+ *                 - symbol: "AAPL"
+ *                   averagePrice: 150.75
+ *                   originalBuyPrice: 150.75
+ *                   totalQuantity: 15
+ *                   priceHistory:
+ *                     - price: 150.75
+ *                       quantity: 15
+ *                       date: "2024-01-15T10:30:00Z"
+ *                       transactionType: "buy"
+ *                   weight: 23.02
+ *                   realizedPnL: 0
+ *                 - symbol: "TSLA"
+ *                   averagePrice: 250.50
+ *                   originalBuyPrice: 250.50
+ *                   totalQuantity: 10
+ *                   weight: 25.49
+ *               createdAt: "2024-01-15T10:30:00Z"
+ *               updatedAt: "2024-01-15T10:30:00Z"
  *       400:
- *         $ref: '#/components/responses/BadRequest'
+ *         description: Validation failed or insufficient funds
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 error:
+ *                   type: string
+ *                   example: "Threshold exceeded! Cash balance remaining: ₹2000 but you are trying to add worth ₹3000"
+ *                 symbol:
+ *                   type: string
+ *                   example: "AAPL"
+ *                 details:
+ *                   type: object
+ *                   description: "Additional validation details"
  *       401:
  *         $ref: '#/components/responses/Unauthorized'
  *       403:
@@ -431,13 +570,28 @@ router.post('/portfolios', requireAdmin, portfolioController.createPortfolio);
  * @swagger
  * /api/portfolios/{id}:
  *   patch:
- *     summary: Update portfolio by ID with flexible stock management
+ *     summary: Update portfolio with advanced stock market operations
  *     description: |
- *       Update portfolio with different stock actions:
- *       - **Default/Update**: Merge holdings - update existing stocks by symbol, add new ones
- *       - **Add**: Add new holdings to existing portfolio without affecting current holdings
- *       - **Delete**: Remove specified holdings by symbol from portfolio
- *       - **Replace**: Completely replace all holdings with provided ones
+ *       Advanced portfolio update with production-level stock market operations:
+ *       
+ *       **Stock Actions:**
+ *       - **update** (default): Update existing holdings by symbol, add new ones
+ *       - **add/buy**: Add new holdings with automatic price averaging if stock exists
+ *       - **sell**: Sell holdings using real-time prices with profit/loss calculation
+ *       - **delete**: Remove specified holdings by symbol from portfolio
+ *       - **replace**: Completely replace all holdings with provided ones
+ *       
+ *       **Stock Market Features:**
+ *       - **Price Averaging**: Multiple purchases of same stock automatically calculate weighted average
+ *       - **Real-time Selling**: Sales use current market prices, profits added to cash balance
+ *       - **Cash Validation**: "Threshold exceeded! Cash balance remaining: ₹X but you are trying to add worth ₹Y"
+ *       - **P&L Tracking**: Realized profits/losses tracked for each sale
+ *       - **Price History**: Complete transaction history maintained for each stock
+ *       
+ *       **Examples:**
+ *       - Buy AAPL at ₹150, then buy again at ₹160 → Average price becomes ₹155
+ *       - Sell AAPL at current market price ₹170 → Profit added to cash balance
+ *       - Insufficient funds validation prevents overspending
  *     tags: [Portfolios]
  *     security:
  *       - bearerAuth: []
@@ -457,12 +611,14 @@ router.post('/portfolios', requireAdmin, portfolioController.createPortfolio);
  *             properties:
  *               stockAction:
  *                 type: string
- *                 enum: [update, add, delete, replace]
+ *                 enum: [update, add, delete, replace, buy, sell]
+ *                 default: update
  *                 description: |
  *                   Action to perform on holdings:
  *                   - **update** (default): Update existing holdings by symbol, add new ones
- *                   - **add**: Add new holdings without affecting existing ones
- *                   - **delete**: Remove holdings by symbol
+ *                   - **add/buy**: Add new holdings with automatic price averaging for duplicate stocks
+ *                   - **sell**: Sell holdings using real-time market prices with P&L calculation
+ *                   - **delete**: Remove holdings by symbol (cash value returned to balance)
  *                   - **replace**: Replace entire holdings array
  *               holdings:
  *                 type: array
@@ -519,15 +675,139 @@ router.post('/portfolios', requireAdmin, portfolioController.createPortfolio);
  *                     buyPrice: 1000
  *                     quantity: 5
  *                     minimumInvestmentValueStock: 5000
+ *             buyStockWithAveraging:
+ *               summary: Buy additional shares (price averaging)
+ *               description: Buy more shares of existing stock - automatically calculates average price
+ *               value:
+ *                 stockAction: "buy"
+ *                 holdings:
+ *                   - symbol: "AAPL"
+ *                     sector: "Technology"
+ *                     buyPrice: 160.25
+ *                     quantity: 10
+ *                     minimumInvestmentValueStock: 1602.50
+ *                     stockCapType: "large cap"
+ *                     status: "addon-buy"
+ *             sellStockRealTime:
+ *               summary: Sell stock at real-time market price
+ *               description: Sell holdings using current market price, profits added to cash balance
+ *               value:
+ *                 stockAction: "sell"
+ *                 holdings:
+ *                   - symbol: "TSLA"
+ *                     quantity: 5
+ *                     saleType: "partial"
+ *             sellEntirePosition:
+ *               summary: Sell entire stock position
+ *               description: Sell all shares of a stock
+ *               value:
+ *                 stockAction: "sell"
+ *                 holdings:
+ *                   - symbol: "NVDA"
+ *                     saleType: "complete"
  *     responses:
  *       200:
- *         description: Portfolio updated successfully
+ *         description: Portfolio updated successfully with operation details
  *         content:
  *           application/json:
  *             schema:
- *               $ref: '#/components/schemas/Portfolio'
+ *               type: object
+ *               properties:
+ *                 portfolio:
+ *                   $ref: '#/components/schemas/Portfolio'
+ *                 operationResults:
+ *                   type: array
+ *                   description: Details of stock market operations performed
+ *                   items:
+ *                     type: object
+ *                     properties:
+ *                       success:
+ *                         type: boolean
+ *                         example: true
+ *                       operation:
+ *                         type: object
+ *                         properties:
+ *                           type:
+ *                             type: string
+ *                             enum: ["new_purchase", "averaged_purchase", "partial_sale", "complete_sale"]
+ *                             example: "averaged_purchase"
+ *                           symbol:
+ *                             type: string
+ *                             example: "AAPL"
+ *                           previousPrice:
+ *                             type: number
+ *                             example: 150.75
+ *                           newPrice:
+ *                             type: number
+ *                             example: 160.25
+ *                           newAveragePrice:
+ *                             type: number
+ *                             example: 155.50
+ *                       cashImpact:
+ *                         type: object
+ *                         properties:
+ *                           previousBalance:
+ *                             type: number
+ *                             example: 2000.50
+ *                           newBalance:
+ *                             type: number
+ *                             example: 397.50
+ *                           amountUsed:
+ *                             type: number
+ *                             example: 1603.00
+ *                           profitAdded:
+ *                             type: number
+ *                             example: 125.50
+ *             example:
+ *               portfolio:
+ *                 _id: "507f1f77bcf86cd799439011"
+ *                 name: "Tech Growth Portfolio"
+ *                 cashBalance: 397.50
+ *                 currentValue: 11603.25
+ *                 holdings:
+ *                   - symbol: "AAPL"
+ *                     averagePrice: 155.50
+ *                     originalBuyPrice: 150.75
+ *                     totalQuantity: 25
+ *                     priceHistory:
+ *                       - price: 150.75
+ *                         quantity: 15
+ *                         date: "2024-01-15T10:30:00Z"
+ *                         transactionType: "buy"
+ *                       - price: 160.25
+ *                         quantity: 10
+ *                         date: "2024-01-16T14:20:00Z"
+ *                         transactionType: "buy"
+ *                     weight: 38.87
+ *                     realizedPnL: 0
+ *               operationResults:
+ *                 - success: true
+ *                   operation:
+ *                     type: "averaged_purchase"
+ *                     symbol: "AAPL"
+ *                     previousPrice: 150.75
+ *                     newPrice: 160.25
+ *                     newAveragePrice: 155.50
+ *                   cashImpact:
+ *                     previousBalance: 2000.50
+ *                     newBalance: 397.50
+ *                     amountUsed: 1602.50
  *       400:
- *         $ref: '#/components/responses/BadRequest'
+ *         description: Validation failed, insufficient funds, or operation error
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 error:
+ *                   type: string
+ *                   example: "Threshold exceeded! Cash balance remaining: ₹500 but you are trying to add worth ₹1600"
+ *                 symbol:
+ *                   type: string
+ *                   example: "AAPL"
+ *                 details:
+ *                   type: object
+ *                   description: "Additional operation details and validation results"
  *       401:
  *         $ref: '#/components/responses/Unauthorized'
  *       403:
@@ -1058,5 +1338,220 @@ router.get('/portfolios/:portfolioId/performance', chartDataController.getPortfo
  *         description: Cleanup results
  */
 router.post('/chart-data/cleanup-duplicates', requireAdmin, chartDataController.cleanupDuplicates);
+
+// ================================
+// Portfolio Value Management
+// ================================
+
+/**
+ * @swagger
+ * /api/portfolios/{id}/recalculate:
+ *   post:
+ *     summary: Manually recalculate portfolio value
+ *     description: Recalculates portfolio value using current or closing prices and updates the stored value
+ *     tags: [Portfolios]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema:
+ *           type: string
+ *         description: Portfolio ID
+ *     requestBody:
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               priceType:
+ *                 type: string
+ *                 enum: [closing, current]
+ *                 default: current
+ *                 description: Type of price to use for calculation
+ *               createPriceLog:
+ *                 type: boolean
+ *                 default: true
+ *                 description: Whether to create a price log entry
+ *           example:
+ *             priceType: "current"
+ *             createPriceLog: true
+ *     responses:
+ *       200:
+ *         description: Portfolio value recalculated
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 portfolioId:
+ *                   type: string
+ *                 name:
+ *                   type: string
+ *                 oldValue:
+ *                   type: number
+ *                 newValue:
+ *                   type: number
+ *                 change:
+ *                   type: number
+ *                 changePercent:
+ *                   type: number
+ *                 priceType:
+ *                   type: string
+ *                 updatedAt:
+ *                   type: string
+ *                   format: date-time
+ *                 priceLogCreated:
+ *                   type: boolean
+ *       400:
+ *         $ref: '#/components/responses/BadRequest'
+ *       401:
+ *         $ref: '#/components/responses/Unauthorized'
+ *       403:
+ *         $ref: '#/components/responses/Forbidden'
+ *       404:
+ *         $ref: '#/components/responses/NotFound'
+ */
+router.post('/portfolios/:id/recalculate', requireAdmin, portfolioController.recalculatePortfolioValue);
+
+/**
+ * @swagger
+ * /api/portfolios/update-all:
+ *   post:
+ *     summary: Update all portfolio values with current market prices
+ *     description: Mass update all portfolios with current market prices and create price logs
+ *     tags: [Portfolios]
+ *     security:
+ *       - bearerAuth: []
+ *     requestBody:
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               priceType:
+ *                 type: string
+ *                 enum: [closing, current]
+ *                 default: current
+ *                 description: Type of price to use for calculation
+ *               createPriceLogs:
+ *                 type: boolean
+ *                 default: true
+ *                 description: Whether to create price log entries
+ *           example:
+ *             priceType: "current"
+ *             createPriceLogs: true
+ *     responses:
+ *       200:
+ *         description: All portfolios updated
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 totalPortfolios:
+ *                   type: integer
+ *                 updated:
+ *                   type: integer
+ *                 failed:
+ *                   type: integer
+ *                 priceType:
+ *                   type: string
+ *                 results:
+ *                   type: array
+ *                   items:
+ *                     type: object
+ *                     properties:
+ *                       portfolioId:
+ *                         type: string
+ *                       name:
+ *                         type: string
+ *                       status:
+ *                         type: string
+ *                         enum: [success, error]
+ *                       oldValue:
+ *                         type: number
+ *                       newValue:
+ *                         type: number
+ *                       change:
+ *                         type: number
+ *                       changePercent:
+ *                         type: number
+ *                       error:
+ *                         type: string
+ *       401:
+ *         $ref: '#/components/responses/Unauthorized'
+ *       403:
+ *         $ref: '#/components/responses/Forbidden'
+ */
+router.post('/portfolios/update-all', requireAdmin, portfolioController.updateAllPortfolioValues);
+
+/**
+ * @swagger
+ * /api/portfolios/{id}/realtime-value:
+ *   get:
+ *     summary: Get real-time portfolio value comparison
+ *     description: Compare stored portfolio value with real-time calculated value and indicate sync status
+ *     tags: [Portfolios]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema:
+ *           type: string
+ *         description: Portfolio ID
+ *     responses:
+ *       200:
+ *         description: Real-time value comparison
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 portfolioId:
+ *                   type: string
+ *                 name:
+ *                   type: string
+ *                 storedValue:
+ *                   type: number
+ *                   description: Currently stored portfolio value
+ *                 realTimeValue:
+ *                   type: number
+ *                   description: Real-time calculated value
+ *                 difference:
+ *                   type: number
+ *                   description: Difference between real-time and stored
+ *                 differencePercent:
+ *                   type: number
+ *                   description: Percentage difference
+ *                 isInSync:
+ *                   type: boolean
+ *                   description: Whether values are in sync (within 1% tolerance)
+ *                 lastUpdated:
+ *                   type: string
+ *                   format: date-time
+ *                   description: When the stored value was last updated
+ *                 timeSinceUpdate:
+ *                   type: string
+ *                   description: Human readable time since last update
+ *                 marketStatus:
+ *                   type: string
+ *                   enum: [open, closed]
+ *                   description: Current market status
+ *                 calculationTime:
+ *                   type: string
+ *                   format: date-time
+ *                   description: When this calculation was performed
+ *       401:
+ *         $ref: '#/components/responses/Unauthorized'
+ *       403:
+ *         $ref: '#/components/responses/Forbidden'
+ *       404:
+ *         $ref: '#/components/responses/NotFound'
+ */
+router.get('/portfolios/:id/realtime-value', requireAdmin, portfolioController.getRealTimeValue);
 
 module.exports = router;

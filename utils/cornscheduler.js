@@ -559,9 +559,17 @@ class CronScheduler {
         timezone: "Asia/Kolkata"
       });
 
-      // Hourly job for regular updates
-      const hourlyJob = cron.schedule('0 * * * *', () => {
-        runPriceUpdate('Hourly', 'regular');
+      // Hourly job for regular updates + portfolio value sync
+      const hourlyJob = cron.schedule('0 * * * *', async () => {
+        await runPriceUpdate('Hourly', 'regular');
+        // Update portfolio values after price updates
+        const portfolioService = require('../services/portfolioservice');
+        try {
+          await portfolioService.updateAllPortfolioValues();
+          CronLogger.info('✅ Portfolio values synced with current prices');
+        } catch (err) {
+          CronLogger.error('❌ Portfolio value sync failed', err);
+        }
       }, {
         scheduled: false,
         timezone: "Asia/Kolkata"
@@ -575,16 +583,16 @@ class CronScheduler {
         timezone: "Asia/Kolkata"
       });
 
-      // Closing price update - 3:45 PM IST (Indian market close time)
-      const closingJob = cron.schedule('45 15 * * *', () => {
-        updateClosingPrices();
+      // Closing price update + chained portfolio valuation - 3:45 PM IST
+      const closingJob = cron.schedule('45 15 * * *', async () => {
+        await runClosingSequence();
       }, {
         scheduled: false,
         timezone: "Asia/Kolkata"
       });
 
       this.jobs = [
-        { name: 'Hourly Update', job: hourlyJob, type: 'hourly' },
+        { name: 'Hourly Update + Portfolio Sync', job: hourlyJob, type: 'hourly' },
         { name: 'Morning Update', job: morningJob, type: 'morning' },
         { name: 'Afternoon Update', job: afternoonJob, type: 'afternoon' },
         { name: 'Closing Price Update', job: closingJob, type: 'closing' }
@@ -711,9 +719,76 @@ class CronScheduler {
   async triggerManualUpdate(updateType = 'regular') {
     CronLogger.info(`🔧 Manual ${updateType} update triggered`);
     if (updateType === 'closing') {
-      await updateClosingPrices();
+      await runClosingSequence();
     } else {
       await runPriceUpdate('Manual', updateType);
+    }
+  }
+}
+
+// Chained closing price update + portfolio valuation with retry logic
+async function runClosingSequence(opts = { maxRetries: 3, retryDelayMs: 5000 }) {
+  const { maxRetries, retryDelayMs } = opts;
+  const startTs = Date.now();
+  CronLogger.info('🔄 Starting closing sequence: updateClosingPrices -> logAllPortfoliosDaily (closing)');
+  const portfolioService = require('../services/portfolioservice');
+
+  let closingResult = null;
+  for (let attempt = 1; attempt <= maxRetries; attempt++) {
+    try {
+      CronLogger.info(`📈 Closing price update attempt ${attempt}/${maxRetries}`);
+      closingResult = await updateClosingPrices();
+      if (closingResult && closingResult.success !== false) {
+        CronLogger.success('✅ Closing prices updated successfully');
+        break;
+      }
+      throw new Error(closingResult?.error || 'Unknown closing update failure');
+    } catch (err) {
+      CronLogger.error(`Closing price attempt ${attempt} failed`, err);
+      if (attempt < maxRetries) {
+        CronLogger.info(`⏳ Retrying closing update in ${retryDelayMs/1000}s`);
+        await new Promise(r => setTimeout(r, retryDelayMs));
+      } else {
+        CronLogger.error('❌ Exhausted retries for closing price update');
+        return { success: false, stage: 'closing', error: err.message, duration: Date.now() - startTs };
+      }
+    }
+  }
+
+  // Portfolio valuation using closing prices
+  let valuationResult = null;
+  for (let attempt = 1; attempt <= maxRetries; attempt++) {
+    try {
+      CronLogger.info(`🧮 Portfolio valuation (closing) attempt ${attempt}/${maxRetries}`);
+      valuationResult = await portfolioService.logAllPortfoliosDaily(true);
+      CronLogger.success('✅ Portfolio valuation with closing prices completed');
+      const failed = valuationResult.filter(r => r.status === 'failed');
+      if (failed.length) {
+        CronLogger.error(`⚠️ ${failed.length} portfolio(s) failed valuation`);
+      }
+      return {
+        success: true,
+        stage: 'valuation',
+        closing: closingResult,
+        valuation: valuationResult,
+        failedCount: failed.length,
+        duration: Date.now() - startTs
+      };
+    } catch (err) {
+      CronLogger.error(`Valuation attempt ${attempt} failed`, err);
+      if (attempt < maxRetries) {
+        CronLogger.info(`⏳ Retrying valuation in ${retryDelayMs/1000}s`);
+        await new Promise(r => setTimeout(r, retryDelayMs));
+      } else {
+        CronLogger.error('❌ Exhausted retries for portfolio valuation');
+        return {
+          success: false,
+          stage: 'valuation',
+          closing: closingResult,
+            error: err.message,
+          duration: Date.now() - startTs
+        };
+      }
     }
   }
 }
@@ -724,5 +799,6 @@ module.exports = {
   CronLogger,
   PriceUpdater,
   runPriceUpdate,
-  updateClosingPrices
+  updateClosingPrices,
+  runClosingSequence
 };

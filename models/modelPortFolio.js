@@ -51,6 +51,12 @@ const StockHoldingSchema = new Schema({
     required: true,
     min: 0.01
   },
+  originalBuyPrice: {
+    type: Number,
+    required: false,
+    min: 0.01,
+    // Preserve the first purchase price for comparison
+  },
   minimumInvestmentValueStock: {
     type: Number,
     required: true,
@@ -60,6 +66,75 @@ const StockHoldingSchema = new Schema({
     type: Number,
     required: true,
     min: 1
+  },
+  realizedPnL: {
+    type: Number,
+    default: 0,
+    // Track cumulative realized profit/loss from sales
+  },
+  priceHistory: [{
+    date: {
+      type: Date,
+      default: Date.now
+    },
+    price: {
+      type: Number,
+      required: true,
+      min: 0.01
+    },
+    quantity: {
+      type: Number,
+      required: true
+      // Positive for purchases, negative for sales
+    },
+    investment: {
+      type: Number,
+      required: false
+    },
+    saleValue: {
+      type: Number,
+      required: false
+    },
+    profitLoss: {
+      type: Number,
+      required: false
+    },
+    action: {
+      type: String,
+      enum: ['buy', 'sell', 'partial_sell', 'complete_sell'],
+      required: true
+    }
+  }],
+  soldDate: {
+    type: Date,
+    required: false
+    // Date when position was completely sold
+  },
+  finalSalePrice: {
+    type: Number,
+    required: false,
+    min: 0.01
+  },
+  totalSaleValue: {
+    type: Number,
+    required: false
+  },
+  totalProfitLoss: {
+    type: Number,
+    required: false
+  },
+  lastSaleDate: {
+    type: Date,
+    required: false
+    // Date of last partial sale
+  },
+  lastUpdated: {
+    type: Date,
+    default: Date.now
+  },
+  createdAt: {
+    type: Date,
+    default: Date.now
   }
 }, { _id: false });
 
@@ -263,6 +338,13 @@ PortfolioSchema.virtual('holdingsValue').get(function() {
     sum + (holding.buyPrice * holding.quantity), 0);
 });
 
+// Virtual for holdings value at current market prices (async helper needed)
+PortfolioSchema.virtual('holdingsValueAtMarket').get(function() {
+  // This is a placeholder - actual calculation needs to be async
+  // Use portfolioService.calculateRealTimeValue() instead
+  return this.currentValue - this.cashBalance;
+});
+
 PortfolioSchema.virtual('daysSinceCreation').get(function() {
   if (!this.createdAt) return 0;
   return Math.floor((Date.now() - this.createdAt) / 86400000);
@@ -270,10 +352,13 @@ PortfolioSchema.virtual('daysSinceCreation').get(function() {
 
 // Pre-save hook for data consistency
 PortfolioSchema.pre('save', function(next) {
-  // Ensure currentValue matches actual assets
-  this.currentValue = this.cashBalance + this.holdingsValue;
+  // Only auto-calculate currentValue if it's not explicitly being set
+  // (allows manual updates from real-time calculations)
+  if (!this.isModified('currentValue')) {
+    this.currentValue = this.cashBalance + this.holdingsValue;
+  }
 
-  // Update holding weights
+  // Update holding weights based on CURRENT stored value
   this.holdings.forEach(holding => {
     const holdingValue = holding.buyPrice * holding.quantity;
     holding.weight = this.currentValue > 0 ? 
@@ -435,6 +520,35 @@ PortfolioSchema.statics.initializeGains = async function() {
   }
 
   return results;
+};
+
+// Method to update portfolio value with current market prices
+PortfolioSchema.methods.updateWithMarketPrices = async function() {
+  const StockSymbol = mongoose.model('StockSymbol');
+  let totalValue = parseFloat(this.cashBalance) || 0;
+  const symbols = this.holdings.map(h => h.symbol);
+  
+  if (symbols.length > 0) {
+    const stocks = await StockSymbol.find({ symbol: { $in: symbols } });
+    const priceMap = new Map();
+    stocks.forEach(stock => {
+      priceMap.set(stock.symbol, stock.currentPrice || 0);
+    });
+
+    this.holdings.forEach(holding => {
+      const currentPrice = priceMap.get(holding.symbol) || holding.buyPrice;
+      const holdingValue = currentPrice * holding.quantity;
+      totalValue += holdingValue;
+      
+      // Update weight based on current market price
+      if (totalValue > 0) {
+        holding.weight = (holdingValue / totalValue) * 100;
+      }
+    });
+  }
+  
+  this.currentValue = parseFloat(totalValue.toFixed(2));
+  return this;
 };
 
 // Recalculate all gains

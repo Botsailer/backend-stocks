@@ -1,3 +1,6 @@
+// NOTE: Scheduling logic migrated to utils/cornscheduler.js (runClosingSequence + CronScheduler)
+// This controller now only exposes manual / on-demand valuation helpers.
+// (Previous internal cron at 3:45 PM removed to avoid duplicate runs.)
 const cron = require('node-cron');
 const winston = require('winston');
 const portfolioService = require('../services/portfolioservice');
@@ -121,43 +124,9 @@ const sendCriticalAlert = async (error) => {
   logger.info('📧 Sent critical alert');
 };
 
-// Cron job scheduler
+// Deprecated: initScheduledJobs (left as no-op for backward compatibility)
 exports.initScheduledJobs = () => {
-  // Schedule at 3:45 PM IST
-  cron.schedule(CRON_SCHEDULE, async () => {
-    const now = new Date();
-    logger.info(`⌚ Daily portfolio valuation started at ${now.toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' })} IST`);
-    
-    try {
-      const portfolios = await modelPortFolio.find();
-      
-      for (const portfolio of portfolios) {
-        try {
-          // 1. Calculate with real-time prices
-          const portfolioValue = await portfolioService.calculateRealTimeValue(portfolio);
-          
-          // 2. Update portfolio current value (triggers historical tracking)
-          await Portfolio.findByIdAndUpdate(portfolio._id, { currentValue: portfolioValue });
-          
-          // 3. Save daily log
-          await PriceLog.createOrUpdateDailyLog(portfolio._id, {
-            portfolioValue,
-            date: now,
-            usedClosingPrices: false
-          });
-          
-          logger.info(`✅ ${portfolio.name}: ₹${portfolioValue.toFixed(2)} logged`);
-        } catch (error) {
-          logger.error(`❌ Failed ${portfolio.name}: ${error.message}`);
-        }
-      }
-    } catch (error) {
-      logger.error(`🔥 Critical error in daily valuation: ${error.stack}`);
-    }
-  }, {
-    scheduled: true,
-    timezone: 'Asia/Kolkata' // Force IST timezone
-  });
+  logger.warn('initScheduledJobs deprecated: scheduling handled by CronScheduler in utils/cornscheduler.js');
 };
 
 // Manual trigger with enhanced retry

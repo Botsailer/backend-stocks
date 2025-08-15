@@ -1,16 +1,362 @@
 const { default: mongoose } = require('mongoose');
 const Portfolio = require('../models/modelPortFolio');
 const PriceLog = require('../models/PriceLog');
+const portfolioService = require('../services/portfolioservice');
+const { PortfolioCalculationValidator, calcLogger } = require('../utils/portfolioCalculationValidator');
 
 const asyncHandler = fn => (req, res, next) => {
   Promise.resolve(fn(req, res, next)).catch(next);
 };
 
+/**
+ * Production-level portfolio creation with comprehensive validation
+ */
+exports.createPortfolio = asyncHandler(async (req, res) => {
+  const requestData = req.body;
+  
+  try {
+    // Step 1: Validate required fields
+    const requiredFields = ['name', 'subscriptionFee', 'minInvestment', 'durationMonths'];
+    const missingFields = requiredFields.filter(field => !requestData[field]);
+    
+    if (missingFields.length > 0) {
+      return res.status(400).json({ 
+        error: 'Missing required fields',
+        missingFields,
+        requiredFields
+      });
+    }
+
+    // Step 2: Validate subscription fee structure
+    if (!Array.isArray(requestData.subscriptionFee) || requestData.subscriptionFee.length === 0) {
+      return res.status(400).json({ error: 'At least one subscription fee is required' });
+    }
+
+    const invalidFees = requestData.subscriptionFee.filter(fee => 
+      !fee.type || typeof fee.price !== 'number' || fee.price <= 0
+    );
+    
+    if (invalidFees.length > 0) {
+      return res.status(400).json({ 
+        error: 'Invalid subscription fee structure',
+        details: 'All fees must have type and price > 0'
+      });
+    }
+
+    // Step 3: Validate and calculate portfolio financial integrity
+    const portfolioSummary = PortfolioCalculationValidator.calculatePortfolioSummary({
+      holdings: requestData.holdings || [],
+      minInvestment: requestData.minInvestment,
+      currentMarketPrices: {} // Use buy prices for new portfolios
+    });
+
+    if (!portfolioSummary.isFinanciallyValid) {
+      return res.status(400).json({ 
+        error: 'Portfolio financial validation failed',
+        details: {
+          weightValidation: portfolioSummary.weightValidation,
+          minInvestmentValidation: portfolioSummary.minInvestmentValidation,
+          summary: portfolioSummary
+        }
+      });
+    }
+
+    // Step 4: Detect potential tampering
+    const tamperingCheck = PortfolioCalculationValidator.detectCalculationTampering(
+      requestData,
+      { id: 'new' }
+    );
+
+    if (tamperingCheck.isTampered) {
+      calcLogger.warn('Portfolio creation tampering detected', { tamperingCheck, requestData });
+      return res.status(400).json({ 
+        error: 'Calculation validation failed',
+        details: 'Frontend calculations do not match backend validation',
+        validation: tamperingCheck
+      });
+    }
+
+    // Step 5: Validate benchmark symbol if provided
+    if (requestData.compareWith) {
+      const StockSymbol = require('../models/stockSymbol');
+      let symbolExists = false;
+      
+      if (/^[0-9a-fA-F]{24}$/.test(requestData.compareWith)) {
+        symbolExists = await StockSymbol.exists({ _id: requestData.compareWith });
+      } else {
+        symbolExists = await StockSymbol.exists({ symbol: requestData.compareWith });
+      }
+      
+      if (!symbolExists) {
+        return res.status(400).json({ 
+          error: `Benchmark symbol "${requestData.compareWith}" does not exist` 
+        });
+      }
+    }
+
+    // Step 6: Create portfolio with validated data
+    const portfolioData = {
+      name: requestData.name.trim(),
+      description: requestData.description || [],
+      subscriptionFee: requestData.subscriptionFee,
+      minInvestment: portfolioSummary.minInvestment,
+      durationMonths: requestData.durationMonths,
+      expiryDate: requestData.expiryDate,
+      holdings: requestData.holdings || [],
+      PortfolioCategory: requestData.PortfolioCategory || 'Basic',
+      downloadLinks: requestData.downloadLinks || [],
+      youTubeLinks: requestData.youTubeLinks || [],
+      timeHorizon: requestData.timeHorizon || '',
+      rebalancing: requestData.rebalancing || '',
+      index: requestData.index || '',
+      details: requestData.details || '',
+      lastRebalanceDate: requestData.lastRebalanceDate,
+      nextRebalanceDate: requestData.nextRebalanceDate,
+      monthlyContribution: requestData.monthlyContribution || 0,
+      compareWith: requestData.compareWith || '',
+      
+      // Use backend-calculated values
+      cashBalance: portfolioSummary.cashBalance,
+      currentValue: portfolioSummary.totalPortfolioValueAtBuy
+    };
+
+    const portfolio = new Portfolio(portfolioData);
+    const savedPortfolio = await portfolio.save();
+
+    calcLogger.info('Portfolio created successfully', {
+      portfolioId: savedPortfolio._id,
+      name: savedPortfolio.name,
+      totalInvestment: portfolioSummary.totalActualInvestment,
+      holdingsCount: savedPortfolio.holdings.length
+    });
+
+    res.status(201).json(savedPortfolio);
+    
+  } catch (error) {
+    calcLogger.error('Portfolio creation failed', { 
+      error: error.message, 
+      requestData: requestData.name 
+    });
+    
+    if (error.code === 11000) {
+      return res.status(400).json({ error: 'Portfolio name already exists' });
+    }
+    
+    res.status(500).json({ 
+      error: 'Failed to create portfolio', 
+      details: error.message 
+    });
+  }
+});
+
+/**
+ * Production-level portfolio update with comprehensive validation
+ */
+exports.updatePortfolio = asyncHandler(async (req, res) => {
+  const portfolioId = req.params.id;
+  const updateData = req.body;
+  
+  try {
+    // Step 1: Find existing portfolio
+    const existingPortfolio = await Portfolio.findById(portfolioId);
+    if (!existingPortfolio) {
+      return res.status(404).json({ error: 'Portfolio not found' });
+    }
+
+    // Step 2: Determine update strategy based on stockAction
+    const stockAction = updateData.stockAction || 'update';
+    const validActions = ['update', 'add', 'delete', 'replace'];
+    
+    if (!validActions.includes(stockAction)) {
+      return res.status(400).json({ 
+        error: 'Invalid stockAction',
+        validActions
+      });
+    }
+
+    let updatedHoldings = [...existingPortfolio.holdings];
+
+    // Step 3: Handle holdings modifications
+    if (updateData.holdings && updateData.holdings.length > 0) {
+      switch (stockAction) {
+        case 'add':
+          // Add new holdings to existing ones
+          const newSymbols = updateData.holdings.map(h => h.symbol.toUpperCase());
+          const existingSymbols = updatedHoldings.map(h => h.symbol.toUpperCase());
+          const duplicates = newSymbols.filter(symbol => existingSymbols.includes(symbol));
+          
+          if (duplicates.length > 0) {
+            return res.status(400).json({ 
+              error: 'Cannot add existing symbols',
+              duplicates
+            });
+          }
+          
+          updatedHoldings = [...updatedHoldings, ...updateData.holdings];
+          break;
+          
+        case 'delete':
+          // Remove holdings by symbol
+          const symbolsToDelete = updateData.holdings.map(h => h.symbol.toUpperCase());
+          updatedHoldings = updatedHoldings.filter(
+            h => !symbolsToDelete.includes(h.symbol.toUpperCase())
+          );
+          break;
+          
+        case 'replace':
+          // Replace entire holdings array
+          updatedHoldings = updateData.holdings;
+          break;
+          
+        case 'update':
+        default:
+          // Update existing holdings by symbol, add new ones
+          const updateMap = new Map(
+            updateData.holdings.map(h => [h.symbol.toUpperCase(), h])
+          );
+          
+          // Update existing holdings
+          updatedHoldings = updatedHoldings.map(existing => {
+            const update = updateMap.get(existing.symbol.toUpperCase());
+            if (update) {
+              updateMap.delete(existing.symbol.toUpperCase());
+              return { ...existing.toObject(), ...update };
+            }
+            return existing;
+          });
+          
+          // Add new holdings
+          updateMap.forEach(newHolding => {
+            updatedHoldings.push(newHolding);
+          });
+          break;
+      }
+    }
+
+    // Step 4: Prepare updated portfolio data
+    const portfolioUpdateData = {
+      ...updateData,
+      holdings: updatedHoldings
+    };
+    
+    // Remove stockAction from final data
+    delete portfolioUpdateData.stockAction;
+
+    // Step 5: Validate updated portfolio if holdings were modified
+    if (updateData.holdings || updateData.minInvestment) {
+      const portfolioSummary = PortfolioCalculationValidator.calculatePortfolioSummary({
+        holdings: updatedHoldings,
+        minInvestment: updateData.minInvestment || existingPortfolio.minInvestment,
+        currentMarketPrices: {}
+      });
+
+      if (!portfolioSummary.isFinanciallyValid) {
+        return res.status(400).json({ 
+          error: 'Updated portfolio financial validation failed',
+          details: {
+            weightValidation: portfolioSummary.weightValidation,
+            minInvestmentValidation: portfolioSummary.minInvestmentValidation,
+            summary: portfolioSummary
+          }
+        });
+      }
+
+      // Update with backend-calculated values
+      portfolioUpdateData.cashBalance = portfolioSummary.cashBalance;
+      portfolioUpdateData.currentValue = portfolioSummary.totalPortfolioValueAtBuy;
+
+      // Detect tampering if financial data was provided
+      if (updateData.cashBalance !== undefined || updateData.currentValue !== undefined) {
+        const tamperingCheck = PortfolioCalculationValidator.detectCalculationTampering(
+          {
+            ...updateData,
+            holdings: updatedHoldings,
+            minInvestment: updateData.minInvestment || existingPortfolio.minInvestment
+          },
+          existingPortfolio
+        );
+
+        if (tamperingCheck.isTampered) {
+          calcLogger.warn('Portfolio update tampering detected', { 
+            portfolioId, 
+            tamperingCheck 
+          });
+          return res.status(400).json({ 
+            error: 'Calculation validation failed',
+            details: 'Frontend calculations do not match backend validation',
+            validation: tamperingCheck
+          });
+        }
+      }
+    }
+
+    // Step 6: Validate benchmark symbol if changed
+    if (portfolioUpdateData.compareWith && 
+        portfolioUpdateData.compareWith !== existingPortfolio.compareWith) {
+      const StockSymbol = require('../models/stockSymbol');
+      let symbolExists = false;
+      
+      if (/^[0-9a-fA-F]{24}$/.test(portfolioUpdateData.compareWith)) {
+        symbolExists = await StockSymbol.exists({ _id: portfolioUpdateData.compareWith });
+      } else {
+        symbolExists = await StockSymbol.exists({ symbol: portfolioUpdateData.compareWith });
+      }
+      
+      if (!symbolExists) {
+        return res.status(400).json({ 
+          error: `Benchmark symbol "${portfolioUpdateData.compareWith}" does not exist` 
+        });
+      }
+    }
+
+    // Step 7: Update portfolio
+    const updatedPortfolio = await Portfolio.findByIdAndUpdate(
+      portfolioId,
+      portfolioUpdateData,
+      { 
+        new: true, 
+        runValidators: true,
+        context: 'query'
+      }
+    );
+
+    calcLogger.info('Portfolio updated successfully', {
+      portfolioId,
+      stockAction,
+      holdingsCount: updatedPortfolio.holdings.length,
+      updatedFields: Object.keys(updateData)
+    });
+
+    res.json(updatedPortfolio);
+    
+  } catch (error) {
+    calcLogger.error('Portfolio update failed', { 
+      portfolioId, 
+      error: error.message 
+    });
+    
+    if (error.code === 11000) {
+      return res.status(400).json({ error: 'Portfolio name already exists' });
+    }
+    
+    res.status(500).json({ 
+      error: 'Failed to update portfolio', 
+      details: error.message 
+    });
+  }
+});
+
+/**
+ * Get all portfolios
+ */
 exports.getAllPortfolios = asyncHandler(async (req, res) => { 
   const portfolios = await Portfolio.find().sort('name');
   res.status(200).json(portfolios);
 });
 
+/**
+ * Get portfolio by ID
+ */
 exports.getPortfolioById = asyncHandler(async (req, res) => {
   const portfolio = await Portfolio.findById(req.params.id);
   if (!portfolio) {
@@ -19,113 +365,17 @@ exports.getPortfolioById = asyncHandler(async (req, res) => {
   res.status(200).json(portfolio);
 });
 
-exports.createPortfolio = asyncHandler(async (req, res) => {
-  const {
-    name,
-    description = [],
-    subscriptionFee,
-    minInvestment,
-    durationMonths,
-    expiryDate,
-    holdings = [],
-    PortfolioCategory = 'Basic',
-    downloadLinks = [],
-    youTubeLinks = [],
-    timeHorizon = '',
-    rebalancing = '',
-    index = '',
-    details = '',
-    lastRebalanceDate = '',
-    nextRebalanceDate = '',
-    monthlyContribution = 0,
-    compareWith = ''
-  } = req.body;
-
-  // Validate required fields
-  if (!name || subscriptionFee == null || minInvestment == null || !durationMonths) {
-    return res.status(400).json({ error: 'Missing required fields' });
+/**
+ * Delete portfolio
+ */
+exports.deletePortfolio = asyncHandler(async (req, res) => {
+  const portfolio = await Portfolio.findById(req.params.id);
+  if (!portfolio) {
+    return res.status(404).json({ error: 'Portfolio not found' });
   }
-
-  // Validate subscription fee structure
-  if (!Array.isArray(subscriptionFee) || subscriptionFee.length === 0 ||
-      subscriptionFee.some(fee => !fee.type || fee.price == null)) {
-    return res.status(400).json({ error: 'Invalid subscription fee structure' });
-  }
-
-  // Validate description items
-  if (description.some(item => !item.key || !item.value)) {
-    return res.status(400).json({ error: 'Description items must have key and value' });
-  }
-
-  // Validate holdings
-  if (holdings.some(holding => 
-    !holding.minimumInvestmentValueStock || 
-    holding.minimumInvestmentValueStock < 1
-  )) {
-    return res.status(400).json({ 
-      error: 'All holdings must have minimumInvestmentValueStock >= 1' 
-    });
-  }
-
-  // Validate holdings cost doesn't exceed minInvestment
-  const totalCost = holdings.reduce((sum, holding) => 
-    sum + (holding.buyPrice * holding.quantity), 0);
   
-  if (totalCost > minInvestment) {
-    return res.status(400).json({ 
-      error: `Total holdings cost (${totalCost}) exceeds minimum investment (${minInvestment})` 
-    });
-  }
-
-  // Validate benchmark symbol if provided
-  if (compareWith) {
-    const StockSymbol = require('../models/stockSymbol');
-    let symbolExists = false;
-    
-    // Check if it's a MongoDB ObjectId
-    if (/^[0-9a-fA-F]{24}$/.test(compareWith)) {
-      symbolExists = await StockSymbol.exists({ _id: compareWith });
-    } else {
-      symbolExists = await StockSymbol.exists({ symbol: compareWith });
-    }
-    
-    if (!symbolExists) {
-      return res.status(400).json({ error: `Benchmark symbol "${compareWith}" does not exist` });
-    }
-  }
-
-  const cashBalance = parseFloat((minInvestment - totalCost).toFixed(2));
-  
-  const portfolio = new Portfolio({
-    name,
-    description,
-    subscriptionFee,
-    minInvestment,
-    durationMonths,
-    expiryDate,
-    holdings,
-    PortfolioCategory,
-    downloadLinks,
-    youTubeLinks,
-    timeHorizon,
-    rebalancing,
-    index,
-    details,
-    lastRebalanceDate,
-    nextRebalanceDate,
-    monthlyContribution,
-    compareWith,
-    cashBalance,
-    currentValue: parseFloat(minInvestment.toFixed(2))
-  });
-
-  const savedPortfolio = await portfolio.save(); 
-  const populatedPortfolio = await Portfolio.findById(savedPortfolio._id);
-  
-  res.status(201).json({
-    ...savedPortfolio.toObject(),
-    holdingsValue: populatedPortfolio.holdingsValue
-  });
+  await Portfolio.findByIdAndDelete(req.params.id);
+  res.json({ message: 'Portfolio deleted successfully' });
 });
 
 exports.getPortfolioPriceHistory = asyncHandler(async (req, res) => {
@@ -436,6 +686,87 @@ exports.getAllYouTubeLinks = asyncHandler(async (req, res) => {
     return acc.concat(portfolio.youTubeLinks);
   }, []);
   res.status(200).json(allLinks);
+});
+
+// Manual portfolio value recalculation endpoints
+exports.recalculatePortfolioValue = asyncHandler(async (req, res) => {
+  const { useClosingPrice = false } = req.query;
+  
+  try {
+    const result = await portfolioService.recalculatePortfolioValue(
+      req.params.id, 
+      useClosingPrice === 'true'
+    );
+    
+    res.status(200).json({
+      status: 'success',
+      message: 'Portfolio value recalculated successfully',
+      portfolio: result.portfolio.name,
+      calculatedValue: result.calculatedValue,
+      usedClosingPrice: result.usedClosingPrice,
+      timestamp: new Date()
+    });
+  } catch (error) {
+    res.status(500).json({
+      status: 'error',
+      message: 'Failed to recalculate portfolio value',
+      error: error.message
+    });
+  }
+});
+
+// Mass update all portfolio values
+exports.updateAllPortfolioValues = asyncHandler(async (req, res) => {
+  try {
+    const results = await portfolioService.updateAllPortfolioValues();
+    
+    const successCount = results.filter(r => r.status === 'success').length;
+    const failedCount = results.filter(r => r.status === 'failed').length;
+    
+    res.status(200).json({
+      status: 'success',
+      message: `Portfolio values updated: ${successCount} successful, ${failedCount} failed`,
+      results,
+      timestamp: new Date()
+    });
+  } catch (error) {
+    res.status(500).json({
+      status: 'error',
+      message: 'Failed to update portfolio values',
+      error: error.message
+    });
+  }
+});
+
+// Get real-time portfolio value
+exports.getRealTimeValue = asyncHandler(async (req, res) => {
+  try {
+    const portfolio = await Portfolio.findById(req.params.id);
+    if (!portfolio) {
+      return res.status(404).json({ error: 'Portfolio not found' });
+    }
+
+    const realTimeValue = await portfolioService.calculateRealTimeValue(portfolio);
+    const storedValue = portfolio.currentValue;
+    
+    res.status(200).json({
+      status: 'success',
+      portfolioId: portfolio._id,
+      portfolioName: portfolio.name,
+      realTimeValue,
+      storedValue,
+      difference: realTimeValue - storedValue,
+      differencePercent: storedValue > 0 ? ((realTimeValue - storedValue) / storedValue * 100).toFixed(2) : 0,
+      lastUpdated: new Date(),
+      needsSync: Math.abs(realTimeValue - storedValue) > 0.01
+    });
+  } catch (error) {
+    res.status(500).json({
+      status: 'error',
+      message: 'Failed to calculate real-time value',
+      error: error.message
+    });
+  }
 });
 
 exports.errorHandler = (err, req, res, next) => {

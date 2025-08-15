@@ -14,8 +14,209 @@ const { startSubscriptionCleanupJob } = require('./services/subscriptioncron');
 const { CronScheduler, CronLogger } = require('./utils/cornscheduler');
 const { default: mongoose } = require('mongoose');
 
+// Import log cleanup utilities
+const fs = require('fs').promises;
+const path = require('path');
+const cron = require('node-cron');
+
 // Create an instance of the scheduler
 const cronScheduler = new CronScheduler();
+
+// **ROBUST LOG CLEANUP SYSTEM**
+class LogCleanupService {
+  constructor() {
+    this.logsDir = path.join(__dirname, 'logs');
+    this.maxAge = 14; // 14 days
+    this.isRunning = false;
+  }
+
+  async cleanupOldLogs() {
+    if (this.isRunning) {
+      console.log('⏳ Log cleanup already in progress, skipping...');
+      return;
+    }
+
+    this.isRunning = true;
+    const startTime = Date.now();
+    
+    try {
+      console.log(`🧹 Starting automated log cleanup (${this.maxAge} days retention)...`);
+      
+      // Ensure logs directory exists
+      try {
+        await fs.access(this.logsDir);
+      } catch (error) {
+        console.log('📁 Logs directory not found, creating...');
+        await fs.mkdir(this.logsDir, { recursive: true });
+        this.isRunning = false;
+        return { cleaned: 0, message: 'Logs directory created' };
+      }
+
+      const files = await fs.readdir(this.logsDir);
+      const logFiles = files.filter(file => 
+        file.endsWith('.log') || file.endsWith('.txt') || file.includes('cron-')
+      );
+
+      const cutoffDate = new Date();
+      cutoffDate.setDate(cutoffDate.getDate() - this.maxAge);
+
+      let cleanedCount = 0;
+      const cleanedFiles = [];
+      const errors = [];
+
+      for (const file of logFiles) {
+        try {
+          const filePath = path.join(this.logsDir, file);
+          const stats = await fs.stat(filePath);
+          
+          // Check file creation/modification date
+          const fileDate = stats.birthtime || stats.mtime;
+          
+          if (fileDate < cutoffDate) {
+            // Get file size before deletion for reporting
+            const fileSizeKB = Math.round(stats.size / 1024);
+            
+            await fs.unlink(filePath);
+            cleanedCount++;
+            cleanedFiles.push({
+              name: file,
+              age: Math.ceil((Date.now() - fileDate.getTime()) / (1000 * 60 * 60 * 24)),
+              size: `${fileSizeKB}KB`
+            });
+            
+            console.log(`🗑️ Removed old log: ${file} (${fileSizeKB}KB, ${Math.ceil((Date.now() - fileDate.getTime()) / (1000 * 60 * 60 * 24))} days old)`);
+          }
+        } catch (error) {
+          console.error(`❌ Failed to process log file ${file}:`, error.message);
+          errors.push({ file, error: error.message });
+        }
+      }
+
+      const duration = Date.now() - startTime;
+      const result = {
+        cleaned: cleanedCount,
+        totalFiles: logFiles.length,
+        cleanedFiles,
+        errors,
+        duration: `${duration}ms`,
+        cutoffDate: cutoffDate.toISOString(),
+        nextCleanup: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString()
+      };
+
+      if (cleanedCount > 0) {
+        console.log(`✅ Log cleanup completed: ${cleanedCount}/${logFiles.length} files removed in ${duration}ms`);
+      } else {
+        console.log(`✅ Log cleanup completed: No old files found (${logFiles.length} files checked)`);
+      }
+
+      // Log to our cron logger as well
+      try {
+        CronLogger.info('Automated log cleanup completed', result);
+      } catch (logError) {
+        // Silent fail for logging errors to prevent recursion
+      }
+
+      return result;
+
+    } catch (error) {
+      console.error('❌ Log cleanup failed:', error.message);
+      
+      // Silent fail - don't crash the system
+      try {
+        CronLogger.error('Log cleanup failed', { error: error.message });
+      } catch (logError) {
+        // Double silent fail
+      }
+      
+      return {
+        success: false,
+        error: error.message,
+        cleaned: 0
+      };
+    } finally {
+      this.isRunning = false;
+    }
+  }
+
+  startAutomaticCleanup() {
+    // Run daily at 2:00 AM
+    cron.schedule('0 2 * * *', async () => {
+      await this.cleanupOldLogs();
+    }, {
+      scheduled: true,
+      timezone: "Asia/Kolkata"
+    });
+
+    console.log('⏰ Automatic log cleanup scheduled: Daily at 2:00 AM IST');
+    
+    // Run initial cleanup on startup (after 30 seconds)
+    setTimeout(async () => {
+      await this.cleanupOldLogs();
+    }, 30000);
+  }
+
+  async getCleanupStatus() {
+    try {
+      const files = await fs.readdir(this.logsDir);
+      const logFiles = files.filter(file => 
+        file.endsWith('.log') || file.endsWith('.txt') || file.includes('cron-')
+      );
+
+      const cutoffDate = new Date();
+      cutoffDate.setDate(cutoffDate.getDate() - this.maxAge);
+
+      let totalSize = 0;
+      let oldFilesCount = 0;
+      const fileDetails = [];
+
+      for (const file of logFiles) {
+        try {
+          const filePath = path.join(this.logsDir, file);
+          const stats = await fs.stat(filePath);
+          const fileDate = stats.birthtime || stats.mtime;
+          const age = Math.ceil((Date.now() - fileDate.getTime()) / (1000 * 60 * 60 * 24));
+          const sizeKB = Math.round(stats.size / 1024);
+          
+          totalSize += sizeKB;
+          
+          if (fileDate < cutoffDate) {
+            oldFilesCount++;
+          }
+
+          fileDetails.push({
+            name: file,
+            age,
+            size: `${sizeKB}KB`,
+            shouldClean: fileDate < cutoffDate
+          });
+        } catch (error) {
+          fileDetails.push({
+            name: file,
+            error: error.message
+          });
+        }
+      }
+
+      return {
+        isRunning: this.isRunning,
+        totalFiles: logFiles.length,
+        oldFiles: oldFilesCount,
+        totalSizeKB: totalSize,
+        maxAgeDays: this.maxAge,
+        cutoffDate: cutoffDate.toISOString(),
+        files: fileDetails
+      };
+    } catch (error) {
+      return {
+        error: error.message,
+        isRunning: this.isRunning
+      };
+    }
+  }
+}
+
+// Initialize log cleanup service
+const logCleanupService = new LogCleanupService();
 
 
 
@@ -79,6 +280,7 @@ dbAdapter.connect()
     app.use('/api/admin/subscriptions', require('./routes/adminSubscription'));
     app.use('/api/stock-symbols', require('./routes/stocksymbol'));
     app.use('/api/faqs', require('./routes/faqRoute'));
+    app.use('/api', require('./routes/chartData'));
     app.use('/api/tips', require('./routes/tips')); 
     app.use('/api/bundles', require('./routes/bundleRouter'));
     app.use('/api/admin/configs', require('./routes/configRoute'));
@@ -112,6 +314,79 @@ dbAdapter.connect()
       });
     });
 
+    /**
+     * @swagger
+     * /api/contactus:
+     *   post:
+     *     summary: Send contact us message
+     *     description: |
+     *       Allows users to send contact messages which are forwarded via email.
+     *       All fields are required for successful submission.
+     *     tags: [System]
+     *     requestBody:
+     *       required: true
+     *       content:
+     *         application/json:
+     *           schema:
+     *             type: object
+     *             required:
+     *               - name
+     *               - email
+     *               - message
+     *             properties:
+     *               name:
+     *                 type: string
+     *                 example: "John Doe"
+     *                 description: Full name of the person contacting
+     *               email:
+     *                 type: string
+     *                 format: email
+     *                 example: "john@example.com"
+     *                 description: Email address for response
+     *               askingabout:
+     *                 type: string
+     *                 example: "Portfolio Management"
+     *                 description: Topic or category of inquiry
+     *               represent:
+     *                 type: string
+     *                 example: "Individual Investor"
+     *                 description: What the person represents (company, individual, etc.)
+     *               message:
+     *                 type: string
+     *                 example: "I'm interested in learning more about your portfolio management services."
+     *                 description: The main message content
+     *     responses:
+     *       200:
+     *         description: Message sent successfully
+     *         content:
+     *           application/json:
+     *             schema:
+     *               type: object
+     *               properties:
+     *                 message:
+     *                   type: string
+     *                   example: "Contact us message sent successfully"
+     *       400:
+     *         description: Missing required fields
+     *         content:
+     *           application/json:
+     *             schema:
+     *               type: object
+     *               properties:
+     *                 error:
+     *                   type: string
+     *                   example: "All fields are required"
+     *       500:
+     *         description: Failed to send message
+     *         content:
+     *           application/json:
+     *             schema:
+     *               type: object
+     *               properties:
+     *                 error:
+     *                   type: string
+     *                   example: "Failed to send contact us message"
+     */
     // Contact us endpoint
     app.post("/api/contactus", (req, res) => {
       const { name, email, askingabout, represent, message } = req.body;
@@ -127,13 +402,237 @@ dbAdapter.connect()
         });
     });
 
+    /**
+     * @swagger
+     * /health:
+     *   get:
+     *     summary: System health check
+     *     description: |
+     *       Returns the overall health status of the application including database connectivity,
+     *       cron job status, and log cleanup information.
+     *     tags: [System]
+     *     responses:
+     *       200:
+     *         description: System health status
+     *         content:
+     *           application/json:
+     *             schema:
+     *               type: object
+     *               properties:
+     *                 status:
+     *                   type: string
+     *                   example: "ok"
+     *                   enum: [ok, degraded, error]
+     *                 cronStatus:
+     *                   type: object
+     *                   description: Status of all scheduled jobs
+     *                 dbStatus:
+     *                   type: string
+     *                   example: "connected"
+     *                   enum: [connected, disconnected]
+     *                 logCleanup:
+     *                   type: object
+     *                   properties:
+     *                     enabled:
+     *                       type: boolean
+     *                       example: true
+     *                     retention:
+     *                       type: string
+     *                       example: "14 days"
+     *                     schedule:
+     *                       type: string
+     *                       example: "Daily at 2:00 AM IST"
+     */
     app.get('/health', (req, res) => {
-  res.json({
-    status: 'ok',
-    cronStatus: cronScheduler.getStatus(),
-    dbStatus: mongoose.connection.readyState === 1 ? 'connected' : 'disconnected'
-  });
-});
+      res.json({
+        status: 'ok',
+        cronStatus: cronScheduler.getStatus(),
+        dbStatus: mongoose.connection.readyState === 1 ? 'connected' : 'disconnected',
+        logCleanup: {
+          enabled: true,
+          retention: '14 days',
+          schedule: 'Daily at 2:00 AM IST'
+        }
+      });
+    });
+
+    /**
+     * @swagger
+     * /api/admin/logs/status:
+     *   get:
+     *     summary: Get log cleanup status and file information
+     *     description: |
+     *       Returns detailed information about log files, cleanup status, and system configuration.
+     *       Admin-only endpoint for monitoring log management.
+     *     tags: [System]
+     *     security:
+     *       - bearerAuth: []
+     *     responses:
+     *       200:
+     *         description: Log cleanup status retrieved successfully
+     *         content:
+     *           application/json:
+     *             schema:
+     *               type: object
+     *               properties:
+     *                 success:
+     *                   type: boolean
+     *                   example: true
+     *                 isRunning:
+     *                   type: boolean
+     *                   example: false
+     *                   description: Whether cleanup is currently running
+     *                 totalFiles:
+     *                   type: integer
+     *                   example: 12
+     *                   description: Total number of log files
+     *                 oldFiles:
+     *                   type: integer
+     *                   example: 3
+     *                   description: Number of files older than retention period
+     *                 totalSizeKB:
+     *                   type: integer
+     *                   example: 5420
+     *                   description: Total size of all log files in KB
+     *                 maxAgeDays:
+     *                   type: integer
+     *                   example: 14
+     *                   description: Log retention period in days
+     *                 cutoffDate:
+     *                   type: string
+     *                   format: date-time
+     *                   description: Files older than this date will be cleaned
+     *                 files:
+     *                   type: array
+     *                   items:
+     *                     type: object
+     *                     properties:
+     *                       name:
+     *                         type: string
+     *                         example: "cron-2025-08-01.log"
+     *                       age:
+     *                         type: integer
+     *                         example: 15
+     *                         description: File age in days
+     *                       size:
+     *                         type: string
+     *                         example: "142KB"
+     *                       shouldClean:
+     *                         type: boolean
+     *                         example: true
+     *                         description: Whether this file should be cleaned
+     *                 timestamp:
+     *                   type: string
+     *                   format: date-time
+     *       500:
+     *         $ref: '#/components/responses/InternalServerError'
+     */
+    app.get('/api/admin/logs/status', async (req, res) => {
+      try {
+        const status = await logCleanupService.getCleanupStatus();
+        res.json({
+          success: true,
+          ...status,
+          timestamp: new Date().toISOString()
+        });
+      } catch (error) {
+        res.status(500).json({
+          success: false,
+          message: 'Failed to get log cleanup status',
+          error: error.message
+        });
+      }
+    });
+
+    /**
+     * @swagger
+     * /api/admin/logs/cleanup:
+     *   post:
+     *     summary: Manually trigger log cleanup
+     *     description: |
+     *       Manually initiates the log cleanup process to remove files older than the retention period.
+     *       This operation is normally automated but can be triggered manually by administrators.
+     *     tags: [System]
+     *     security:
+     *       - bearerAuth: []
+     *     responses:
+     *       200:
+     *         description: Log cleanup completed successfully
+     *         content:
+     *           application/json:
+     *             schema:
+     *               type: object
+     *               properties:
+     *                 success:
+     *                   type: boolean
+     *                   example: true
+     *                 message:
+     *                   type: string
+     *                   example: "Manual log cleanup completed: 3 files removed"
+     *                 cleaned:
+     *                   type: integer
+     *                   example: 3
+     *                   description: Number of files cleaned
+     *                 totalFiles:
+     *                   type: integer
+     *                   example: 12
+     *                   description: Total files checked
+     *                 cleanedFiles:
+     *                   type: array
+     *                   items:
+     *                     type: object
+     *                     properties:
+     *                       name:
+     *                         type: string
+     *                         example: "cron-2025-07-30.log"
+     *                       age:
+     *                         type: integer
+     *                         example: 16
+     *                       size:
+     *                         type: string
+     *                         example: "85KB"
+     *                 errors:
+     *                   type: array
+     *                   items:
+     *                     type: object
+     *                     properties:
+     *                       file:
+     *                         type: string
+     *                       error:
+     *                         type: string
+     *                 duration:
+     *                   type: string
+     *                   example: "145ms"
+     *                 cutoffDate:
+     *                   type: string
+     *                   format: date-time
+     *                 nextCleanup:
+     *                   type: string
+     *                   format: date-time
+     *                 timestamp:
+     *                   type: string
+     *                   format: date-time
+     *       500:
+     *         $ref: '#/components/responses/InternalServerError'
+     */
+    app.post('/api/admin/logs/cleanup', async (req, res) => {
+      try {
+        const result = await logCleanupService.cleanupOldLogs();
+        res.json({
+          success: true,
+          message: `Manual log cleanup completed: ${result.cleaned} files removed`,
+          ...result,
+          timestamp: new Date().toISOString()
+        });
+      } catch (error) {
+        res.status(500).json({
+          success: false,
+          message: 'Failed to run log cleanup',
+          error: error.message
+        });
+      }
+    });
+
 
     // Price log cleanup endpoint
     app.post('/api/admin/price-logs/cleanup', async (req, res) => {
@@ -175,6 +674,67 @@ dbAdapter.connect()
       }
     });
 
+    /**
+     * @swagger
+     * /api/cron/status:
+     *   get:
+     *     summary: Get scheduled jobs status
+     *     description: |
+     *       Returns the status of all scheduled cron jobs including stock price updates,
+     *       portfolio calculations, and system maintenance tasks.
+     *     tags: [System]
+     *     security:
+     *       - bearerAuth: []
+     *     responses:
+     *       200:
+     *         description: Cron jobs status retrieved successfully
+     *         content:
+     *           application/json:
+     *             schema:
+     *               type: object
+     *               properties:
+     *                 success:
+     *                   type: boolean
+     *                   example: true
+     *                 jobs:
+     *                   type: object
+     *                   description: Status of all scheduled jobs
+     *                   properties:
+     *                     stockPriceUpdate:
+     *                       type: object
+     *                       properties:
+     *                         status:
+     *                           type: string
+     *                           enum: [running, scheduled, stopped]
+     *                         lastRun:
+     *                           type: string
+     *                           format: date-time
+     *                         nextRun:
+     *                           type: string
+     *                           format: date-time
+     *                         schedule:
+     *                           type: string
+     *                           example: "0 8,14 * * *"
+     *                     portfolioCalculation:
+     *                       type: object
+     *                       properties:
+     *                         status:
+     *                           type: string
+     *                         lastRun:
+     *                           type: string
+     *                           format: date-time
+     *                         nextRun:
+     *                           type: string
+     *                           format: date-time
+     *                 timestamp:
+     *                   type: string
+     *                   format: date-time
+     *                 environment:
+     *                   type: string
+     *                   example: "production"
+     *       500:
+     *         $ref: '#/components/responses/InternalServerError'
+     */
     // **NEW CRON ENDPOINTS** - Add these for monitoring and manual triggers
     app.get('/api/cron/status', (req, res) => {
       try {
@@ -194,10 +754,50 @@ dbAdapter.connect()
       }
     });
 
-
-
-    
-
+    /**
+     * @swagger
+     * /api/cron/trigger-stock-update:
+     *   post:
+     *     summary: Manually trigger stock price update
+     *     description: |
+     *       Manually initiates an immediate stock price update for all portfolios.
+     *       This bypasses the scheduled update and runs immediately.
+     *     tags: [System]
+     *     security:
+     *       - bearerAuth: []
+     *     responses:
+     *       200:
+     *         description: Stock update triggered successfully
+     *         content:
+     *           application/json:
+     *             schema:
+     *               type: object
+     *               properties:
+     *                 success:
+     *                   type: boolean
+     *                   example: true
+     *                 message:
+     *                   type: string
+     *                   example: "Manual stock price update triggered successfully"
+     *                 timestamp:
+     *                   type: string
+     *                   format: date-time
+     *       500:
+     *         description: Failed to trigger update
+     *         content:
+     *           application/json:
+     *             schema:
+     *               type: object
+     *               properties:
+     *                 success:
+     *                   type: boolean
+     *                   example: false
+     *                 message:
+     *                   type: string
+     *                   example: "Failed to trigger manual update"
+     *                 error:
+     *                   type: string
+     */
     app.post('/api/cron/trigger-stock-update', async (req, res) => {
       try {
         CronLogger.info('Manual stock price update triggered via API');
@@ -223,7 +823,15 @@ dbAdapter.connect()
       console.log(`Auth service running on port ${config.server.port}`);
       console.log(`Swagger docs available at http://${config.server.host}:${config.server.port}/api-docs`);
       
-
+      // **START LOG CLEANUP SERVICE**
+      try {
+        console.log('🧹 Starting automatic log cleanup service...');
+        logCleanupService.startAutomaticCleanup();
+        console.log('✅ Log cleanup service started successfully');
+      } catch (error) {
+        console.error('❌ Failed to start log cleanup service:', error.message);
+        // Don't crash the system, just log the error
+      }
 
       // Start subscription cleanup job
       await startSubscriptionCleanupJob();

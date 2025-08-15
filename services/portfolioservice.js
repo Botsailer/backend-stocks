@@ -75,9 +75,18 @@ exports.updatePortfolioCurrentValue = async (portfolio, newValue) => {
   try {
     const updatedPortfolio = await Portfolio.findByIdAndUpdate(
       portfolio._id,
-      { currentValue: newValue },
+      { 
+        currentValue: newValue,
+        // Update lastUpdated timestamp for tracking
+        lastValueUpdate: new Date()
+      },
       { new: true }
     );
+    
+    // Also update weights based on current market prices
+    await updatedPortfolio.updateWithMarketPrices();
+    await updatedPortfolio.save();
+    
     return updatedPortfolio;
   } catch (error) {
     logger.error(`Update value failed: ${error.message}`);
@@ -462,12 +471,50 @@ exports.updatePortfolioValue = async (portfolioId) => {
     const portfolio = await Portfolio.findById(portfolioId);
     if (!portfolio) return null;
     
+    // Calculate real-time value
     const realTimeValue = await this.calculateRealTimeValue(portfolio);
-    await Portfolio.findByIdAndUpdate(portfolioId, { currentValue: realTimeValue });
     
+    // Update stored value in database
+    await this.updatePortfolioCurrentValue(portfolio, realTimeValue);
+    
+    logger.info(`Portfolio ${portfolio.name} value updated: ₹${realTimeValue}`);
     return realTimeValue;
   } catch (error) {
     logger.error(`Portfolio value update failed: ${error.message}`);
+    throw error;
+  }
+};
+
+// Mass update all portfolio values with current market prices
+exports.updateAllPortfolioValues = async () => {
+  try {
+    const portfolios = await Portfolio.find();
+    const results = [];
+    
+    for (const portfolio of portfolios) {
+      try {
+        const updatedValue = await this.updatePortfolioValue(portfolio._id);
+        results.push({
+          portfolio: portfolio.name,
+          status: 'success',
+          value: updatedValue
+        });
+      } catch (error) {
+        results.push({
+          portfolio: portfolio.name,
+          status: 'failed',
+          error: error.message
+        });
+        logger.error(`Failed to update ${portfolio.name}: ${error.message}`);
+      }
+    }
+    
+    const successCount = results.filter(r => r.status === 'success').length;
+    logger.info(`Portfolio values updated: ${successCount}/${portfolios.length} successful`);
+    
+    return results;
+  } catch (error) {
+    logger.error(`Mass portfolio update failed: ${error.message}`);
     throw error;
   }
 };
