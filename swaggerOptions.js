@@ -68,7 +68,7 @@ const options = {
       `,
       contact: {
         name: 'API Support',
-        email: 'support@stocktrading.com'
+        email: 'anupm019@gmail.com'
       },
       license: {
         name: 'MIT',
@@ -78,7 +78,7 @@ const options = {
     servers: [
       {
         url: process.env.NODE_ENV === 'production' 
-          ? 'https://api.stocktrading.com' 
+          ? 'https://stocks-backend-cmjxc.ondigitalocean.app/' 
           : 'http://localhost:3000',
         description: process.env.NODE_ENV === 'production' 
           ? 'Production Server' 
