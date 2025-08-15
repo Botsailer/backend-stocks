@@ -32,19 +32,23 @@ function mapTipToCamelCase(tip) {
 
 exports.getTipsByPortfolio = async (req, res) => {
   try {
+    console.log('tipsController.getTipsByPortfolio called with portfolioId:', req.params.portfolioId);
     const tips = await Tip.find({ portfolio: req.params.portfolioId }).sort('-createdAt');
     res.json(tips.map(mapTipToCamelCase));
   } catch (err) {
+    console.log('tipsController.getTipsByPortfolio error:', err.message);
     res.status(500).json({ error: err.message });
   }
 };
 
 exports.getTipById = async (req, res) => {
   try {
+    console.log('tipsController.getTipById called with id:', req.params.id);
     const tip = await Tip.findById(req.params.id);
     if (!tip) return res.status(404).json({ error: 'Not found' });
     res.json(mapTipToCamelCase(tip));
   } catch (err) {
+    console.log('tipsController.getTipById error:', err.message);
     res.status(500).json({ error: err.message });
   }
 };

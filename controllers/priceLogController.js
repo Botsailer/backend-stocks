@@ -65,11 +65,16 @@ exports.getAllPriceLogs = asyncHandler(async (req, res) => {
  * @route GET /api/chart-data/:id
  */
 exports.getPriceLogById = asyncHandler(async (req, res) => {
+  console.log('priceLogController.getPriceLogById called with id:', req.params.id);
+  console.log('Request URL:', req.originalUrl);
+  console.log('Request path:', req.path);
+  
   // Validate ObjectId format
   if (!mongoose.Types.ObjectId.isValid(req.params.id)) {
+    console.log('Invalid ObjectId format in priceLogController');
     return res.status(400).json({ 
       status: 'error',
-      message: 'Invalid price log ID format' 
+      message: 'Invalid price log ID format i confirm i am in priceLog controller' 
     });
   }
 
@@ -158,7 +163,7 @@ exports.updatePriceLog = asyncHandler(async (req, res) => {
   if (!mongoose.Types.ObjectId.isValid(req.params.id)) {
     return res.status(400).json({ 
       status: 'error',
-      message: 'Invalid price log ID format' 
+      message: 'Invalid price log ID format i confirm i am in priceLog controller' 
     });
   }
 
@@ -225,7 +230,7 @@ exports.deletePriceLog = asyncHandler(async (req, res) => {
   if (!mongoose.Types.ObjectId.isValid(req.params.id)) {
     return res.status(400).json({ 
       status: 'error',
-      message: 'Invalid price log ID format' 
+      message: 'Invalid price log ID format i confirm i am in priceLog controller' 
     });
   }
 
@@ -258,7 +263,7 @@ exports.getPortfolioPerformance = asyncHandler(async (req, res) => {
   if (!mongoose.Types.ObjectId.isValid(portfolioId)) {
     return res.status(400).json({ 
       status: 'error',
-      message: 'Invalid portfolio ID format' 
+      message: 'Invalid portfolio ID format i confirm i am in priceLog controller in getPortfolioPerformance' 
     });
   }
   

@@ -226,7 +226,66 @@ router.get(
  *       500:
  *         description: Server error
  */
-router.get("/:id", requireAdmin, tipController.getTipById);
+
+// Get all tips across all portfolios - MOVED BEFORE /:id route
+/**
+ * @swagger
+ * /api/tips:
+ *   get:
+ *     summary: Get all general tips with filters
+ *     tags: [Tips]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: query
+ *         name: startDate
+ *         schema:
+ *           type: string
+ *           format: date
+ *         description: Start date (YYYY-MM-DD)
+ *       - in: query
+ *         name: endDate
+ *         schema:
+ *           type: string
+ *           format: date
+ *         description: End date (YYYY-MM-DD)
+ *       - in: query
+ *         name: category
+ *         schema:
+ *           type: string
+ *           enum: [basic, premium]
+ *         description: Filter by category
+ *     responses:
+ *       200:
+ *         description: Tips with premium content filtered by subscription
+ *         content:
+ *           application/json:
+ *             schema:
+ *               oneOf:
+ *                 - $ref: '#/components/schemas/Tip'
+ *                 - type: object
+ *                   properties:
+ *                     id:
+ *                       type: string
+ *                     title:
+ *                       type: string
+ *                     message:
+ *                       type: string
+ *       400:
+ *         description: Invalid date format or category
+ *       401:
+ *         description: Unauthorized
+ *       500:
+ *         description: Server error
+ */
+router.get("/", requireAdmin, tipController.getalltipswithoutPortfolio);
+
+router.get("/:id", requireAdmin, (req, res, next) => {
+  console.log('Tips route /:id hit with id:', req.params.id);
+  console.log('Request URL:', req.originalUrl);
+  console.log('Request path:', req.path);
+  next();
+}, tipController.getTipById);
 
 // Create a new tip for a portfolio
 /**
@@ -322,8 +381,6 @@ router.post(
  *       500:
  *         description: Server error
  */
-router.get("/", requireAdmin, tipController.getalltipswithoutPortfolio);
-
 
 /**
  * @swagger

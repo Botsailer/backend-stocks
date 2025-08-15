@@ -228,6 +228,14 @@ app.use(express.urlencoded({ extended: true }));
 // Request logging middleware
 app.use((req, res, next) => {
   const start = Date.now();
+  
+  // Log incoming request immediately
+  console.log(`🔥 INCOMING REQUEST: ${req.method} ${req.originalUrl}`);
+  console.log(`🔥 Headers:`, JSON.stringify(req.headers, null, 2));
+  if (req.body && Object.keys(req.body).length > 0) {
+    console.log(`🔥 Body:`, JSON.stringify(req.body, null, 2));
+  }
+  
   res.on('finish', () => {
     const duration = Date.now() - start;
     const logLevel = res.statusCode >= 400 ? 'error' : 'info';
@@ -273,19 +281,18 @@ dbAdapter.connect()
     
     // Routes
     app.use('/auth', authRoutes);
-    app.use('/admin', require('./routes/admin'));
-    app.use('/api', require('./routes/Portfolio'));
-    app.use('/api/user', require('./routes/userRoute'));
-    app.use('/api/subscriptions', require('./routes/Subscription'));
-    app.use('/api/admin/subscriptions', require('./routes/adminSubscription'));
-    app.use('/api/stock-symbols', require('./routes/stocksymbol'));
-    app.use('/api/faqs', require('./routes/faqRoute'));
-    app.use('/api', require('./routes/chartData'));
-    app.use('/api/tips', require('./routes/tips')); 
-    app.use('/api/bundles', require('./routes/bundleRouter'));
-    app.use('/api/admin/configs', require('./routes/configRoute'));
-    app.use('/api/portfolio-calculation-logs', require('./routes/portfolioCalculationLogs'));
-    // app.use('/api/bills', require('./routes/billRoutes')); // Temporarily disabled
+app.use('/admin', require('./routes/admin'));
+app.use('/api/user', require('./routes/userRoute'));
+app.use('/api/subscriptions', require('./routes/Subscription'));
+app.use('/api/admin/subscriptions', require('./routes/adminSubscription'));
+app.use('/api/stock-symbols', require('./routes/stocksymbol'));
+app.use('/api/faqs', require('./routes/faqRoute'));
+app.use('/api/tips', require('./routes/tips'));                    
+app.use('/api/bundles', require('./routes/bundleRouter'));          
+app.use('/api/admin/configs', require('./routes/configRoute'));     
+app.use('/api/portfolio-calculation-logs', require('./routes/portfolioCalculationLogs')); 
+app.use('/api/chart-data', require('./routes/chartData'));    
+app.use('/api', require('./routes/Portfolio'));                                    
 
     // Global error handling middleware
     app.use((err, req, res, next) => {
