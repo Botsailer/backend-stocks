@@ -620,6 +620,22 @@ exports.processStockSaleWithLogging = async (portfolioId, saleData) => {
 
     const existingHolding = portfolio.holdings[holdingIndex];
     
+    // Log the existing holding to debug missing fields
+    logger.info(`🔍 Existing holding before sale:`, {
+      symbol: existingHolding.symbol,
+      sector: existingHolding.sector,
+      buyPrice: existingHolding.buyPrice,
+      quantity: existingHolding.quantity,
+      minimumInvestmentValueStock: existingHolding.minimumInvestmentValueStock,
+      status: existingHolding.status
+    });
+    
+    // Validate that the existing holding has all required fields
+    if (!existingHolding.symbol || !existingHolding.sector || 
+        !existingHolding.buyPrice || existingHolding.buyPrice <= 0) {
+      throw new Error(`Existing holding for ${symbol} is missing required fields`);
+    }
+    
     // Get current market price
     const stock = await StockSymbol.findOne({ symbol: existingHolding.symbol });
     let currentMarketPrice = existingHolding.buyPrice; // fallback
@@ -733,14 +749,16 @@ exports.processStockSaleWithLogging = async (portfolioId, saleData) => {
           !updatedHolding.minimumInvestmentValueStock || updatedHolding.minimumInvestmentValueStock <= 0) {
         
         logger.error(`❌ Invalid updated holding after partial sale:`, {
-          symbol: updatedHolding.symbol,
-          sector: updatedHolding.sector,
-          buyPrice: updatedHolding.buyPrice,
-          quantity: updatedHolding.quantity,
-          minimumInvestmentValueStock: updatedHolding.minimumInvestmentValueStock
+          symbol: updatedHolding.symbol || 'MISSING',
+          sector: updatedHolding.sector || 'MISSING',
+          buyPrice: updatedHolding.buyPrice || 'MISSING',
+          quantity: updatedHolding.quantity || 'MISSING',
+          minimumInvestmentValueStock: updatedHolding.minimumInvestmentValueStock || 'MISSING',
+          status: updatedHolding.status || 'MISSING',
+          allFields: Object.keys(updatedHolding)
         });
         
-        throw new Error(`Invalid holding data after partial sale for ${symbol}`);
+        throw new Error(`Invalid holding data after partial sale for ${symbol}: Missing required fields`);
       }
       
       portfolio.holdings[holdingIndex] = updatedHolding;
