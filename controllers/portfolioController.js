@@ -587,10 +587,13 @@ exports.updatePortfolio = asyncHandler(async (req, res) => {
 
       // Refresh the portfolio to get updated holdings and cash balance after sales
       const refreshedPortfolio = await Portfolio.findById(portfolio._id);
-      updatedHoldings = refreshedPortfolio.holdings;
       
-      // Update the local portfolio object with the new cash balance
-      portfolio.cashBalance = refreshedPortfolio.cashBalance;
+      // For sell actions, return the updated portfolio immediately without further processing
+      // since portfolioService.processStockSaleWithLogging already saved all changes
+      return res.status(200).json({
+        message: 'Stock sale(s) processed successfully',
+        portfolio: refreshedPortfolio
+      });
 
     } else {
       // DEFAULT/UPDATE: Merge holdings - update existing by symbol, add new ones

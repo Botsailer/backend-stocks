@@ -723,8 +723,55 @@ exports.processStockSaleWithLogging = async (portfolioId, saleData) => {
         profitLoss: saleResult.operation.profitLoss
       });
     } else {
-      // For partial sales, update the holding
-      portfolio.holdings[holdingIndex] = saleResult.updatedHolding;
+      // For partial sales, update the holding with proper validation
+      const updatedHolding = saleResult.updatedHolding;
+      
+      // Ensure all required fields are present and valid
+      if (!updatedHolding.symbol || !updatedHolding.sector || 
+          !updatedHolding.buyPrice || updatedHolding.buyPrice <= 0 ||
+          !updatedHolding.quantity || updatedHolding.quantity <= 0 ||
+          !updatedHolding.minimumInvestmentValueStock || updatedHolding.minimumInvestmentValueStock <= 0) {
+        
+        logger.error(`❌ Invalid updated holding after partial sale:`, {
+          symbol: updatedHolding.symbol,
+          sector: updatedHolding.sector,
+          buyPrice: updatedHolding.buyPrice,
+          quantity: updatedHolding.quantity,
+          minimumInvestmentValueStock: updatedHolding.minimumInvestmentValueStock
+        });
+        
+        throw new Error(`Invalid holding data after partial sale for ${symbol}`);
+      }
+      
+      portfolio.holdings[holdingIndex] = updatedHolding;
+      
+      logger.info(`📝 Updated holding ${symbol} after partial sale`, {
+        portfolioId,
+        remainingQuantity: updatedHolding.quantity,
+        newInvestmentValue: updatedHolding.minimumInvestmentValueStock,
+        realizedPnL: updatedHolding.realizedPnL
+      });
+    }
+    
+    // Validate all holdings before saving
+    for (let i = 0; i < portfolio.holdings.length; i++) {
+      const holding = portfolio.holdings[i];
+      if (!holding.symbol || !holding.sector || 
+          !holding.buyPrice || holding.buyPrice <= 0 ||
+          !holding.quantity || holding.quantity <= 0 ||
+          !holding.minimumInvestmentValueStock || holding.minimumInvestmentValueStock <= 0) {
+        
+        logger.error(`❌ Invalid holding found at index ${i} before save:`, {
+          index: i,
+          symbol: holding.symbol,
+          sector: holding.sector,
+          buyPrice: holding.buyPrice,
+          quantity: holding.quantity,
+          minimumInvestmentValueStock: holding.minimumInvestmentValueStock
+        });
+        
+        throw new Error(`Invalid holding data found for ${holding.symbol || 'unknown symbol'} at index ${i}`);
+      }
     }
 
     // Save portfolio
