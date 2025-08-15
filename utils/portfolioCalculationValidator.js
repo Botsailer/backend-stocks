@@ -970,6 +970,9 @@ class PortfolioCalculationValidator {
       throw new Error(`Invalid market price: ${currentMarketPrice}`);
     }
 
+    // Force complete sale if selling all available quantity
+    const isCompleteSale = saleType === 'complete' || quantityToSell >= existingHolding.quantity;
+
     // Calculate P&L using real-time market price
     const pnlResult = this.calculateSellPnL({
       currentQuantity: existingHolding.quantity,
@@ -986,7 +989,7 @@ class PortfolioCalculationValidator {
     let updatedHolding;
     let operation;
 
-    if (pnlResult.remainingQuantity > 0 && saleType !== 'complete') {
+    if (!isCompleteSale && pnlResult.remainingQuantity > 0) {
       // Partial sale - update holding
       const newInvestment = pnlResult.remainingQuantity * existingHolding.buyPrice;
       
@@ -1019,7 +1022,7 @@ class PortfolioCalculationValidator {
       };
 
     } else {
-      // Complete sale - mark as sold
+      // Complete sale - mark as sold with quantity = 0
       updatedHolding = {
         ...existingHolding,
         quantity: 0,
@@ -1036,17 +1039,18 @@ class PortfolioCalculationValidator {
           {
             date: new Date().toISOString(),
             price: currentMarketPrice,
-            quantity: -existingHolding.quantity,
+            quantity: -quantityToSell, // Use actual quantity sold
             saleValue: pnlResult.saleValue,
             profitLoss: pnlResult.profitLoss,
             action: 'complete_sell'
           }
-        ]
+        ],
+        lastUpdated: new Date().toISOString()
       };
 
       operation = {
         type: 'complete_sale',
-        quantitySold: pnlResult.quantitySold,
+        quantitySold: quantityToSell, // Use actual quantity sold
         saleValue: pnlResult.saleValue,
         profitLoss: pnlResult.profitLoss,
         positionClosed: true
@@ -1080,7 +1084,8 @@ class PortfolioCalculationValidator {
       quantitySold: operation.quantitySold,
       saleValue: operation.saleValue,
       profitLoss: operation.profitLoss,
-      newCashBalance: newCashBalance
+      newCashBalance: newCashBalance,
+      isCompleteSale: isCompleteSale
     });
 
     return result;

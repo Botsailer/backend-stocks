@@ -4,6 +4,7 @@ const portfolioController = require('../controllers/portfolioController');
 const chartDataController = require('../controllers/chartDataController');
 const requireAdmin = require('../middleware/requirreAdmin');
 const cronController = require('../controllers/portfoliocroncontroller');
+const portfolioService = require('../services/portfolioservice');
 
 
 
@@ -1137,6 +1138,79 @@ router.post('/portfolios/:id/recalculate', requireAdmin, portfolioController.rec
 
 /**
  * @swagger
+ * /api/portfolios/{id}/detailed-calculation:
+ *   post:
+ *     summary: Perform detailed portfolio calculation with step-by-step logging
+ *     description: Execute a comprehensive portfolio calculation with detailed step-by-step logging for debugging cash balance and value calculation issues
+ *     tags: [Portfolios]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema:
+ *           type: string
+ *         description: Portfolio ID
+ *     responses:
+ *       200:
+ *         description: Detailed calculation completed successfully
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success:
+ *                   type: boolean
+ *                 portfolio:
+ *                   type: object
+ *                   description: Updated portfolio with new calculated values
+ *                 calculationResult:
+ *                   type: object
+ *                   properties:
+ *                     totalPortfolioValue:
+ *                       type: number
+ *                     cashBalance:
+ *                       type: number
+ *                     holdingsValueAtMarket:
+ *                       type: number
+ *                 message:
+ *                   type: string
+ *                 logsMessage:
+ *                   type: string
+ *       404:
+ *         description: Portfolio not found
+ *       500:
+ *         description: Calculation failed
+ */
+router.post('/portfolios/:id/detailed-calculation', requireAdmin, async (req, res) => {
+  try {
+    const { id } = req.params;
+    
+    console.log(`🔍 Starting detailed portfolio calculation for ID: ${id}`);
+    
+    const result = await portfolioService.calculatePortfolioValueWithDetailedLogging(id);
+    
+    res.json({
+      success: true,
+      portfolio: result.portfolio,
+      calculationResult: result.calculationResult,
+      message: result.message,
+      logsMessage: 'Detailed calculation logs have been generated. Use GET /api/portfolio-calculation-logs to view step-by-step details.'
+    });
+
+  } catch (error) {
+    console.error(`❌ Detailed calculation failed for portfolio ${req.params.id}:`, error);
+    res.status(error.message.includes('not found') ? 404 : 500).json({
+      success: false,
+      error: error.message,
+      message: 'Portfolio detailed calculation failed'
+    });
+  }
+});
+
+/**
+ * @swagger
  * /api/portfolios/update-all:
  *   post:
  *     summary: Update all portfolio values with current market prices
@@ -1273,5 +1347,133 @@ router.post('/portfolios/update-all', requireAdmin, portfolioController.updateAl
  *         $ref: '#/components/responses/NotFound'
  */
 router.get('/portfolios/:id/realtime-value', requireAdmin, portfolioController.getRealTimeValue);
+
+/**
+ * @swagger
+ * /api/portfolios/{id}/sell-stock:
+ *   post:
+ *     summary: Enhanced stock sale with detailed logging
+ *     description: Process stock sale with comprehensive logging and proper handling of complete/partial sales
+ *     tags: [Portfolios]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema:
+ *           type: string
+ *         description: Portfolio ID
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required:
+ *               - symbol
+ *               - quantityToSell
+ *             properties:
+ *               symbol:
+ *                 type: string
+ *                 description: Stock symbol to sell
+ *                 example: "BAJFINANCE"
+ *               quantityToSell:
+ *                 type: number
+ *                 description: Quantity to sell
+ *                 example: 1
+ *               saleType:
+ *                 type: string
+ *                 enum: [partial, complete]
+ *                 description: Type of sale
+ *                 default: partial
+ *     responses:
+ *       200:
+ *         description: Stock sale processed successfully
+ *       400:
+ *         description: Invalid request data
+ *       404:
+ *         description: Portfolio or stock not found
+ */
+router.post('/portfolios/:id/sell-stock', requireAdmin, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { symbol, quantityToSell, saleType } = req.body;
+
+    if (!symbol || !quantityToSell) {
+      return res.status(400).json({
+        success: false,
+        error: 'Symbol and quantityToSell are required'
+      });
+    }
+
+    const result = await portfolioService.processStockSaleWithLogging(id, {
+      symbol,
+      quantityToSell,
+      saleType
+    });
+
+    res.json({
+      success: true,
+      message: 'Stock sale processed successfully',
+      data: result
+    });
+
+  } catch (error) {
+    console.error('Stock sale error:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Stock sale failed',
+      message: error.message
+    });
+  }
+});
+
+/**
+ * @swagger
+ * /api/portfolios/cleanup-sold-stocks:
+ *   post:
+ *     summary: Cleanup sold stocks older than 10 days
+ *     description: Remove sold stocks from portfolios that were sold more than 10 days ago
+ *     tags: [Portfolios]
+ *     security:
+ *       - bearerAuth: []
+ *     responses:
+ *       200:
+ *         description: Sold stocks cleanup completed
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success:
+ *                   type: boolean
+ *                 totalCleaned:
+ *                   type: integer
+ *                   description: Number of sold stocks removed
+ *                 message:
+ *                   type: string
+ *       500:
+ *         description: Cleanup failed
+ */
+router.post('/portfolios/cleanup-sold-stocks', requireAdmin, async (req, res) => {
+  try {
+    const result = await portfolioService.cleanupOldSoldStocks();
+
+    res.json({
+      success: true,
+      totalCleaned: result.totalCleaned,
+      message: `Successfully cleaned up ${result.totalCleaned} sold stocks older than 10 days`
+    });
+
+  } catch (error) {
+    console.error('Cleanup error:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Cleanup failed',
+      message: error.message
+    });
+  }
+});
 
 module.exports = router;

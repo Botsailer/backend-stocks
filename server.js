@@ -284,6 +284,7 @@ dbAdapter.connect()
     app.use('/api/tips', require('./routes/tips')); 
     app.use('/api/bundles', require('./routes/bundleRouter'));
     app.use('/api/admin/configs', require('./routes/configRoute'));
+    app.use('/api/portfolio-calculation-logs', require('./routes/portfolioCalculationLogs'));
     // app.use('/api/bills', require('./routes/billRoutes')); // Temporarily disabled
 
     // Global error handling middleware
@@ -831,6 +832,30 @@ dbAdapter.connect()
       } catch (error) {
         console.error('❌ Failed to start log cleanup service:', error.message);
         // Don't crash the system, just log the error
+      }
+
+      // **START SOLD STOCKS CLEANUP SERVICE**
+      try {
+        console.log('🗑️ Starting automatic sold stocks cleanup service...');
+        const portfolioService = require('./services/portfolioservice');
+        
+        // Schedule sold stocks cleanup - Run daily at 3:00 AM IST
+        cron.schedule('0 3 * * *', async () => {
+          try {
+            console.log('🧹 Starting scheduled sold stocks cleanup...');
+            const result = await portfolioService.cleanupOldSoldStocks();
+            console.log(`✅ Sold stocks cleanup completed. Removed ${result.totalCleaned} stocks.`);
+          } catch (error) {
+            console.error('❌ Sold stocks cleanup failed:', error.message);
+          }
+        }, {
+          scheduled: true,
+          timezone: "Asia/Kolkata"
+        });
+
+        console.log('✅ Sold stocks cleanup service scheduled: Daily at 3:00 AM IST');
+      } catch (error) {
+        console.error('❌ Failed to start sold stocks cleanup service:', error.message);
       }
 
       // Start subscription cleanup job

@@ -3,6 +3,7 @@ const StockSymbol = require('../models/stockSymbol');
 const PriceLog = require('../models/PriceLog');
 const winston = require('winston');
 const { default: mongoose } = require('mongoose');
+const portfolioCalculationLogger = require('./portfolioCalculationLogger');
 
 
 // Configure logger
@@ -28,11 +29,22 @@ const logger = winston.createLogger({
 exports.calculatePortfolioValue = async (portfolio, useClosingPrice = false) => {
   try {
     let totalValue = parseFloat(portfolio.cashBalance) || 0;
-    let priceSourceCounts = { closing: 0, current: 0, buy: 0 };
+    let priceSourceCounts = { closing: 0, current: 0, buy: 0, sold: 0 };
+    let activeHoldings = 0;
+    let soldHoldings = 0;
     
     logger.debug(`Starting portfolio calculation. Cash balance: ${totalValue}`);
     
     for (const holding of portfolio.holdings) {
+      // Skip sold stocks - they don't contribute to portfolio value
+      if (holding.status === 'Sell' || holding.quantity === 0) {
+        logger.debug(`${holding.symbol}: SOLD - Excluding from portfolio value calculation`);
+        priceSourceCounts.sold++;
+        soldHoldings++;
+        continue;
+      }
+
+      activeHoldings++;
       let price = null;
       let priceSource = null;
       const stock = await StockSymbol.findOne({ symbol: holding.symbol });
@@ -62,7 +74,7 @@ exports.calculatePortfolioValue = async (portfolio, useClosingPrice = false) => 
     }
     
     const finalValue = parseFloat(totalValue.toFixed(2));
-    logger.info(`Portfolio "${portfolio.name}" value: ₹${finalValue} (Cash: ${portfolio.cashBalance}, Holdings: ${(finalValue - portfolio.cashBalance).toFixed(2)}) | Price sources: ${priceSourceCounts.closing} closing, ${priceSourceCounts.current} current, ${priceSourceCounts.buy} buy`);
+    logger.info(`Portfolio "${portfolio.name}" value: ₹${finalValue} (Cash: ${portfolio.cashBalance}, Active Holdings: ${activeHoldings}, Sold Holdings: ${soldHoldings}) | Price sources: ${priceSourceCounts.closing} closing, ${priceSourceCounts.current} current, ${priceSourceCounts.buy} buy, ${priceSourceCounts.sold} sold`);
     return finalValue;
   } catch (error) {
     logger.error(`Calculate value failed for portfolio ${portfolio.name}: ${error.message}`);
@@ -544,5 +556,219 @@ exports.recalculatePortfolioValue = async (portfolioId, useClosingPrice = false)
       logger.warn(`Recalculation attempt ${attempt} failed, retrying...`);
       await new Promise(resolve => setTimeout(resolve, 2000));
     }
+  }
+}
+
+// New function for detailed portfolio calculation with step-by-step logging
+exports.calculatePortfolioValueWithDetailedLogging = async (portfolioId) => {
+  try {
+    const portfolio = await Portfolio.findById(portfolioId);
+    if (!portfolio) {
+      throw new Error(`Portfolio with ID ${portfolioId} not found`);
+    }
+
+    logger.info(`🔍 Starting detailed portfolio calculation with logging for "${portfolio.name}"`);
+    
+    // Use the detailed logger to perform step-by-step calculation
+    const result = await portfolioCalculationLogger.logCompleteCalculation(portfolio);
+    
+    // Update the portfolio with calculated values
+    const updatedPortfolio = await Portfolio.findByIdAndUpdate(
+      portfolioId,
+      {
+        currentValue: result.totalPortfolioValue,
+        cashBalance: result.cashBalance,
+        holdingsValueAtMarket: result.holdingsValueAtMarket,
+        lastValueUpdate: new Date()
+      },
+      { new: true }
+    );
+
+    logger.info(`✅ Detailed calculation completed for portfolio "${portfolio.name}". Total value: ₹${result.totalPortfolioValue}`);
+    
+    return {
+      success: true,
+      portfolio: updatedPortfolio,
+      calculationResult: result,
+      message: 'Portfolio calculation completed with detailed logging'
+    };
+
+  } catch (error) {
+    logger.error(`❌ Detailed calculation failed for portfolio ${portfolioId}: ${error.message}`);
+    throw error;
+  }
+};
+
+// Enhanced stock sale processing with detailed logging
+exports.processStockSaleWithLogging = async (portfolioId, saleData) => {
+  try {
+    const portfolio = await Portfolio.findById(portfolioId);
+    if (!portfolio) {
+      throw new Error('Portfolio not found');
+    }
+
+    const { symbol, quantityToSell, saleType = 'partial' } = saleData;
+    
+    // Find the holding to sell
+    const holdingIndex = portfolio.holdings.findIndex(
+      h => h.symbol.toUpperCase() === symbol.toUpperCase() && h.status !== 'Sell'
+    );
+
+    if (holdingIndex === -1) {
+      throw new Error(`Holding not found for symbol: ${symbol}`);
+    }
+
+    const existingHolding = portfolio.holdings[holdingIndex];
+    
+    // Get current market price
+    const stock = await StockSymbol.findOne({ symbol: existingHolding.symbol });
+    let currentMarketPrice = existingHolding.buyPrice; // fallback
+    
+    if (stock) {
+      if (stock.currentPrice && stock.currentPrice > 0) {
+        currentMarketPrice = stock.currentPrice;
+      } else if (stock.todayClosingPrice && stock.todayClosingPrice > 0) {
+        currentMarketPrice = stock.todayClosingPrice;
+      }
+    }
+
+    logger.info(`🔄 Processing ${saleType} sale for ${symbol}`, {
+      portfolioId,
+      symbol,
+      quantityToSell,
+      existingQuantity: existingHolding.quantity,
+      currentMarketPrice,
+      saleType
+    });
+
+    // Handle special case: if quantity is already 0, calculate sale proceeds and add to cash
+    if (existingHolding.quantity === 0) {
+      const saleValue = quantityToSell * currentMarketPrice;
+      const profitLoss = (currentMarketPrice - existingHolding.buyPrice) * quantityToSell;
+      
+      // Add sale proceeds to cash balance
+      portfolio.cashBalance = (portfolio.cashBalance || 0) + saleValue;
+      
+      // Mark as sold
+      portfolio.holdings[holdingIndex] = {
+        ...existingHolding,
+        status: 'Sell',
+        soldDate: new Date().toISOString(),
+        finalSalePrice: currentMarketPrice,
+        totalSaleValue: saleValue,
+        totalProfitLoss: profitLoss,
+        realizedPnL: (existingHolding.realizedPnL || 0) + profitLoss
+      };
+
+      await portfolio.save();
+
+      logger.info(`✅ Manual quantity 0 sale processed for ${symbol}`, {
+        saleValue,
+        profitLoss,
+        newCashBalance: portfolio.cashBalance
+      });
+
+      return {
+        success: true,
+        message: 'Sale processed for zero quantity stock',
+        saleValue,
+        profitLoss,
+        newCashBalance: portfolio.cashBalance
+      };
+    }
+
+    // Determine actual quantity to sell
+    let actualQuantityToSell = quantityToSell;
+    if (saleType === 'complete' || quantityToSell >= existingHolding.quantity) {
+      actualQuantityToSell = existingHolding.quantity;
+      // Force complete sale type when selling all available quantity
+      saleData.saleType = 'complete';
+    }
+
+    // Process the sale using the calculation validator
+    const { PortfolioCalculationValidator } = require('../utils/portfolioCalculationValidator');
+    const saleResult = PortfolioCalculationValidator.processStockSale(
+      { quantityToSell: actualQuantityToSell, saleType: saleData.saleType },
+      existingHolding,
+      currentMarketPrice,
+      portfolio.cashBalance || 0
+    );
+
+    // Update portfolio with sale results
+    portfolio.cashBalance = saleResult.cashImpact.newBalance;
+    portfolio.holdings[holdingIndex] = saleResult.updatedHolding;
+
+    // Save portfolio
+    await portfolio.save();
+
+    logger.info(`✅ Stock sale completed for ${symbol}`, {
+      portfolioId,
+      operation: saleResult.operation.type,
+      quantitySold: saleResult.operation.quantitySold,
+      saleValue: saleResult.operation.saleValue,
+      profitLoss: saleResult.operation.profitLoss,
+      newCashBalance: saleResult.cashImpact.newBalance,
+      newQuantity: saleResult.updatedHolding.quantity,
+      newStatus: saleResult.updatedHolding.status
+    });
+
+    return {
+      success: true,
+      saleResult,
+      updatedPortfolio: portfolio
+    };
+
+  } catch (error) {
+    logger.error(`Stock sale failed for portfolio ${portfolioId}: ${error.message}`);
+    throw error;
+  }
+};
+
+// Cleanup sold stocks older than 10 days
+exports.cleanupOldSoldStocks = async () => {
+  try {
+    const tenDaysAgo = new Date();
+    tenDaysAgo.setDate(tenDaysAgo.getDate() - 10);
+
+    logger.info('🧹 Starting cleanup of sold stocks older than 10 days');
+
+    const portfolios = await Portfolio.find({});
+    let totalCleaned = 0;
+
+    for (const portfolio of portfolios) {
+      const originalHoldingsCount = portfolio.holdings.length;
+      
+      // Filter out sold stocks older than 10 days
+      portfolio.holdings = portfolio.holdings.filter(holding => {
+        if (holding.status === 'Sell' && holding.soldDate) {
+          const soldDate = new Date(holding.soldDate);
+          const shouldRemove = soldDate < tenDaysAgo;
+          
+          if (shouldRemove) {
+            logger.debug(`🗑️ Removing old sold stock: ${holding.symbol} from portfolio ${portfolio.name}`, {
+              soldDate: holding.soldDate,
+              daysSinceSold: Math.floor((new Date() - soldDate) / (1000 * 60 * 60 * 24))
+            });
+            totalCleaned++;
+          }
+          
+          return !shouldRemove;
+        }
+        return true;
+      });
+
+      // Save only if holdings were actually removed
+      if (portfolio.holdings.length < originalHoldingsCount) {
+        await portfolio.save();
+        logger.info(`📊 Cleaned ${originalHoldingsCount - portfolio.holdings.length} sold stocks from portfolio ${portfolio.name}`);
+      }
+    }
+
+    logger.info(`✅ Sold stocks cleanup completed. Total stocks removed: ${totalCleaned}`);
+    return { success: true, totalCleaned };
+
+  } catch (error) {
+    logger.error(`Sold stocks cleanup failed: ${error.message}`);
+    throw error;
   }
 };
