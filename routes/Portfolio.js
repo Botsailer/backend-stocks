@@ -199,6 +199,11 @@ const portfolioService = require('../services/portfolioservice');
  *               saleDate:
  *                 type: string
  *                 format: date-time
+ *         saleType:
+ *           type: string
+ *           enum: [partial, complete]
+ *           description: "Type of sale operation - used only in sell requests"
+ *           example: "complete"
  *         minimumInvestmentValueStock:
  *           type: number
  *           example: 1000
@@ -296,6 +301,42 @@ const portfolioService = require('../services/portfolioservice');
  *           type: array
  *           items:
  *             $ref: '#/components/schemas/StockHolding'
+ *         saleHistory:
+ *           type: array
+ *           readOnly: true
+ *           description: "History of completely sold stocks"
+ *           items:
+ *             type: object
+ *             properties:
+ *               symbol:
+ *                 type: string
+ *                 example: "RELIANCE"
+ *                 description: "Stock symbol that was sold"
+ *               soldDate:
+ *                 type: string
+ *                 format: date-time
+ *                 example: "2025-08-15T10:30:00.000Z"
+ *                 description: "Date when the stock was completely sold"
+ *               originalQuantity:
+ *                 type: number
+ *                 example: 10
+ *                 description: "Original quantity that was held"
+ *               salePrice:
+ *                 type: number
+ *                 example: 2450.50
+ *                 description: "Price per share at which it was sold"
+ *               saleValue:
+ *                 type: number
+ *                 example: 24505.00
+ *                 description: "Total value received from the sale"
+ *               profitLoss:
+ *                 type: number
+ *                 example: 1500.50
+ *                 description: "Profit or loss from the sale (positive for profit, negative for loss)"
+ *               originalBuyPrice:
+ *                 type: number
+ *                 example: 2300.00
+ *                 description: "Original purchase price per share"
  *         downloadLinks:
  *           type: array
  *           items:

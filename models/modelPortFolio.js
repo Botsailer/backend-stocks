@@ -300,6 +300,42 @@ const PortfolioSchema = new Schema({
     type: [StockHoldingSchema],
     default: []
   },
+  saleHistory: [{
+    symbol: {
+      type: String,
+      required: true,
+      trim: true,
+      uppercase: true
+    },
+    soldDate: {
+      type: Date,
+      required: true
+    },
+    originalQuantity: {
+      type: Number,
+      required: true,
+      min: 0
+    },
+    salePrice: {
+      type: Number,
+      required: true,
+      min: 0
+    },
+    saleValue: {
+      type: Number,
+      required: true,
+      min: 0
+    },
+    profitLoss: {
+      type: Number,
+      required: true
+    },
+    originalBuyPrice: {
+      type: Number,
+      required: true,
+      min: 0
+    }
+  }],
   downloadLinks: {
     type: [portfolioDownLoadLinkSchema],
     default: []

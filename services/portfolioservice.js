@@ -696,7 +696,36 @@ exports.processStockSaleWithLogging = async (portfolioId, saleData) => {
 
     // Update portfolio with sale results
     portfolio.cashBalance = saleResult.cashImpact.newBalance;
-    portfolio.holdings[holdingIndex] = saleResult.updatedHolding;
+    
+    // Handle complete vs partial sales
+    if (saleResult.operation.type === 'complete_sale' || saleResult.updatedHolding.quantity === 0) {
+      // For complete sales, remove the holding entirely to avoid validation errors
+      portfolio.holdings.splice(holdingIndex, 1);
+      
+      // Store sale information in a separate field if needed for history
+      if (!portfolio.saleHistory) {
+        portfolio.saleHistory = [];
+      }
+      portfolio.saleHistory.push({
+        symbol: existingHolding.symbol,
+        soldDate: new Date().toISOString(),
+        originalQuantity: existingHolding.quantity,
+        salePrice: currentMarketPrice,
+        saleValue: saleResult.operation.saleValue,
+        profitLoss: saleResult.operation.profitLoss,
+        originalBuyPrice: existingHolding.buyPrice
+      });
+      
+      logger.info(`📤 Removed holding ${symbol} after complete sale`, {
+        portfolioId,
+        originalQuantity: existingHolding.quantity,
+        saleValue: saleResult.operation.saleValue,
+        profitLoss: saleResult.operation.profitLoss
+      });
+    } else {
+      // For partial sales, update the holding
+      portfolio.holdings[holdingIndex] = saleResult.updatedHolding;
+    }
 
     // Save portfolio
     await portfolio.save();
