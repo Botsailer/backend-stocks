@@ -419,7 +419,7 @@ ${COMPANY_INFO.email}
 }
 
 /**
- * Generate and send bill for subscription
+ * Generate and send bill for subscription using email queue
  */
 async function generateAndSendBill(subscriptionId, paymentDetails = {}) {
   try {
@@ -428,10 +428,26 @@ async function generateAndSendBill(subscriptionId, paymentDetails = {}) {
     // Generate bill
     const bill = await generateBill(subscriptionId, paymentDetails);
     
-    // Send bill email
-    await sendBillEmail(bill._id);
+    // Add bill email to queue instead of sending immediately
+    const emailQueue = require('./emailQueue');
+    const subscription = await Subscription.findById(subscriptionId).populate('user');
+    
+    if (subscription && subscription.user) {
+      const emailId = await emailQueue.addBillEmail(
+        subscription.user, 
+        subscription, 
+        bill
+      );
+      
+      logger.info('Bill email added to queue', { 
+        billId: bill._id, 
+        billNumber: bill.billNumber,
+        emailId,
+        userEmail: subscription.user.email
+      });
+    }
 
-    logger.info('Bill generated and sent successfully', { 
+    logger.info('Bill generated and queued for email', { 
       billId: bill._id, 
       billNumber: bill.billNumber 
     });

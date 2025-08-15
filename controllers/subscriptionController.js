@@ -14,6 +14,7 @@ const { sendEmail } = require("../services/emailServices"); // Add your email se
 const TelegramService = require("../services/tgservice");
 const { generateAndSendBill, generateBillHTML } = require("../services/billService");
 const { COMPANY_INFO } = require("../config/billConfig");
+const emailQueue = require("../services/emailQueue");
 const winston = require("winston");
 
 // Logger setup
@@ -194,39 +195,24 @@ async function handleTelegramIntegration(user, productType, productId, subscript
         const subject = `Telegram Access - ${productType === 'Bundle' ? 'Bundle' : 'Portfolio'} Subscription`;
         const htmlContent = generateTelegramInviteEmail(user, telegramInvites, productType);
         
-        logger.info('Sending telegram invite email', {
+        logger.info('Adding telegram invite email to queue', {
           userId: user._id,
           email: user.email,
           inviteCount: telegramInvites.length
         });
         
-        await sendEmail(user.email, subject, '', htmlContent);
+        const emailId = await emailQueue.addTelegramEmail(
+          user, 
+          { type: productType, id: productId }, 
+          telegramInvites, 
+          expiryDate || new Date(Date.now() + 7 * 24 * 60 * 60 * 1000) // 7 days expiry
+        );
         
-        logger.info('Telegram invite email sent successfully', {
+        logger.info('Telegram invite email added to queue successfully', {
           userId: user._id,
-          email: user.email
+          email: user.email,
+          emailId
         });
-        
-        // Send bill email immediately after telegram email
-        logger.info('Attempting to send bill email after telegram', {
-          userId: user._id,
-          email: user.email
-        });
-        
-        try {
-          await sendBillEmailAfterTelegram(user, subscription);
-          logger.info('Bill email sent successfully after telegram', {
-            userId: user._id,
-            email: user.email
-          });
-        } catch (billError) {
-          logger.error('Failed to send bill email after telegram', {
-            userId: user._id,
-            email: user.email,
-            error: billError.message,
-            stack: billError.stack
-          });
-        }
         
       } catch (emailError) {
         logger.error('Failed to send telegram invite email', {
@@ -427,10 +413,21 @@ Thank you for your business!
 ${COMPANY_INFO.name}
     `;
 
-    // Use the same email service as telegram emails
-    await sendEmail(user.email, subject, textContent, htmlContent);
+    // Use email queue for reliable delivery
+    await emailQueue.addToQueue({
+      to: user.email,
+      subject,
+      text: textContent,
+      html: htmlContent,
+      type: 'bill_after_telegram',
+      userId: user._id,
+      metadata: {
+        billNumber: billData.billNumber,
+        subscriptionId: subscription._id
+      }
+    });
     
-    logger.info('Bill email sent successfully after telegram', {
+    logger.info('Bill email queued successfully after telegram', {
       userId: user._id,
       email: user.email,
       billNumber: billData.billNumber
@@ -856,11 +853,28 @@ const sendRenewalReminderEmail = async (user, subscription, portfolio) => {
   `;
   
   try {
-    await sendEmail(user.email, subject, text, html);
-    logger.info(`Renewal reminder sent to ${user.email} for subscription ${subscription._id}`);
+    await emailQueue.addToQueue({
+      to: user.email,
+      subject,
+      text,
+      html,
+      type: 'renewal_reminder',
+      userId: user._id,
+      metadata: {
+        subscriptionId: subscription._id,
+        portfolioName: portfolio.name,
+        expiryDate: subscription.expiresAt
+      }
+    });
+    
+    logger.info(`Renewal reminder queued for ${user.email} for subscription ${subscription._id}`, {
+      userId: user._id,
+      portfolioName: portfolio.name,
+      expiryDate: subscription.expiresAt
+    });
     return true;
   } catch (error) {
-    logger.error(`Failed to send renewal reminder to ${user.email}:`, error);
+    logger.error(`Failed to queue renewal reminder for ${user.email}:`, error);
     return false;
   }
 };
@@ -898,11 +912,29 @@ const sendRenewalConfirmationEmail = async (user, subscription, portfolio, compe
   `;
   
   try {
-    await sendEmail(user.email, subject, text, html);
-    logger.info(`Renewal confirmation sent to ${user.email} for subscription ${subscription._id}`);
+    await emailQueue.addToQueue({
+      to: user.email,
+      subject,
+      text,
+      html,
+      type: 'renewal_confirmation',
+      userId: user._id,
+      metadata: {
+        subscriptionId: subscription._id,
+        portfolioName: portfolio.name,
+        compensationDays,
+        newExpiryDate: subscription.expiresAt
+      }
+    });
+    
+    logger.info(`Renewal confirmation queued for ${user.email} for subscription ${subscription._id}`, {
+      userId: user._id,
+      portfolioName: portfolio.name,
+      compensationDays
+    });
     return true;
   } catch (error) {
-    logger.error(`Failed to send renewal confirmation to ${user.email}:`, error);
+    logger.error(`Failed to queue renewal confirmation for ${user.email}:`, error);
     return false;
   }
 };
@@ -1790,8 +1822,25 @@ async function sendTelegramInviteEmail(user, product, inviteLink, expiresAt) {
       </div>
     `;
     
-    await sendEmail(user.email, subject, text, html);
-    logger.info(`Telegram invite sent to ${user.email}`);
+    await emailQueue.addToQueue({
+      to: user.email,
+      subject,
+      text,
+      html,
+      type: 'telegram_invite',
+      userId: user._id,
+      metadata: {
+        portfolioName,
+        inviteLink,
+        expiresAt
+      }
+    });
+    
+    logger.info(`Telegram invite queued for ${user.email}`, {
+      userId: user._id,
+      portfolioName,
+      expiresAt
+    });
   } catch (error) {
     logger.error(`Failed to send Telegram invite to ${user.email}:`, error);
   }
@@ -1881,15 +1930,11 @@ exports.verifyEmandate = async (req, res) => {
                     inviteResult.expires_at
                   );
                   
-                  // Send bill email after telegram email
-                  try {
-                    await sendBillEmailAfterTelegram(req.user, sub);
-                  } catch (billError) {
-                    logger.error('Failed to send bill email for eMandate', {
-                      subscriptionId: sub._id,
-                      error: billError.message
-                    });
-                  }
+                  // Bill email will be sent automatically via generateAndSendBill
+                  logger.info('Telegram invite sent for eMandate, bill email will be queued separately', {
+                    subscriptionId: sub._id,
+                    userEmail: req.user.email
+                  });
                 }
               }
             }
@@ -2008,7 +2053,25 @@ exports.verifyEmandate = async (req, res) => {
             <p style="color:#666; font-size:12px;">Automated notification</p>
           </div>
         `;
-        await sendEmail(user.email, subject, text, html);
+        await emailQueue.addToQueue({
+          to: user.email,
+          subject,
+          text,
+          html,
+          type: 'emandate_pending',
+          userId: user._id,
+          metadata: {
+            subscriptionId: subscription_id,
+            authenticationUrl: rSub.short_url,
+            status
+          }
+        });
+        
+        logger.info(`eMandate pending email queued for ${user.email}`, {
+          userId: user._id,
+          subscriptionId: subscription_id,
+          status
+        });
       }
 
       return res.json({
@@ -2246,8 +2309,24 @@ async function sendCancellationEmail(user, subscription, portfolio) {
       </div>
     `;
     
-    await sendEmail(user.email, subject, text, html);
-    logger.info(`Cancellation email sent to ${user.email}`);
+    await emailQueue.addToQueue({
+      to: user.email,
+      subject,
+      text,
+      html,
+      type: 'subscription_cancellation',
+      userId: user._id,
+      metadata: {
+        portfolioId: portfolio._id,
+        portfolioName: portfolio.name,
+        subscriptionId: subscription._id
+      }
+    });
+    
+    logger.info(`Cancellation email queued for ${user.email}`, {
+      userId: user._id,
+      portfolioName: portfolio.name
+    });
   } catch (error) {
     logger.error('Failed to send cancellation email', {
       userId: user._id,
@@ -2256,54 +2335,199 @@ async function sendCancellationEmail(user, subscription, portfolio) {
   }
 }
 /**
- * Razorpay webhook handler
+ * Razorpay webhook handler with robust error handling and timeout protection
  */
 exports.razorpayWebhook = async (req, res) => {
+  const startTime = Date.now();
+  
   try {
-    // Verify webhook signature if secret is configured
-    const webhookSecret = process.env.RAZORPAY_WEBHOOK_SECRET;
-    if (webhookSecret) {
-      const webhookSignature = req.headers["x-razorpay-signature"];
-      const expectedSignature = crypto
-        .createHmac("sha256", webhookSecret)
-        .update(req.rawBody || JSON.stringify(req.body))
-        .digest("hex");
-        
-      if (webhookSignature !== expectedSignature) {
-        logger.warn("Invalid webhook signature");
-        return res.status(400).json({ error: "Invalid webhook signature" });
-      }
-    }
-
-    const { event, payload } = req.body;
-
-    switch(event) {
-      case "subscription.activated":
-      case "subscription.authenticated":
-        await handleSubscriptionActivated(payload);
-        break;
-      case "subscription.charged":
-        await handleSubscriptionCharged(payload);
-        break;
-      case "subscription.cancelled":
-      case "subscription.halted":
-        await handleSubscriptionCancelled(payload);
-        break;
-      case "payment.failed":
-        await handlePaymentFailed(payload);
-        break;
-      default:
-        logger.info(`Unhandled webhook event: ${event}`);
-    }
+    // Set a timeout for webhook processing (30 seconds)
+    const timeoutPromise = new Promise((_, reject) => {
+      setTimeout(() => reject(new Error('Webhook processing timeout')), 30000);
+    });
+    
+    const processingPromise = processWebhook(req);
+    
+    // Race between processing and timeout
+    await Promise.race([processingPromise, timeoutPromise]);
+    
+    const processingTime = Date.now() - startTime;
+    logger.info(`Webhook processed successfully in ${processingTime}ms`);
     
     res.json({ success: true });
   } catch(error) {
-    logger.error("Webhook processing error", error);
-    res.status(500).json({ error: "Webhook processing failed" });
+    const processingTime = Date.now() - startTime;
+    logger.error("Webhook processing error", {
+      error: error.message,
+      stack: error.stack,
+      event: req.body?.event,
+      processingTime: `${processingTime}ms`
+    });
+    
+    if (error.message === 'Webhook processing timeout') {
+      res.status(408).json({ error: "Request timeout" });
+    } else {
+      res.status(500).json({ error: "Webhook processing failed" });
+    }
   }
 };
 
-// ===== WEBHOOK HANDLERS =====
+/**
+ * Internal webhook processing function
+ */
+async function processWebhook(req) {
+  // Verify webhook signature if secret is configured
+  const webhookSecret = process.env.RAZORPAY_WEBHOOK_SECRET;
+  if (webhookSecret) {
+    const webhookSignature = req.headers["x-razorpay-signature"];
+    const expectedSignature = crypto
+      .createHmac("sha256", webhookSecret)
+      .update(req.rawBody || JSON.stringify(req.body))
+      .digest("hex");
+      
+    if (webhookSignature !== expectedSignature) {
+      logger.warn("Invalid webhook signature");
+      throw new Error("Invalid webhook signature");
+    }
+  }
+
+  const { event, payload } = req.body;
+
+  // Log webhook received
+  logger.info(`Webhook received: ${event}`, {
+    event,
+    payloadKeys: Object.keys(payload || {}),
+    timestamp: new Date().toISOString()
+  });
+
+  // Add delay for processing to avoid race conditions
+  await new Promise(resolve => setTimeout(resolve, 2000));
+
+  switch(event) {
+    case "subscription.activated":
+    case "subscription.authenticated":
+      await handleSubscriptionActivatedWithRetry(payload);
+      break;
+    case "subscription.charged":
+      await handleSubscriptionChargedWithRetry(payload);
+      break;
+    case "subscription.cancelled":
+    case "subscription.halted":
+      await handleSubscriptionCancelledWithRetry(payload);
+      break;
+    case "payment.failed":
+      await handlePaymentFailedWithRetry(payload);
+      break;
+    default:
+      logger.info(`Unhandled webhook event: ${event}`);
+  }
+}
+
+// ===== WEBHOOK HANDLERS WITH RETRY =====
+
+/**
+ * Wrapper for subscription activated with retry logic
+ */
+async function handleSubscriptionActivatedWithRetry(payload, maxRetries = 3) {
+  for (let attempt = 1; attempt <= maxRetries; attempt++) {
+    try {
+      await handleSubscriptionActivated(payload);
+      logger.info(`Subscription activation handled successfully on attempt ${attempt}`);
+      return;
+    } catch (error) {
+      logger.error(`Subscription activation attempt ${attempt} failed`, {
+        error: error.message,
+        payload: JSON.stringify(payload, null, 2)
+      });
+      
+      if (attempt === maxRetries) {
+        throw error;
+      }
+      
+      // Exponential backoff
+      const delay = Math.pow(2, attempt) * 1000;
+      await new Promise(resolve => setTimeout(resolve, delay));
+    }
+  }
+}
+
+/**
+ * Wrapper for subscription charged with retry logic
+ */
+async function handleSubscriptionChargedWithRetry(payload, maxRetries = 3) {
+  for (let attempt = 1; attempt <= maxRetries; attempt++) {
+    try {
+      await handleSubscriptionCharged(payload);
+      logger.info(`Subscription charged handled successfully on attempt ${attempt}`);
+      return;
+    } catch (error) {
+      logger.error(`Subscription charged attempt ${attempt} failed`, {
+        error: error.message,
+        payload: JSON.stringify(payload, null, 2)
+      });
+      
+      if (attempt === maxRetries) {
+        throw error;
+      }
+      
+      // Exponential backoff
+      const delay = Math.pow(2, attempt) * 1000;
+      await new Promise(resolve => setTimeout(resolve, delay));
+    }
+  }
+}
+
+/**
+ * Wrapper for subscription cancelled with retry logic
+ */
+async function handleSubscriptionCancelledWithRetry(payload, maxRetries = 3) {
+  for (let attempt = 1; attempt <= maxRetries; attempt++) {
+    try {
+      await handleSubscriptionCancelled(payload);
+      logger.info(`Subscription cancelled handled successfully on attempt ${attempt}`);
+      return;
+    } catch (error) {
+      logger.error(`Subscription cancelled attempt ${attempt} failed`, {
+        error: error.message,
+        payload: JSON.stringify(payload, null, 2)
+      });
+      
+      if (attempt === maxRetries) {
+        throw error;
+      }
+      
+      // Exponential backoff
+      const delay = Math.pow(2, attempt) * 1000;
+      await new Promise(resolve => setTimeout(resolve, delay));
+    }
+  }
+}
+
+/**
+ * Wrapper for payment failed with retry logic
+ */
+async function handlePaymentFailedWithRetry(payload, maxRetries = 3) {
+  for (let attempt = 1; attempt <= maxRetries; attempt++) {
+    try {
+      await handlePaymentFailed(payload);
+      logger.info(`Payment failed handled successfully on attempt ${attempt}`);
+      return;
+    } catch (error) {
+      logger.error(`Payment failed attempt ${attempt} failed`, {
+        error: error.message,
+        payload: JSON.stringify(payload, null, 2)
+      });
+      
+      if (attempt === maxRetries) {
+        throw error;
+      }
+      
+      // Exponential backoff
+      const delay = Math.pow(2, attempt) * 1000;
+      await new Promise(resolve => setTimeout(resolve, delay));
+    }
+  }
+}
 
 async function handleSubscriptionActivated(payload) {
   const subscriptionId = payload.subscription.id;
@@ -2361,6 +2585,31 @@ async function handleSubscriptionCharged(payload) {
   });
   
   await session.endSession();
+  
+  // Generate and send bill for the first subscription (all subscriptions in a charge event are for same user)
+  try {
+    const firstSubscription = subscriptions[0];
+    await generateAndSendBill(firstSubscription._id, {
+      amount: totalAmount / 100,
+      paymentId,
+      transactionType: 'webhook_recurring',
+      description: 'Recurring payment via webhook'
+    });
+    logger.info(`Bill generated and queued for webhook payment`, {
+      userId,
+      subscriptionId: firstSubscription._id,
+      paymentId
+    });
+  } catch (billError) {
+    logger.error(`Failed to generate bill for webhook payment`, {
+      userId,
+      paymentId,
+      error: billError.message,
+      stack: billError.stack
+    });
+    // Don't throw error here as payment processing was successful
+  }
+  
   logger.info(`Subscription charged for user ${userId}`);
 }
 
@@ -2456,8 +2705,25 @@ async function sendPaymentFailureEmail(user, subscriptionId, errorCode, errorDes
       </div>
     `;
     
-    await sendEmail(user.email, subject, text, html);
-    logger.info(`Payment failure email sent to ${user.email}`);
+    await emailQueue.addToQueue({
+      to: user.email,
+      subject,
+      text,
+      html,
+      type: 'payment_failure',
+      userId: user._id,
+      metadata: {
+        subscriptionId,
+        errorCode,
+        errorDescription
+      }
+    });
+    
+    logger.info(`Payment failure email queued for ${user.email}`, {
+      userId: user._id,
+      subscriptionId,
+      errorCode
+    });
   } catch (error) {
     logger.error('Failed to send payment failure email', {
       userId: user._id,
