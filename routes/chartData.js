@@ -117,22 +117,71 @@ router.get('/', requireAdmin, priceLogController.getAllPriceLogs);
 
 /**
  * @swagger
+ * /api/chart-data/portfolio/{portfolioId}/performance:
+ *   get:
+ *     summary: Get portfolio performance data
+ *     tags: [ChartData]
+ *     parameters:
+ *       - in: path
+ *         name: portfolioId
+ *         required: true
+ *         schema:
+ *           type: string
+ *         description: Portfolio ID
+ *       - in: query
+ *         name: startDate
+ *         schema:
+ *           type: string
+ *           format: date
+ *         description: Start date for filtering
+ *       - in: query
+ *         name: endDate
+ *         schema:
+ *           type: string
+ *           format: date
+ *         description: End date for filtering
+ *     security:
+ *       - bearerAuth: []
+ *     responses:
+ *       200:
+ *         description: Portfolio performance data
+ *       404:
+ *         description: Portfolio not found
+ */
+router.get('/portfolio/:portfolioId/performance', requireAdmin, priceLogController.getPortfolioPerformance);
+
+/**
+ * @swagger
+ * /api/chart-data/cleanup-duplicates:
+ *   post:
+ *     summary: Clean up duplicate price logs
+ *     tags: [ChartData]
+ *     security:
+ *       - bearerAuth: []
+ *     responses:
+ *       200:
+ *         description: Cleanup results
+ */
+router.post('/cleanup-duplicates', requireAdmin, priceLogController.cleanupDuplicates);
+
+/**
+ * @swagger
  * /api/chart-data/{id}:
  *   get:
- *     summary: Get a price log by ID
+ *     summary: Get a specific price log
  *     tags: [ChartData]
  *     parameters:
  *       - in: path
  *         name: id
+ *         required: true
  *         schema:
  *           type: string
- *         required: true
  *         description: Price log ID
  *     security:
  *       - bearerAuth: []
  *     responses:
  *       200:
- *         description: Price log data
+ *         description: Price log details
  *       404:
  *         description: Price log not found
  */
@@ -211,54 +260,5 @@ router.put('/:id', requireAdmin, priceLogController.updatePriceLog);
  *         description: Price log not found
  */
 router.delete('/:id', requireAdmin, priceLogController.deletePriceLog);
-
-/**
- * @swagger
- * /api/chart-data/portfolio/{portfolioId}/performance:
- *   get:
- *     summary: Get portfolio performance data
- *     tags: [ChartData]
- *     parameters:
- *       - in: path
- *         name: portfolioId
- *         schema:
- *           type: string
- *         required: true
- *         description: Portfolio ID
- *       - in: query
- *         name: startDate
- *         schema:
- *           type: string
- *           format: date
- *         description: Start date for filtering
- *       - in: query
- *         name: endDate
- *         schema:
- *           type: string
- *           format: date
- *         description: End date for filtering
- *     security:
- *       - bearerAuth: []
- *     responses:
- *       200:
- *         description: Portfolio performance data
- *       404:
- *         description: Portfolio not found
- */
-router.get('/portfolio/:portfolioId/performance', requireAdmin, priceLogController.getPortfolioPerformance);
-
-/**
- * @swagger
- * /api/chart-data/cleanup-duplicates:
- *   post:
- *     summary: Clean up duplicate price logs
- *     tags: [ChartData]
- *     security:
- *       - bearerAuth: []
- *     responses:
- *       200:
- *         description: Cleanup results
- */
-router.post('/cleanup-duplicates', requireAdmin, priceLogController.cleanupDuplicates);
 
 module.exports = router;

@@ -271,8 +271,8 @@ const options = {
         description: 'Portfolio bundle management'
       },
       {
-        name: 'Charts',
-        description: 'Chart data and analytics'
+        name: 'ChartData',
+        description: 'Chart data and portfolio performance analytics'
       },
       {
         name: 'System',

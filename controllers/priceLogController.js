@@ -48,7 +48,7 @@ exports.getAllPriceLogs = asyncHandler(async (req, res) => {
   const total = await PriceLog.countDocuments(query);
   
   res.status(200).json({
-    success: true,
+    status: 'success',
     count: priceLogs.length,
     total,
     pagination: {
@@ -65,18 +65,26 @@ exports.getAllPriceLogs = asyncHandler(async (req, res) => {
  * @route GET /api/chart-data/:id
  */
 exports.getPriceLogById = asyncHandler(async (req, res) => {
+  // Validate ObjectId format
+  if (!mongoose.Types.ObjectId.isValid(req.params.id)) {
+    return res.status(400).json({ 
+      status: 'error',
+      message: 'Invalid price log ID format' 
+    });
+  }
+
   const priceLog = await PriceLog.findById(req.params.id)
     .populate('portfolio', 'name');
   
   if (!priceLog) {
     return res.status(404).json({ 
-      success: false, 
-      error: 'Price log not found' 
+      status: 'error',
+      message: 'Price log not found' 
     });
   }
   
   res.status(200).json({
-    success: true,
+    status: 'success',
     data: priceLog
   });
 });
@@ -129,13 +137,13 @@ exports.createPriceLog = asyncHandler(async (req, res) => {
   
   if (!result.success) {
     return res.status(400).json({
-      success: false,
-      error: result.error || 'Failed to create price log'
+      status: 'error',
+      message: result.error || 'Failed to create price log'
     });
   }
   
   res.status(201).json({
-    success: true,
+    status: 'success',
     data: result.priceLog,
     action: result.action
   });
@@ -146,6 +154,14 @@ exports.createPriceLog = asyncHandler(async (req, res) => {
  * @route PUT /api/chart-data/:id
  */
 exports.updatePriceLog = asyncHandler(async (req, res) => {
+  // Validate ObjectId format
+  if (!mongoose.Types.ObjectId.isValid(req.params.id)) {
+    return res.status(400).json({ 
+      status: 'error',
+      message: 'Invalid price log ID format' 
+    });
+  }
+
   const {
     portfolioValue,
     cashRemaining,
@@ -162,8 +178,8 @@ exports.updatePriceLog = asyncHandler(async (req, res) => {
   
   if (!priceLog) {
     return res.status(404).json({
-      success: false,
-      error: 'Price log not found'
+      status: 'error',
+      message: 'Price log not found'
     });
   }
   
@@ -195,7 +211,7 @@ exports.updatePriceLog = asyncHandler(async (req, res) => {
   );
   
   res.status(200).json({
-    success: true,
+    status: 'success',
     data: updatedPriceLog
   });
 });
@@ -205,20 +221,28 @@ exports.updatePriceLog = asyncHandler(async (req, res) => {
  * @route DELETE /api/chart-data/:id
  */
 exports.deletePriceLog = asyncHandler(async (req, res) => {
+  // Validate ObjectId format
+  if (!mongoose.Types.ObjectId.isValid(req.params.id)) {
+    return res.status(400).json({ 
+      status: 'error',
+      message: 'Invalid price log ID format' 
+    });
+  }
+
   const priceLog = await PriceLog.findById(req.params.id);
   
   if (!priceLog) {
     return res.status(404).json({
-      success: false,
-      error: 'Price log not found'
+      status: 'error',
+      message: 'Price log not found'
     });
   }
   
   await PriceLog.deleteOne({ _id: req.params.id });
   
   res.status(200).json({
-    success: true,
-    data: {}
+    status: 'success',
+    message: 'Price log deleted successfully'
   });
 });
 
@@ -230,12 +254,20 @@ exports.getPortfolioPerformance = asyncHandler(async (req, res) => {
   const { portfolioId } = req.params;
   const { startDate, endDate } = req.query;
   
+  // Validate ObjectId format
+  if (!mongoose.Types.ObjectId.isValid(portfolioId)) {
+    return res.status(400).json({ 
+      status: 'error',
+      message: 'Invalid portfolio ID format' 
+    });
+  }
+  
   // Validate that portfolio exists
   const portfolioExists = await Portfolio.exists({ _id: portfolioId });
   if (!portfolioExists) {
     return res.status(404).json({
-      success: false,
-      error: 'Portfolio not found'
+      status: 'error',
+      message: 'Portfolio not found'
     });
   }
   
@@ -253,7 +285,7 @@ exports.getPortfolioPerformance = asyncHandler(async (req, res) => {
     .select('dateOnly portfolioValue compareIndexValue');
   
   res.status(200).json({
-    success: true,
+    status: 'success',
     count: performanceData.length,
     data: performanceData
   });
@@ -267,7 +299,7 @@ exports.cleanupDuplicates = asyncHandler(async (req, res) => {
   const results = await PriceLog.cleanupDuplicates();
   
   res.status(200).json({
-    success: true,
-    results
+    status: 'success',
+    data: results
   });
 });
