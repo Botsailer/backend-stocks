@@ -29,7 +29,8 @@ const asyncHandler = fn => (req, res, next) => {
  */
 exports.createPortfolio = asyncHandler(async (req, res) => {
   const requestData = req.body;
-  
+  const isAdmin = req.user?.role === 'admin'; // assuming you set req.user
+
   try {
     // Step 1: Validate required fields
     const requiredFields = ['name', 'subscriptionFee', 'minInvestment', 'durationMonths'];
@@ -59,14 +60,14 @@ exports.createPortfolio = asyncHandler(async (req, res) => {
       });
     }
 
-    // Step 3: Validate and calculate portfolio financial integrity
+    // Step 3: Calculate portfolio summary using backend formulas only
     const portfolioSummary = PortfolioCalculationValidator.calculatePortfolioSummary({
       holdings: requestData.holdings || [],
       minInvestment: requestData.minInvestment,
-      currentMarketPrices: {} // Use buy prices for new portfolios
+      currentMarketPrices: {}
     });
 
-    if (!portfolioSummary.isFinanciallyValid) {
+    if (!portfolioSummary.isFinanciallyValid && !isAdmin) {
       return res.status(400).json({ 
         error: 'Portfolio financial validation failed',
         details: {
@@ -85,11 +86,17 @@ exports.createPortfolio = asyncHandler(async (req, res) => {
 
     if (tamperingCheck.isTampered) {
       calcLogger.warn('Portfolio creation tampering detected', { tamperingCheck, requestData });
-      return res.status(400).json({ 
-        error: 'Calculation validation failed',
-        details: 'Frontend calculations do not match backend validation',
-        validation: tamperingCheck
-      });
+
+      if (!isAdmin) {
+        return res.status(400).json({ 
+          error: 'Calculation validation failed',
+          details: 'Frontend calculations do not match backend validation',
+          validation: tamperingCheck
+        });
+      } else {
+        // For admin → ignore frontend values, recalc with backend ones
+        calcLogger.info('Admin request: ignoring frontend tampered values and using backend calculations');
+      }
     }
 
     // Step 5: Validate benchmark symbol if provided
@@ -110,7 +117,7 @@ exports.createPortfolio = asyncHandler(async (req, res) => {
       }
     }
 
-    // Step 6: Create portfolio with validated data
+    // Step 6: Always override with backend-calculated values
     const portfolioData = {
       name: requestData.name.trim(),
       description: requestData.description || [],
@@ -131,7 +138,7 @@ exports.createPortfolio = asyncHandler(async (req, res) => {
       monthlyContribution: requestData.monthlyContribution || 0,
       compareWith: requestData.compareWith || '',
       
-      // Use backend-calculated values
+      // Override from backend summary
       cashBalance: portfolioSummary.cashBalance,
       currentValue: portfolioSummary.totalPortfolioValueAtBuy
     };
@@ -143,7 +150,8 @@ exports.createPortfolio = asyncHandler(async (req, res) => {
       portfolioId: savedPortfolio._id,
       name: savedPortfolio.name,
       totalInvestment: portfolioSummary.totalActualInvestment,
-      holdingsCount: savedPortfolio.holdings.length
+      holdingsCount: savedPortfolio.holdings.length,
+      adminOverride: isAdmin
     });
 
     res.status(201).json(savedPortfolio);
@@ -824,36 +832,23 @@ exports.getPortfolioPnLSummary = asyncHandler(async (req, res) => {
 // Bulk update all portfolios with current market prices
 exports.updateAllPortfoliosWithMarketPrices = asyncHandler(async (req, res) => {
   try {
-    const portfolios = await Portfolio.find();
-    const results = [];
-
-    for (const portfolio of portfolios) {
-      try {
-        await portfolio.updateWithMarketPrices();
-        await portfolio.save();
-        results.push({
-          portfolioId: portfolio._id,
-          portfolioName: portfolio.name,
-          status: 'success',
-          totalUnrealizedPnL: portfolio.totalUnrealizedPnL,
-          totalUnrealizedPnLPercent: portfolio.totalUnrealizedPnLPercent
-        });
-      } catch (error) {
-        results.push({
-          portfolioId: portfolio._id,
-          portfolioName: portfolio.name,
-          status: 'failed',
-          error: error.message
-        });
-      }
-    }
-
-    const successCount = results.filter(r => r.status === 'success').length;
-    const failedCount = results.filter(r => r.status === 'failed').length;
+    const results = await Portfolio.updateAllWithMarketPrices();
+    
+    const successCount = results.filter(r => r.status === 'updated').length;
+    const noChangesCount = results.filter(r => r.status === 'no_changes').length;
+    const failedCount = results.filter(r => r.status === 'error').length;
+    const noHoldingsCount = results.filter(r => r.status === 'no_holdings').length;
 
     res.status(200).json({
       status: 'success',
-      message: `Updated ${successCount} portfolios successfully, ${failedCount} failed`,
+      message: `Updated ${successCount} portfolios, ${noChangesCount} had no changes, ${noHoldingsCount} had no holdings, ${failedCount} failed`,
+      summary: {
+        updated: successCount,
+        noChanges: noChangesCount,
+        noHoldings: noHoldingsCount,
+        failed: failedCount,
+        total: results.length
+      },
       results,
       timestamp: new Date()
     });

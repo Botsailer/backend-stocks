@@ -499,7 +499,10 @@ PortfolioSchema.pre('save', async function(next) {
       // Fetch stock symbols with their IDs and prices
       const stocks = await StockSymbol.find({ 
         symbol: { $in: symbols },
-        isActive: true 
+        $or: [
+          { isActive: true },
+          { isActive: { $exists: false } } // Include symbols without isActive field
+        ]
       }).select('_id symbol currentPrice todayClosingPrice closingPriceUpdatedAt');
       
       const stockMap = new Map();
@@ -765,6 +768,127 @@ PortfolioSchema.statics.findByIdWithMarketPrices = function(id) {
     select: 'symbol currentPrice todayClosingPrice closingPriceUpdatedAt lastUpdated isActive',
     match: { isActive: true }
   });
+};
+
+// Static method to update all portfolios with current market prices
+PortfolioSchema.statics.updateAllWithMarketPrices = async function() {
+  const StockSymbol = mongoose.model('StockSymbol');
+  const portfolios = await this.find({});
+  const results = [];
+  
+  for (const portfolio of portfolios) {
+    try {
+      if (portfolio.holdings && portfolio.holdings.length > 0) {
+        const symbols = portfolio.holdings.map(h => h.symbol);
+        
+        // Fetch current prices from StockSymbol collection
+        const stocks = await StockSymbol.find({ 
+          symbol: { $in: symbols },
+          $or: [
+            { isActive: true },
+            { isActive: { $exists: false } } // Include symbols without isActive field
+          ]
+        }).select('_id symbol currentPrice todayClosingPrice closingPriceUpdatedAt');
+        
+      const stockMap = new Map();
+      stocks.forEach(stock => {
+        stockMap.set(stock.symbol, {
+          _id: stock._id,
+          currentPrice: stock.currentPrice,
+          todayClosingPrice: stock.todayClosingPrice,
+          closingPriceUpdatedAt: stock.closingPriceUpdatedAt
+        });
+      });
+
+      let hasUpdates = false;
+        
+        // Update holdings with current prices
+        portfolio.holdings.forEach(holding => {
+          const stockData = stockMap.get(holding.symbol);
+          
+          if (stockData) {
+            // Auto-link stockRef if not already set
+            if (!holding.stockRef) {
+              holding.stockRef = stockData._id;
+            }
+            
+            // Use todayClosingPrice if available and recent, otherwise use currentPrice
+            const useClosingPrice = stockData.todayClosingPrice && 
+              stockData.closingPriceUpdatedAt && 
+              (Date.now() - stockData.closingPriceUpdatedAt.getTime()) < 24 * 60 * 60 * 1000;
+            
+            const newCurrentPrice = useClosingPrice ? stockData.todayClosingPrice : stockData.currentPrice;
+            
+            // Only update if price has changed
+            if (holding.currentPrice !== newCurrentPrice) {
+              holding.currentPrice = newCurrentPrice;
+              hasUpdates = true;
+            }
+            
+            // Recalculate investment values and PnL
+            holding.investmentValueAtBuy = parseFloat((holding.buyPrice * holding.quantity).toFixed(2));
+            holding.investmentValueAtMarket = parseFloat((holding.currentPrice * holding.quantity).toFixed(2));
+            holding.unrealizedPnL = parseFloat((holding.investmentValueAtMarket - holding.investmentValueAtBuy).toFixed(2));
+            
+            if (holding.investmentValueAtBuy > 0) {
+              holding.unrealizedPnLPercent = parseFloat(((holding.unrealizedPnL / holding.investmentValueAtBuy) * 100).toFixed(2));
+            } else {
+              holding.unrealizedPnLPercent = 0;
+            }
+            
+            holding.minimumInvestmentValueStock = holding.investmentValueAtMarket;
+          } else {
+            console.log(`    ❌ No stock data found for ${holding.symbol}`);
+          }
+        });
+        
+        if (hasUpdates) {
+          // Recalculate total portfolio value
+          const holdingsValueAtMarket = portfolio.holdings.reduce((sum, holding) => {
+            return sum + (holding.investmentValueAtMarket || 0);
+          }, 0);
+          
+          portfolio.currentValue = parseFloat((portfolio.cashBalance + holdingsValueAtMarket).toFixed(2));
+          
+          // Update weights
+          portfolio.holdings.forEach(holding => {
+            const holdingMarketValue = holding.investmentValueAtMarket || 0;
+            holding.weight = portfolio.currentValue > 0 ? 
+              parseFloat(((holdingMarketValue / portfolio.currentValue) * 100).toFixed(2)) : 0;
+          });
+          
+          await portfolio.save();
+          results.push({ 
+            portfolioId: portfolio._id, 
+            name: portfolio.name,
+            status: 'updated',
+            newValue: portfolio.currentValue 
+          });
+        } else {
+          results.push({ 
+            portfolioId: portfolio._id, 
+            name: portfolio.name,
+            status: 'no_changes' 
+          });
+        }
+      } else {
+        results.push({ 
+          portfolioId: portfolio._id, 
+          name: portfolio.name,
+          status: 'no_holdings' 
+        });
+      }
+    } catch (error) {
+      results.push({ 
+        portfolioId: portfolio._id, 
+        name: portfolio.name,
+        status: 'error', 
+        error: error.message 
+      });
+    }
+  }
+  
+  return results;
 };
 
 // Initialize gains for existing portfolios
