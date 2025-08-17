@@ -556,7 +556,7 @@ PortfolioSchema.pre('save', async function(next) {
         holding.minimumInvestmentValueStock = holding.investmentValueAtMarket;
       });
     } catch (error) {
-      console.warn('Failed to fetch stock data in pre-save hook:', error.message);
+      // Continue with fallback calculations if database fetch fails
       // Continue with fallback calculations if database fetch fails
       this.holdings.forEach(holding => {
         holding.investmentValueAtBuy = parseFloat((holding.buyPrice * holding.quantity).toFixed(2));
@@ -826,7 +826,7 @@ PortfolioSchema.statics.updateAllWithMarketPrices = async function() {
             
             holding.minimumInvestmentValueStock = holding.investmentValueAtMarket;
           } else {
-            console.log(`    ❌ No stock data found for ${holding.symbol}`);
+            // Stock data not found - will use fallback price
           }
         });
         

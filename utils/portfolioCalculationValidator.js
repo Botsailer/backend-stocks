@@ -238,27 +238,24 @@ class PortfolioCalculationValidator {
   }
 
   /**
-   * Calculate P&L for sell operations with real-time pricing
+   * Calculate P&L for sell operations with SIMPLE pricing - USER REQUIREMENT
+   * SIMPLE LOGIC: saleValue = currentMarketPrice * quantityToSell
    * @param {object} sellData - Sell operation data
    * @returns {object} P&L calculation with validation
    */
   static calculateSellPnL(sellData) {
     const {
       currentQuantity,
-      averagedBuyPrice, // Use averaged buy price for P&L calculation
+      averagedBuyPrice, 
       currentMarketPrice,
       quantityToSell,
       symbol,
-      originalBuyPrice // For comparison/display only
+      originalBuyPrice
     } = sellData;
 
     // Validation
     if (typeof currentQuantity !== 'number' || currentQuantity <= 0) {
       throw new Error(`Invalid current quantity: ${currentQuantity}`);
-    }
-    
-    if (typeof averagedBuyPrice !== 'number' || averagedBuyPrice <= 0) {
-      throw new Error(`Invalid averaged buy price: ${averagedBuyPrice}`);
     }
     
     if (typeof currentMarketPrice !== 'number' || currentMarketPrice <= 0) {
@@ -269,62 +266,42 @@ class PortfolioCalculationValidator {
       throw new Error(`Invalid quantity to sell: ${quantityToSell}. Must be between 1 and ${currentQuantity}`);
     }
 
-    // Calculate P&L using averaged buy price
+    // SIMPLE CALCULATION AS PER USER REQUIREMENT
+    // Sale value = current price * quantity (that's it!)
     const saleValue = quantityToSell * currentMarketPrice;
-    const averagedCost = quantityToSell * averagedBuyPrice;
+    
+    // For tracking: calculate P&L vs buy price (but don't affect cash calculation)
+    const averagedCost = quantityToSell * (averagedBuyPrice || currentMarketPrice);
     const profitLoss = saleValue - averagedCost;
     const profitLossPercent = averagedCost > 0 ? (profitLoss / averagedCost) * 100 : 0;
     
-    // Calculate what remains
+    // What remains after sale
     const remainingQuantity = currentQuantity - quantityToSell;
-    const remainingValue = remainingQuantity * currentMarketPrice;
-    const remainingCost = remainingQuantity * averagedBuyPrice;
-
-    // Calculate comparison with original price (for display)
-    const originalCost = quantityToSell * (originalBuyPrice || averagedBuyPrice);
-    const originalProfitLoss = saleValue - originalCost;
 
     const result = {
       symbol,
       quantitySold: Number(quantityToSell),
-      saleValue: Number(saleValue.toFixed(2)),
+      saleValue: Number(saleValue.toFixed(2)), // SIMPLE: currentPrice * quantity
       
-      // P&L based on averaged price (actual calculation)
+      // P&L tracking (for display only)
       averagedCost: Number(averagedCost.toFixed(2)),
       profitLoss: Number(profitLoss.toFixed(2)),
       profitLossPercent: Number(profitLossPercent.toFixed(2)),
       
-      // P&L based on original price (for comparison)
-      originalCost: Number(originalCost.toFixed(2)),
-      originalProfitLoss: Number(originalProfitLoss.toFixed(2)),
-      
       // Remaining position
       remainingQuantity: Number(remainingQuantity),
-      remainingValue: Number(remainingValue.toFixed(2)),
-      remainingCost: Number(remainingCost.toFixed(2)),
       
       // Prices used
-      averagedBuyPrice: Number(averagedBuyPrice),
-      originalBuyPrice: Number(originalBuyPrice || averagedBuyPrice),
+      averagedBuyPrice: Number(averagedBuyPrice || currentMarketPrice),
+      originalBuyPrice: Number(originalBuyPrice || averagedBuyPrice || currentMarketPrice),
       currentMarketPrice: Number(currentMarketPrice),
       
-      // Cash impact
-      cashIncrease: Number(saleValue.toFixed(2)),
+      // CASH IMPACT: SIMPLE - just add sale value to cash
+      cashIncrease: Number(saleValue.toFixed(2)), // currentPrice * quantity
       realizedPnL: Number(profitLoss.toFixed(2)),
       
       calculatedAt: new Date().toISOString()
     };
-
-    calcLogger.info('Sell P&L calculation completed', { 
-      input: sellData, 
-      result: {
-        symbol: result.symbol,
-        quantitySold: result.quantitySold,
-        saleValue: result.saleValue,
-        profitLoss: result.profitLoss,
-        cashIncrease: result.cashIncrease
-      }
-    });
 
     return result;
   }

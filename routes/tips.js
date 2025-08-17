@@ -280,12 +280,7 @@ router.get(
  */
 router.get("/", requireAdmin, tipController.getalltipswithoutPortfolio);
 
-router.get("/:id", requireAdmin, (req, res, next) => {
-  console.log('Tips route /:id hit with id:', req.params.id);
-  console.log('Request URL:', req.originalUrl);
-  console.log('Request path:', req.path);
-  next();
-}, tipController.getTipById);
+router.get("/:id", requireAdmin, tipController.getTipById);
 
 // Create a new tip for a portfolio
 /**

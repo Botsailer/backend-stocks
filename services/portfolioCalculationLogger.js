@@ -21,7 +21,7 @@ class PortfolioCalculationLogger {
     try {
       await fs.mkdir(this.logDir, { recursive: true });
     } catch (error) {
-      console.error('Failed to create log directory:', error);
+      // Directory creation failed - fail silently in production
     }
   }
 
@@ -43,7 +43,7 @@ class PortfolioCalculationLogger {
       
       if (fileAge > this.maxLogAge) {
         await fs.unlink(this.logFilePath);
-        console.log('Old portfolio calculation log file deleted');
+        // Old log file cleaned up
       }
     } catch (error) {
       // File doesn't exist or can't be accessed, ignore
@@ -64,7 +64,7 @@ class PortfolioCalculationLogger {
     try {
       await fs.appendFile(this.logFilePath, logLine);
     } catch (error) {
-      console.error('Failed to write to log file:', error);
+      // Failed to write to log file - fail silently in production
     }
   }
 

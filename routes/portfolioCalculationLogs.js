@@ -99,7 +99,6 @@ router.get('/', async (req, res) => {
       }
     });
   } catch (error) {
-    console.error('Error retrieving calculation logs:', error);
     res.status(500).json({
       success: false,
       error: 'Failed to retrieve calculation logs',
@@ -168,7 +167,6 @@ router.post('/calculate/:portfolioId', async (req, res) => {
       message: `Detailed calculation completed for portfolio "${portfolio.name}". Check logs for step-by-step details.`
     });
   } catch (error) {
-    console.error('Error in detailed calculation:', error);
     res.status(500).json({
       success: false,
       error: 'Portfolio calculation failed',
@@ -242,7 +240,6 @@ router.get('/summary', async (req, res) => {
       summary: summary
     });
   } catch (error) {
-    console.error('Error retrieving logs summary:', error);
     res.status(500).json({
       success: false,
       error: 'Failed to retrieve logs summary',
@@ -282,7 +279,6 @@ router.delete('/clear', async (req, res) => {
       message: 'Portfolio calculation logs cleared successfully'
     });
   } catch (error) {
-    console.error('Error clearing logs:', error);
     res.status(500).json({
       success: false,
       error: 'Failed to clear logs',
@@ -347,7 +343,6 @@ router.get('/steps', async (req, res) => {
       steps: steps
     });
   } catch (error) {
-    console.error('Error retrieving steps:', error);
     res.status(500).json({
       success: false,
       error: 'Failed to retrieve steps',

@@ -44,15 +44,24 @@ exports.sendEmail = async (to, subject, text, html) => {
     return await transporter.sendMail(mailOptions);
     transporter.close(); // Close the transporter after sending
   } catch (error) {
-    console.error('Error sending email:', error);
+    // Log error for internal tracking
+    const errorDetails = {
+      error: error.message,
+      to,
+      subject,
+      timestamp: new Date().toISOString()
+    };
     
-    // Log more details for troubleshooting
-    if (process.env.NODE_ENV === 'development') {
-      console.log('Mail options:', {
-        to,
-        subject,
-        config: await getSmtpConfig()
-      });
+    // Write to error log file in production
+    if (process.env.NODE_ENV === 'production') {
+      try {
+        const fs = require('fs').promises;
+        const path = require('path');
+        const logPath = path.join(__dirname, '../logs/email-service.log');
+        await fs.appendFile(logPath, JSON.stringify(errorDetails) + '\n');
+      } catch (logError) {
+        // Fail silently in production
+      }
     }
     
     // Don't throw the error in production to prevent app crashes
@@ -87,7 +96,7 @@ exports.sendContactUsEmail = async (name, email, askingabout , represent ,messag
   // Get config inside the function
   const smtpConfig = await getSmtpConfig();
   const receiveemailat = smtpConfig?.receiveemailat;
-  console.log('SMTP Config:', smtpConfig);
+  
   if (!receiveemailat) {
     throw new Error('Receive email address is not configured');
   }
@@ -137,7 +146,22 @@ exports.verifySmtpConfig = async () => {
     transporter.close();
     return transporter.verify();
   } catch (error) {
-    console.error('SMTP configuration error:', error);
+    // Log SMTP configuration error to file in production
+    if (process.env.NODE_ENV === 'production') {
+      try {
+        const fs = require('fs').promises;
+        const path = require('path');
+        const logPath = path.join(__dirname, '../logs/email-service.log');
+        const errorLog = {
+          error: 'SMTP configuration error',
+          details: error.message,
+          timestamp: new Date().toISOString()
+        };
+        await fs.appendFile(logPath, JSON.stringify(errorLog) + '\n');
+      } catch (logError) {
+        // Fail silently
+      }
+    }
     throw new Error('Failed to verify SMTP configuration');
   }
 } 

@@ -59,38 +59,31 @@ exports.createPortfolio = asyncHandler(async (req, res) => {
       });
     }
 
-    // Step 3: Validate and calculate portfolio financial integrity
+    // Step 3: Calculate portfolio summary (for info only, don't block creation)
     const portfolioSummary = PortfolioCalculationValidator.calculatePortfolioSummary({
       holdings: requestData.holdings || [],
       minInvestment: requestData.minInvestment,
       currentMarketPrices: {} // Use buy prices for new portfolios
     });
 
-    if (!portfolioSummary.isFinanciallyValid) {
+    // SIMPLIFIED VALIDATION: Only check that total holdings don't exceed minInvestment
+    const totalHoldingsCost = (requestData.holdings || []).reduce((sum, holding) => {
+      return sum + (parseFloat(holding.buyPrice || 0) * parseFloat(holding.quantity || 0));
+    }, 0);
+
+    if (totalHoldingsCost > requestData.minInvestment) {
       return res.status(400).json({ 
-        error: 'Portfolio financial validation failed',
+        error: 'Total holdings cost exceeds minimum investment',
         details: {
-          weightValidation: portfolioSummary.weightValidation,
-          minInvestmentValidation: portfolioSummary.minInvestmentValidation,
-          summary: portfolioSummary
+          totalHoldingsCost: totalHoldingsCost,
+          minInvestment: requestData.minInvestment,
+          difference: totalHoldingsCost - requestData.minInvestment
         }
       });
     }
 
-    // Step 4: Detect potential tampering
-    const tamperingCheck = PortfolioCalculationValidator.detectCalculationTampering(
-      requestData,
-      { id: 'new' }
-    );
-
-    if (tamperingCheck.isTampered) {
-      calcLogger.warn('Portfolio creation tampering detected', { tamperingCheck, requestData });
-      return res.status(400).json({ 
-        error: 'Calculation validation failed',
-        details: 'Frontend calculations do not match backend validation',
-        validation: tamperingCheck
-      });
-    }
+    // Step 4: REMOVED TAMPERING VALIDATION - Use backend calculations only
+    // Backend will handle all calculations, ignore frontend values
 
     // Step 5: Validate benchmark symbol if provided
     if (requestData.compareWith) {
@@ -228,7 +221,7 @@ exports.getPortfolioPriceHistory = asyncHandler(async (req, res) => {
       ...historyData
     });
   } catch (error) {
-    console.error('Portfolio price history error:', error);
+    calcLogger.error('Portfolio price history error', { error: error.message, portfolioId: id });
     res.status(500).json({ 
       status: 'error',
       error: 'Failed to retrieve price history',
@@ -476,9 +469,12 @@ exports.updatePortfolio = asyncHandler(async (req, res) => {
             saleType: saleType
           });
 
-          console.log(`✅ Processed ${saleType} sale for ${saleRequest.symbol}:`, saleResult);
+          // Sale processed successfully - logged via calcLogger
         } catch (saleError) {
-          console.error(`❌ Failed to process sale for ${saleRequest.symbol}:`, saleError);
+          calcLogger.error('Stock sale processing failed', { 
+            symbol: saleRequest.symbol, 
+            error: saleError.message 
+          });
           return res.status(400).json({ 
             error: `Failed to process sale for ${saleRequest.symbol}: ${saleError.message}` 
           });
@@ -639,7 +635,7 @@ exports.updatePortfolio = asyncHandler(async (req, res) => {
   // Log warning if frontend tries to send calculated fields
   ignoredFields.forEach(field => {
     if (req.body[field] !== undefined) {
-      console.warn(`⚠️  Ignoring calculated field '${field}' from frontend - will be calculated by backend`);
+      calcLogger.debug('Ignoring calculated field from frontend', { field });
     }
   });
 
@@ -935,7 +931,7 @@ exports.updateAllPortfoliosWithMarketPrices = asyncHandler(async (req, res) => {
 });
 
 exports.errorHandler = (err, req, res, next) => {
-  console.error(err.stack);
+  calcLogger.error('Unhandled portfolio controller error', { error: err.message, stack: err.stack });
   const status = err.status || 500;
   res.status(status).json({ 
     error: err.message || 'Server Error',

@@ -1274,8 +1274,6 @@ router.post('/portfolios/:id/detailed-calculation', requireAdmin, async (req, re
   try {
     const { id } = req.params;
     
-    console.log(`🔍 Starting detailed portfolio calculation for ID: ${id}`);
-    
     const result = await portfolioService.calculatePortfolioValueWithDetailedLogging(id);
     
     res.json({
@@ -1287,7 +1285,6 @@ router.post('/portfolios/:id/detailed-calculation', requireAdmin, async (req, re
     });
 
   } catch (error) {
-    console.error(`❌ Detailed calculation failed for portfolio ${req.params.id}:`, error);
     res.status(error.message.includes('not found') ? 404 : 500).json({
       success: false,
       error: error.message,
@@ -1507,7 +1504,6 @@ router.post('/portfolios/:id/sell-stock', requireAdmin, async (req, res) => {
     });
 
   } catch (error) {
-    console.error('Stock sale error:', error);
     res.status(500).json({
       success: false,
       error: 'Stock sale failed',
@@ -1554,7 +1550,6 @@ router.post('/portfolios/cleanup-sold-stocks', requireAdmin, async (req, res) =>
     });
 
   } catch (error) {
-    console.error('Cleanup error:', error);
     res.status(500).json({
       success: false,
       error: 'Cleanup failed',
