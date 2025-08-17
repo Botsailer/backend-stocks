@@ -12,7 +12,6 @@ const userSchema = new mongoose.Schema({
   providerId: String,
   mainUserId: { type: String, default: null },
   fullName: { type: String, default: null },
-  dateofBirth: { type: Date, default: null },
   phone: { type: String, default: null },
   pandetails: { 
     type: String, 
