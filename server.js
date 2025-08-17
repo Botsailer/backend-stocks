@@ -464,6 +464,52 @@ app.use('/api', require('./routes/Portfolio'));
       });
     });
 
+
+
+app.get('/transactionlog',(req,res)=>{
+  //load the transaction log file to response 
+  try {
+    const logFilePath = path.join(__dirname, 'transaction-logs.txt');
+    
+    // Check if file exists
+    require('fs').access(logFilePath, require('fs').constants.F_OK, (err) => {
+      if (err) {
+        return res.status(404).json({
+          success: false,
+          message: 'Transaction log file not found'
+        });
+      }
+      
+      // Set appropriate headers for text file
+      res.setHeader('Content-Type', 'text/plain; charset=utf-8');
+      res.setHeader('Content-Disposition', 'inline; filename="transaction-logs.txt"');
+      
+      // Create readable stream and pipe to response
+      const readStream = require('fs').createReadStream(logFilePath, { encoding: 'utf8' });
+      
+      readStream.on('error', (error) => {
+        console.error('Error reading transaction log file:', error);
+        if (!res.headersSent) {
+          res.status(500).json({
+            success: false,
+            message: 'Error reading transaction log file'
+          });
+        }
+      });
+      
+      // Pipe the file stream to response
+      readStream.pipe(res);
+    });
+  } catch (error) {
+    console.error('Transaction log endpoint error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Internal server error'
+    });
+  }
+})
+
+
     /**
      * @swagger
      * /api/admin/logs/status:
