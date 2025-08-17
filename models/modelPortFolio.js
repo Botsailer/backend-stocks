@@ -67,6 +67,36 @@ const StockHoldingSchema = new Schema({
     required: true,
     min: 1
   },
+  // Investment value at buy price (buyPrice * quantity)
+  investmentValueAtBuy: {
+    type: Number,
+    default: 0,
+    // This will be buyPrice * quantity
+  },
+  // Investment value at current market price (currentPrice * quantity)
+  investmentValueAtMarket: {
+    type: Number,
+    default: 0,
+    // This will be currentPrice * quantity
+  },
+  // Current market price of the stock
+  currentPrice: {
+    type: Number,
+    default: 0,
+    min: 0
+  },
+  // Unrealized PnL (difference between market value and buy value)
+  unrealizedPnL: {
+    type: Number,
+    default: 0,
+    // investmentValueAtMarket - investmentValueAtBuy
+  },
+  // Unrealized PnL percentage
+  unrealizedPnLPercent: {
+    type: Number,
+    default: 0,
+    // ((investmentValueAtMarket - investmentValueAtBuy) / investmentValueAtBuy) * 100
+  },
   realizedPnL: {
     type: Number,
     default: 0,
@@ -377,11 +407,27 @@ PortfolioSchema.virtual('holdingsValue').get(function() {
   }, 0) || 0;
 });
 
-// Virtual for holdings value at current market prices (async helper needed)
+// Virtual for holdings value at current market prices
 PortfolioSchema.virtual('holdingsValueAtMarket').get(function() {
-  // This is a placeholder - actual calculation needs to be async
-  // Use portfolioService.calculateRealTimeValue() instead
-  return this.currentValue - this.cashBalance;
+  return this.holdings?.reduce((sum, holding) => {
+    return sum + (holding.investmentValueAtMarket || 0);
+  }, 0) || 0;
+});
+
+// Virtual for total unrealized PnL across all holdings
+PortfolioSchema.virtual('totalUnrealizedPnL').get(function() {
+  return this.holdings?.reduce((sum, holding) => {
+    return sum + (holding.unrealizedPnL || 0);
+  }, 0) || 0;
+});
+
+// Virtual for total unrealized PnL percentage
+PortfolioSchema.virtual('totalUnrealizedPnLPercent').get(function() {
+  const totalInvestmentAtBuy = this.holdingsValue;
+  if (totalInvestmentAtBuy > 0) {
+    return parseFloat(((this.totalUnrealizedPnL / totalInvestmentAtBuy) * 100).toFixed(2));
+  }
+  return 0;
 });
 
 PortfolioSchema.virtual('daysSinceCreation').get(function() {
@@ -390,7 +436,7 @@ PortfolioSchema.virtual('daysSinceCreation').get(function() {
 });
 
 // Pre-save hook for data consistency
-PortfolioSchema.pre('save', function(next) {
+PortfolioSchema.pre('save', async function(next) {
   // Sanitize holdings data to prevent NaN values
   this.holdings.forEach(holding => {
     holding.buyPrice = parseFloat(holding.buyPrice) || 0;
@@ -400,18 +446,88 @@ PortfolioSchema.pre('save', function(next) {
     holding.realizedPnL = parseFloat(holding.realizedPnL) || 0;
   });
 
+  // Fetch current prices from StockSymbol collection if holdings exist
+  if (this.holdings && this.holdings.length > 0) {
+    const StockSymbol = mongoose.model('StockSymbol');
+    const symbols = this.holdings.map(h => h.symbol);
+    
+    try {
+      const stocks = await StockSymbol.find({ 
+        symbol: { $in: symbols },
+        isActive: true 
+      }).select('symbol currentPrice todayClosingPrice closingPriceUpdatedAt');
+      
+      const priceMap = new Map();
+      stocks.forEach(stock => {
+        // Use todayClosingPrice if available and recent, otherwise use currentPrice
+        const useClosingPrice = stock.todayClosingPrice && 
+          stock.closingPriceUpdatedAt && 
+          (Date.now() - stock.closingPriceUpdatedAt.getTime()) < 24 * 60 * 60 * 1000; // Within 24 hours
+        
+        const marketPrice = useClosingPrice ? stock.todayClosingPrice : stock.currentPrice;
+        priceMap.set(stock.symbol, marketPrice || 0);
+      });
+
+      // Calculate investment values for PnL tracking
+      this.holdings.forEach(holding => {
+        // Investment value at buy price (always calculated from buyPrice)
+        holding.investmentValueAtBuy = parseFloat((holding.buyPrice * holding.quantity).toFixed(2));
+        
+        // Get current price from StockSymbol collection, fallback to buy price if not found
+        const marketPrice = priceMap.get(holding.symbol);
+        holding.currentPrice = marketPrice || holding.buyPrice || 0;
+        
+        // Investment value at current market price
+        holding.investmentValueAtMarket = parseFloat((holding.currentPrice * holding.quantity).toFixed(2));
+        
+        // Calculate unrealized PnL
+        holding.unrealizedPnL = parseFloat((holding.investmentValueAtMarket - holding.investmentValueAtBuy).toFixed(2));
+        
+        // Calculate unrealized PnL percentage
+        if (holding.investmentValueAtBuy > 0) {
+          holding.unrealizedPnLPercent = parseFloat(((holding.unrealizedPnL / holding.investmentValueAtBuy) * 100).toFixed(2));
+        } else {
+          holding.unrealizedPnLPercent = 0;
+        }
+        
+        // Update minimumInvestmentValueStock to current market value for new calculations
+        holding.minimumInvestmentValueStock = holding.investmentValueAtMarket;
+      });
+    } catch (error) {
+      console.warn('Failed to fetch stock prices in pre-save hook:', error.message);
+      // Continue with existing logic if price fetch fails
+      this.holdings.forEach(holding => {
+        holding.investmentValueAtBuy = parseFloat((holding.buyPrice * holding.quantity).toFixed(2));
+        holding.currentPrice = parseFloat(holding.currentPrice) || holding.buyPrice || 0;
+        holding.investmentValueAtMarket = parseFloat((holding.currentPrice * holding.quantity).toFixed(2));
+        holding.unrealizedPnL = parseFloat((holding.investmentValueAtMarket - holding.investmentValueAtBuy).toFixed(2));
+        
+        if (holding.investmentValueAtBuy > 0) {
+          holding.unrealizedPnLPercent = parseFloat(((holding.unrealizedPnL / holding.investmentValueAtBuy) * 100).toFixed(2));
+        } else {
+          holding.unrealizedPnLPercent = 0;
+        }
+        
+        holding.minimumInvestmentValueStock = holding.investmentValueAtMarket;
+      });
+    }
+  }
+
   // Ensure cashBalance is valid
   this.cashBalance = parseFloat(this.cashBalance) || 0;
   if (isNaN(this.cashBalance)) {
     this.cashBalance = 0;
   }
 
+  // Calculate total portfolio value using current market prices
+  const holdingsValueAtMarket = this.holdings.reduce((sum, holding) => {
+    return sum + (holding.investmentValueAtMarket || 0);
+  }, 0);
+
   // Only auto-calculate currentValue if it's not explicitly being set
   // (allows manual updates from real-time calculations)
   if (!this.isModified('currentValue')) {
-    const holdingsValue = this.holdingsValue || 0;
-    const cashBalance = this.cashBalance || 0;
-    this.currentValue = cashBalance + holdingsValue;
+    this.currentValue = this.cashBalance + holdingsValueAtMarket;
   }
 
   // Ensure currentValue is valid
@@ -420,13 +536,11 @@ PortfolioSchema.pre('save', function(next) {
     this.currentValue = 0;
   }
 
-  // Update holding weights based on CURRENT stored value
+  // Update holding weights based on current market value
   this.holdings.forEach(holding => {
-    const buyPrice = parseFloat(holding.buyPrice) || 0;
-    const quantity = parseFloat(holding.quantity) || 0;
-    const holdingValue = buyPrice * quantity;
+    const holdingMarketValue = holding.investmentValueAtMarket || 0;
     holding.weight = this.currentValue > 0 ? 
-      parseFloat(((holdingValue / this.currentValue) * 100).toFixed(2)) : 0;
+      parseFloat(((holdingMarketValue / this.currentValue) * 100).toFixed(2)) : 0;
   });
 
   // Set expiry date if not provided
@@ -586,32 +700,67 @@ PortfolioSchema.statics.initializeGains = async function() {
   return results;
 };
 
-// Method to update portfolio value with current market prices
+// Method to update portfolio value with current market prices from StockSymbol collection
 PortfolioSchema.methods.updateWithMarketPrices = async function() {
   const StockSymbol = mongoose.model('StockSymbol');
-  let totalValue = parseFloat(this.cashBalance) || 0;
+  let totalValueAtMarket = parseFloat(this.cashBalance) || 0;
   const symbols = this.holdings.map(h => h.symbol);
   
   if (symbols.length > 0) {
-    const stocks = await StockSymbol.find({ symbol: { $in: symbols } });
+    // Fetch current prices from StockSymbol collection
+    const stocks = await StockSymbol.find({ 
+      symbol: { $in: symbols },
+      isActive: true 
+    }).select('symbol currentPrice todayClosingPrice lastUpdated');
+    
     const priceMap = new Map();
     stocks.forEach(stock => {
-      priceMap.set(stock.symbol, stock.currentPrice || 0);
+      // Use todayClosingPrice if available and recent, otherwise use currentPrice
+      const useClosingPrice = stock.todayClosingPrice && 
+        stock.closingPriceUpdatedAt && 
+        (Date.now() - stock.closingPriceUpdatedAt.getTime()) < 24 * 60 * 60 * 1000; // Within 24 hours
+      
+      const marketPrice = useClosingPrice ? stock.todayClosingPrice : stock.currentPrice;
+      priceMap.set(stock.symbol, marketPrice || 0);
     });
 
     this.holdings.forEach(holding => {
-      const currentPrice = priceMap.get(holding.symbol) || holding.buyPrice;
-      const holdingValue = currentPrice * holding.quantity;
-      totalValue += holdingValue;
+      const currentPrice = priceMap.get(holding.symbol) || holding.buyPrice || 0;
       
-      // Update weight based on current market price
-      if (totalValue > 0) {
-        holding.weight = (holdingValue / totalValue) * 100;
+      // Update current price from market data
+      holding.currentPrice = currentPrice;
+      
+      // Calculate investment values
+      holding.investmentValueAtBuy = parseFloat((holding.buyPrice * holding.quantity).toFixed(2));
+      holding.investmentValueAtMarket = parseFloat((currentPrice * holding.quantity).toFixed(2));
+      
+      // Calculate unrealized PnL
+      holding.unrealizedPnL = parseFloat((holding.investmentValueAtMarket - holding.investmentValueAtBuy).toFixed(2));
+      
+      // Calculate unrealized PnL percentage
+      if (holding.investmentValueAtBuy > 0) {
+        holding.unrealizedPnLPercent = parseFloat(((holding.unrealizedPnL / holding.investmentValueAtBuy) * 100).toFixed(2));
+      } else {
+        holding.unrealizedPnLPercent = 0;
+      }
+      
+      // Update minimumInvestmentValueStock to current market value
+      holding.minimumInvestmentValueStock = holding.investmentValueAtMarket;
+      
+      totalValueAtMarket += holding.investmentValueAtMarket;
+    });
+    
+    // Recalculate weights based on total portfolio value at market
+    this.holdings.forEach(holding => {
+      if (totalValueAtMarket > 0) {
+        holding.weight = parseFloat(((holding.investmentValueAtMarket / totalValueAtMarket) * 100).toFixed(2));
+      } else {
+        holding.weight = 0;
       }
     });
   }
   
-  this.currentValue = parseFloat(totalValue.toFixed(2));
+  this.currentValue = parseFloat(totalValueAtMarket.toFixed(2));
   return this;
 };
 

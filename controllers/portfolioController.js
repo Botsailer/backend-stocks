@@ -1,3 +1,19 @@
+/**
+ * Portfolio Controller with Enhanced PnL Tracking
+ * 
+ * Features:
+ * - Automatic price sync from StockSymbol collection
+ * - Real-time PnL calculations (unrealized gains/losses)
+ * - Market value vs buy value tracking
+ * - Comprehensive portfolio valuation
+ * - Backward compatible with existing data
+ * 
+ * New Endpoints:
+ * - PUT /portfolios/:id/update-market-prices - Update single portfolio with market prices
+ * - GET /portfolios/:id/pnl-summary - Get comprehensive PnL summary
+ * - PUT /portfolios/update-all-market-prices - Bulk update all portfolios
+ */
+
 const { default: mongoose } = require('mongoose');
 const Portfolio = require('../models/modelPortFolio');
 const PriceLog = require('../models/PriceLog');
@@ -144,203 +160,6 @@ exports.createPortfolio = asyncHandler(async (req, res) => {
     
     res.status(500).json({ 
       error: 'Failed to create portfolio', 
-      details: error.message 
-    });
-  }
-});
-
-/**
- * Production-level portfolio update with comprehensive validation
- */
-exports.updatePortfolio = asyncHandler(async (req, res) => {
-  const portfolioId = req.params.id;
-  const updateData = req.body;
-  
-  try {
-    // Step 1: Find existing portfolio
-    const existingPortfolio = await Portfolio.findById(portfolioId);
-    if (!existingPortfolio) {
-      return res.status(404).json({ error: 'Portfolio not found' });
-    }
-
-    // Step 2: Determine update strategy based on stockAction
-    const stockAction = updateData.stockAction || 'update';
-    const validActions = ['update', 'add', 'delete', 'replace'];
-    
-    if (!validActions.includes(stockAction)) {
-      return res.status(400).json({ 
-        error: 'Invalid stockAction',
-        validActions
-      });
-    }
-
-    let updatedHoldings = [...existingPortfolio.holdings];
-
-    // Step 3: Handle holdings modifications
-    if (updateData.holdings && updateData.holdings.length > 0) {
-      switch (stockAction) {
-        case 'add':
-          // Add new holdings to existing ones
-          const newSymbols = updateData.holdings.map(h => h.symbol.toUpperCase());
-          const existingSymbols = updatedHoldings.map(h => h.symbol.toUpperCase());
-          const duplicates = newSymbols.filter(symbol => existingSymbols.includes(symbol));
-          
-          if (duplicates.length > 0) {
-            return res.status(400).json({ 
-              error: 'Cannot add existing symbols',
-              duplicates
-            });
-          }
-          
-          updatedHoldings = [...updatedHoldings, ...updateData.holdings];
-          break;
-          
-        case 'delete':
-          // Remove holdings by symbol
-          const symbolsToDelete = updateData.holdings.map(h => h.symbol.toUpperCase());
-          updatedHoldings = updatedHoldings.filter(
-            h => !symbolsToDelete.includes(h.symbol.toUpperCase())
-          );
-          break;
-          
-        case 'replace':
-          // Replace entire holdings array
-          updatedHoldings = updateData.holdings;
-          break;
-          
-        case 'update':
-        default:
-          // Update existing holdings by symbol, add new ones
-          const updateMap = new Map(
-            updateData.holdings.map(h => [h.symbol.toUpperCase(), h])
-          );
-          
-          // Update existing holdings
-          updatedHoldings = updatedHoldings.map(existing => {
-            const update = updateMap.get(existing.symbol.toUpperCase());
-            if (update) {
-              updateMap.delete(existing.symbol.toUpperCase());
-              return { ...existing.toObject(), ...update };
-            }
-            return existing;
-          });
-          
-          // Add new holdings
-          updateMap.forEach(newHolding => {
-            updatedHoldings.push(newHolding);
-          });
-          break;
-      }
-    }
-
-    // Step 4: Prepare updated portfolio data
-    const portfolioUpdateData = {
-      ...updateData,
-      holdings: updatedHoldings
-    };
-    
-    // Remove stockAction from final data
-    delete portfolioUpdateData.stockAction;
-
-    // Step 5: Validate updated portfolio if holdings were modified
-    if (updateData.holdings || updateData.minInvestment) {
-      const portfolioSummary = PortfolioCalculationValidator.calculatePortfolioSummary({
-        holdings: updatedHoldings,
-        minInvestment: updateData.minInvestment || existingPortfolio.minInvestment,
-        currentMarketPrices: {}
-      });
-
-      if (!portfolioSummary.isFinanciallyValid) {
-        return res.status(400).json({ 
-          error: 'Updated portfolio financial validation failed',
-          details: {
-            weightValidation: portfolioSummary.weightValidation,
-            minInvestmentValidation: portfolioSummary.minInvestmentValidation,
-            summary: portfolioSummary
-          }
-        });
-      }
-
-      // Update with backend-calculated values
-      portfolioUpdateData.cashBalance = portfolioSummary.cashBalance;
-      portfolioUpdateData.currentValue = portfolioSummary.totalPortfolioValueAtBuy;
-
-      // Detect tampering if financial data was provided
-      if (updateData.cashBalance !== undefined || updateData.currentValue !== undefined) {
-        const tamperingCheck = PortfolioCalculationValidator.detectCalculationTampering(
-          {
-            ...updateData,
-            holdings: updatedHoldings,
-            minInvestment: updateData.minInvestment || existingPortfolio.minInvestment
-          },
-          existingPortfolio
-        );
-
-        if (tamperingCheck.isTampered) {
-          calcLogger.warn('Portfolio update tampering detected', { 
-            portfolioId, 
-            tamperingCheck 
-          });
-          return res.status(400).json({ 
-            error: 'Calculation validation failed',
-            details: 'Frontend calculations do not match backend validation',
-            validation: tamperingCheck
-          });
-        }
-      }
-    }
-
-    // Step 6: Validate benchmark symbol if changed
-    if (portfolioUpdateData.compareWith && 
-        portfolioUpdateData.compareWith !== existingPortfolio.compareWith) {
-      const StockSymbol = require('../models/stockSymbol');
-      let symbolExists = false;
-      
-      if (/^[0-9a-fA-F]{24}$/.test(portfolioUpdateData.compareWith)) {
-        symbolExists = await StockSymbol.exists({ _id: portfolioUpdateData.compareWith });
-      } else {
-        symbolExists = await StockSymbol.exists({ symbol: portfolioUpdateData.compareWith });
-      }
-      
-      if (!symbolExists) {
-        return res.status(400).json({ 
-          error: `Benchmark symbol "${portfolioUpdateData.compareWith}" does not exist` 
-        });
-      }
-    }
-
-    // Step 7: Update portfolio
-    const updatedPortfolio = await Portfolio.findByIdAndUpdate(
-      portfolioId,
-      portfolioUpdateData,
-      { 
-        new: true, 
-        runValidators: true,
-        context: 'query'
-      }
-    );
-
-    calcLogger.info('Portfolio updated successfully', {
-      portfolioId,
-      stockAction,
-      holdingsCount: updatedPortfolio.holdings.length,
-      updatedFields: Object.keys(updateData)
-    });
-
-    res.json(updatedPortfolio);
-    
-  } catch (error) {
-    calcLogger.error('Portfolio update failed', { 
-      portfolioId, 
-      error: error.message 
-    });
-    
-    if (error.code === 11000) {
-      return res.status(400).json({ error: 'Portfolio name already exists' });
-    }
-    
-    res.status(500).json({ 
-      error: 'Failed to update portfolio', 
       details: error.message 
     });
   }
@@ -605,8 +424,26 @@ exports.updatePortfolio = asyncHandler(async (req, res) => {
           quantity: parseFloat(newHolding.quantity) || 0,
           minimumInvestmentValueStock: parseFloat(newHolding.minimumInvestmentValueStock) || 0,
           weight: parseFloat(newHolding.weight) || 0,
-          realizedPnL: parseFloat(newHolding.realizedPnL) || 0
+          realizedPnL: parseFloat(newHolding.realizedPnL) || 0,
+          currentPrice: parseFloat(newHolding.currentPrice) || parseFloat(newHolding.buyPrice) || 0
         };
+
+        // Calculate investment values and PnL
+        sanitizedHolding.investmentValueAtBuy = parseFloat((sanitizedHolding.buyPrice * sanitizedHolding.quantity).toFixed(2));
+        
+        // Note: currentPrice will be automatically fetched from StockSymbol collection in pre-save hook
+        // For immediate calculation, use provided currentPrice or buyPrice as fallback
+        sanitizedHolding.investmentValueAtMarket = parseFloat((sanitizedHolding.currentPrice * sanitizedHolding.quantity).toFixed(2));
+        sanitizedHolding.unrealizedPnL = parseFloat((sanitizedHolding.investmentValueAtMarket - sanitizedHolding.investmentValueAtBuy).toFixed(2));
+        
+        if (sanitizedHolding.investmentValueAtBuy > 0) {
+          sanitizedHolding.unrealizedPnLPercent = parseFloat(((sanitizedHolding.unrealizedPnL / sanitizedHolding.investmentValueAtBuy) * 100).toFixed(2));
+        } else {
+          sanitizedHolding.unrealizedPnLPercent = 0;
+        }
+
+        // Update minimumInvestmentValueStock to current market value
+        sanitizedHolding.minimumInvestmentValueStock = sanitizedHolding.investmentValueAtMarket;
 
         // Validate that numeric fields are valid numbers (not NaN or negative where inappropriate)
         if (isNaN(sanitizedHolding.buyPrice) || sanitizedHolding.buyPrice <= 0) {
@@ -650,18 +487,46 @@ exports.updatePortfolio = asyncHandler(async (req, res) => {
     // For sell actions, cash balance is already calculated by portfolioService
     // For other actions, recalculate cash balance based on holdings only (ignore frontend data)
     if (!stockAction.includes('sell')) {
-      const totalHoldingsCost = updatedHoldings.reduce((sum, holding) => {
+      const totalHoldingsCostAtBuy = updatedHoldings.reduce((sum, holding) => {
         const buyPrice = parseFloat(holding.buyPrice) || 0;
         const quantity = parseFloat(holding.quantity) || 0;
         return sum + (buyPrice * quantity);
       }, 0);
       
-      // Calculate cash balance from minInvestment minus actual holdings cost
+      // Calculate cash balance from minInvestment minus actual holdings cost at buy price
       const minInvestment = parseFloat(portfolio.minInvestment) || 0;
-      const calculatedCashBalance = minInvestment - totalHoldingsCost;
+      const calculatedCashBalance = minInvestment - totalHoldingsCostAtBuy;
       
       // Ensure cash balance is valid and not negative
       portfolio.cashBalance = Math.max(0, parseFloat(calculatedCashBalance.toFixed(2)));
+      
+      // Calculate investment values and PnL for each holding
+      updatedHoldings.forEach(holding => {
+        const buyPrice = parseFloat(holding.buyPrice) || 0;
+        const quantity = parseFloat(holding.quantity) || 0;
+        
+        // Calculate investment values
+        holding.investmentValueAtBuy = parseFloat((buyPrice * quantity).toFixed(2));
+        
+        // Note: currentPrice will be fetched from StockSymbol collection in pre-save hook
+        // For now, use buyPrice as fallback if currentPrice not provided
+        const currentPrice = parseFloat(holding.currentPrice) || buyPrice;
+        holding.currentPrice = currentPrice;
+        holding.investmentValueAtMarket = parseFloat((currentPrice * quantity).toFixed(2));
+        
+        // Calculate unrealized PnL
+        holding.unrealizedPnL = parseFloat((holding.investmentValueAtMarket - holding.investmentValueAtBuy).toFixed(2));
+        
+        // Calculate unrealized PnL percentage
+        if (holding.investmentValueAtBuy > 0) {
+          holding.unrealizedPnLPercent = parseFloat(((holding.unrealizedPnL / holding.investmentValueAtBuy) * 100).toFixed(2));
+        } else {
+          holding.unrealizedPnLPercent = 0;
+        }
+        
+        // Update minimumInvestmentValueStock to current market value
+        holding.minimumInvestmentValueStock = holding.investmentValueAtMarket;
+      });
     }
     
     // Remove holdings and stockAction from further processing
@@ -870,6 +735,132 @@ exports.getRealTimeValue = asyncHandler(async (req, res) => {
     res.status(500).json({
       status: 'error',
       message: 'Failed to calculate real-time value',
+      error: error.message
+    });
+  }
+});
+
+// Update portfolio holdings with current market prices and calculate PnL
+exports.updatePortfolioWithMarketPrices = asyncHandler(async (req, res) => {
+  try {
+    const portfolio = await Portfolio.findById(req.params.id);
+    if (!portfolio) {
+      return res.status(404).json({ error: 'Portfolio not found' });
+    }
+
+    // Update with current market prices from StockSymbol collection
+    await portfolio.updateWithMarketPrices();
+    await portfolio.save();
+
+    res.status(200).json({
+      status: 'success',
+      message: 'Portfolio updated with current market prices from StockSymbol collection',
+      portfolio: {
+        ...portfolio.toObject(),
+        totalUnrealizedPnL: portfolio.totalUnrealizedPnL,
+        totalUnrealizedPnLPercent: portfolio.totalUnrealizedPnLPercent,
+        holdingsValueAtMarket: portfolio.holdingsValueAtMarket
+      }
+    });
+  } catch (error) {
+    res.status(500).json({
+      status: 'error',
+      message: 'Failed to update portfolio with market prices',
+      error: error.message
+    });
+  }
+});
+
+// Get portfolio PnL summary
+exports.getPortfolioPnLSummary = asyncHandler(async (req, res) => {
+  try {
+    const portfolio = await Portfolio.findById(req.params.id);
+    if (!portfolio) {
+      return res.status(404).json({ error: 'Portfolio not found' });
+    }
+
+    // Calculate summary data
+    const holdingsSummary = portfolio.holdings.map(holding => ({
+      symbol: holding.symbol,
+      sector: holding.sector,
+      quantity: holding.quantity,
+      buyPrice: holding.buyPrice,
+      currentPrice: holding.currentPrice || holding.buyPrice,
+      investmentValueAtBuy: holding.investmentValueAtBuy || (holding.buyPrice * holding.quantity),
+      investmentValueAtMarket: holding.investmentValueAtMarket || ((holding.currentPrice || holding.buyPrice) * holding.quantity),
+      unrealizedPnL: holding.unrealizedPnL || 0,
+      unrealizedPnLPercent: holding.unrealizedPnLPercent || 0,
+      realizedPnL: holding.realizedPnL || 0,
+      weight: holding.weight || 0
+    }));
+
+    const portfolioSummary = {
+      portfolioId: portfolio._id,
+      portfolioName: portfolio.name,
+      totalInvestmentAtBuy: portfolio.holdingsValue,
+      totalValueAtMarket: portfolio.holdingsValueAtMarket,
+      cashBalance: portfolio.cashBalance,
+      currentValue: portfolio.currentValue,
+      totalUnrealizedPnL: portfolio.totalUnrealizedPnL,
+      totalUnrealizedPnLPercent: portfolio.totalUnrealizedPnLPercent,
+      minInvestment: portfolio.minInvestment
+    };
+
+    res.status(200).json({
+      status: 'success',
+      summary: portfolioSummary,
+      holdings: holdingsSummary,
+      lastUpdated: new Date()
+    });
+  } catch (error) {
+    res.status(500).json({
+      status: 'error',
+      message: 'Failed to get portfolio PnL summary',
+      error: error.message
+    });
+  }
+});
+
+// Bulk update all portfolios with current market prices
+exports.updateAllPortfoliosWithMarketPrices = asyncHandler(async (req, res) => {
+  try {
+    const portfolios = await Portfolio.find();
+    const results = [];
+
+    for (const portfolio of portfolios) {
+      try {
+        await portfolio.updateWithMarketPrices();
+        await portfolio.save();
+        results.push({
+          portfolioId: portfolio._id,
+          portfolioName: portfolio.name,
+          status: 'success',
+          totalUnrealizedPnL: portfolio.totalUnrealizedPnL,
+          totalUnrealizedPnLPercent: portfolio.totalUnrealizedPnLPercent
+        });
+      } catch (error) {
+        results.push({
+          portfolioId: portfolio._id,
+          portfolioName: portfolio.name,
+          status: 'failed',
+          error: error.message
+        });
+      }
+    }
+
+    const successCount = results.filter(r => r.status === 'success').length;
+    const failedCount = results.filter(r => r.status === 'failed').length;
+
+    res.status(200).json({
+      status: 'success',
+      message: `Updated ${successCount} portfolios successfully, ${failedCount} failed`,
+      results,
+      timestamp: new Date()
+    });
+  } catch (error) {
+    res.status(500).json({
+      status: 'error',
+      message: 'Failed to update portfolios with market prices',
       error: error.message
     });
   }

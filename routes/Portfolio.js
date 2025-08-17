@@ -207,6 +207,42 @@ const portfolioService = require('../services/portfolioservice');
  *         minimumInvestmentValueStock:
  *           type: number
  *           example: 1000
+ *           description: "Current market value of the holding (currentPrice × quantity)"
+ *         investmentValueAtBuy:
+ *           type: number
+ *           format: float
+ *           example: 1507.50
+ *           readOnly: true
+ *           description: "Investment value at buy price (buyPrice × quantity)"
+ *         investmentValueAtMarket:
+ *           type: number
+ *           format: float
+ *           example: 1625.00
+ *           readOnly: true
+ *           description: "Investment value at current market price (currentPrice × quantity)"
+ *         currentPrice:
+ *           type: number
+ *           format: float
+ *           example: 155.00
+ *           readOnly: true
+ *           description: "Current market price fetched from StockSymbol collection"
+ *         unrealizedPnL:
+ *           type: number
+ *           format: float
+ *           example: 117.50
+ *           readOnly: true
+ *           description: "Unrealized profit/loss (investmentValueAtMarket - investmentValueAtBuy)"
+ *         unrealizedPnLPercent:
+ *           type: number
+ *           format: float
+ *           example: 7.8
+ *           readOnly: true
+ *           description: "Unrealized profit/loss percentage"
+ *         realizedPnL:
+ *           type: number
+ *           format: float
+ *           example: 250.00
+ *           description: "Cumulative realized profit/loss from sales"
  *     Portfolio:
  *       type: object
  *       required:
@@ -237,6 +273,21 @@ const portfolioService = require('../services/portfolioservice');
  *           example: 10500.75
  *           readOnly: true
  *           description: "Backend-calculated total portfolio value (auto-updated with market prices)"
+ *         holdingsValueAtMarket:
+ *           type: number
+ *           example: 9300.25
+ *           readOnly: true
+ *           description: "Total value of all holdings at current market prices"
+ *         totalUnrealizedPnL:
+ *           type: number
+ *           example: 1500.50
+ *           readOnly: true
+ *           description: "Total unrealized profit/loss across all holdings"
+ *         totalUnrealizedPnLPercent:
+ *           type: number
+ *           example: 18.75
+ *           readOnly: true
+ *           description: "Total unrealized profit/loss percentage"
  *         subscriptionFee:
  *           type: array
  *           items:
@@ -1516,5 +1567,162 @@ router.post('/portfolios/cleanup-sold-stocks', requireAdmin, async (req, res) =>
     });
   }
 });
+
+/**
+ * @swagger
+ * /api/portfolios/{id}/update-market-prices:
+ *   put:
+ *     summary: Update portfolio with current market prices and calculate PnL
+ *     description: Fetches current prices from StockSymbol collection and updates portfolio valuations
+ *     tags: [Portfolios]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema:
+ *           type: string
+ *         description: Portfolio ID
+ *     responses:
+ *       200:
+ *         description: Portfolio updated with market prices successfully
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 status:
+ *                   type: string
+ *                   example: "success"
+ *                 message:
+ *                   type: string
+ *                   example: "Portfolio updated with current market prices from StockSymbol collection"
+ *                 portfolio:
+ *                   type: object
+ *                   properties:
+ *                     totalUnrealizedPnL:
+ *                       type: number
+ *                       example: 15000.50
+ *                     totalUnrealizedPnLPercent:
+ *                       type: number
+ *                       example: 12.5
+ *                     holdingsValueAtMarket:
+ *                       type: number
+ *                       example: 135000.75
+ *       404:
+ *         description: Portfolio not found
+ *       500:
+ *         description: Server error
+ */
+router.put('/portfolios/:id/update-market-prices', requireAdmin, portfolioController.updatePortfolioWithMarketPrices);
+
+/**
+ * @swagger
+ * /api/portfolios/{id}/pnl-summary:
+ *   get:
+ *     summary: Get portfolio PnL summary with unrealized gains/losses
+ *     description: Returns comprehensive profit/loss analysis for portfolio holdings
+ *     tags: [Portfolios]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema:
+ *           type: string
+ *         description: Portfolio ID
+ *     responses:
+ *       200:
+ *         description: Portfolio PnL summary retrieved successfully
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 status:
+ *                   type: string
+ *                   example: "success"
+ *                 summary:
+ *                   type: object
+ *                   properties:
+ *                     portfolioName:
+ *                       type: string
+ *                       example: "Growth Portfolio"
+ *                     totalInvestmentAtBuy:
+ *                       type: number
+ *                       example: 120000
+ *                     totalValueAtMarket:
+ *                       type: number
+ *                       example: 135000.75
+ *                     totalUnrealizedPnL:
+ *                       type: number
+ *                       example: 15000.75
+ *                     totalUnrealizedPnLPercent:
+ *                       type: number
+ *                       example: 12.5
+ *                 holdings:
+ *                   type: array
+ *                   items:
+ *                     type: object
+ *                     properties:
+ *                       symbol:
+ *                         type: string
+ *                         example: "RELIANCE"
+ *                       unrealizedPnL:
+ *                         type: number
+ *                         example: 5000.25
+ *                       unrealizedPnLPercent:
+ *                         type: number
+ *                         example: 8.5
+ *       404:
+ *         description: Portfolio not found
+ *       500:
+ *         description: Server error
+ */
+router.get('/portfolios/:id/pnl-summary', requireAdmin, portfolioController.getPortfolioPnLSummary);
+
+/**
+ * @swagger
+ * /api/portfolios/update-all-market-prices:
+ *   put:
+ *     summary: Update all portfolios with current market prices
+ *     description: Bulk update all portfolios with latest market prices from StockSymbol collection
+ *     tags: [Portfolios]
+ *     security:
+ *       - bearerAuth: []
+ *     responses:
+ *       200:
+ *         description: All portfolios updated successfully
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 status:
+ *                   type: string
+ *                   example: "success"
+ *                 message:
+ *                   type: string
+ *                   example: "Updated 5 portfolios successfully, 0 failed"
+ *                 results:
+ *                   type: array
+ *                   items:
+ *                     type: object
+ *                     properties:
+ *                       portfolioName:
+ *                         type: string
+ *                         example: "Growth Portfolio"
+ *                       status:
+ *                         type: string
+ *                         example: "success"
+ *                       totalUnrealizedPnL:
+ *                         type: number
+ *                         example: 15000.50
+ *       500:
+ *         description: Server error
+ */
+router.put('/portfolios/update-all-market-prices', requireAdmin, portfolioController.updateAllPortfoliosWithMarketPrices);
 
 module.exports = router;
