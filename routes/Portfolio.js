@@ -238,11 +238,6 @@ const portfolioService = require('../services/portfolioservice');
  *           example: 7.8
  *           readOnly: true
  *           description: "Unrealized profit/loss percentage"
- *         realizedPnL:
- *           type: number
- *           format: float
- *           example: 250.00
- *           description: "Cumulative realized profit/loss from sales"
  *     Portfolio:
  *       type: object
  *       required:

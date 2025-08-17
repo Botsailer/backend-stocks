@@ -23,6 +23,12 @@ const StockHoldingSchema = new Schema({
     uppercase: true,
     index: true
   },
+  // Reference to StockSymbol collection for real-time price data
+  stockRef: {
+    type: Schema.Types.ObjectId,
+    ref: 'StockSymbol',
+    required: false // Will be populated automatically based on symbol
+  },
   weight: {
     type: Number,
     required: false,
@@ -167,6 +173,40 @@ const StockHoldingSchema = new Schema({
     default: Date.now
   }
 }, { _id: false });
+
+// Virtual to get current price from populated stockRef
+StockHoldingSchema.virtual('marketPrice').get(function() {
+  if (this.stockRef && this.stockRef.currentPrice) {
+    // Use todayClosingPrice if available and recent, otherwise use currentPrice
+    const useClosingPrice = this.stockRef.todayClosingPrice && 
+      this.stockRef.closingPriceUpdatedAt && 
+      (Date.now() - this.stockRef.closingPriceUpdatedAt.getTime()) < 24 * 60 * 60 * 1000;
+    
+    return useClosingPrice ? this.stockRef.todayClosingPrice : this.stockRef.currentPrice;
+  }
+  return this.currentPrice || this.buyPrice || 0;
+});
+
+// Virtual for investment value at current market price using populated data
+StockHoldingSchema.virtual('marketInvestmentValue').get(function() {
+  return parseFloat((this.marketPrice * this.quantity).toFixed(2));
+});
+
+// Virtual for unrealized PnL using populated data
+StockHoldingSchema.virtual('marketUnrealizedPnL').get(function() {
+  const investmentAtBuy = this.investmentValueAtBuy || (this.buyPrice * this.quantity);
+  const investmentAtMarket = this.marketInvestmentValue;
+  return parseFloat((investmentAtMarket - investmentAtBuy).toFixed(2));
+});
+
+// Virtual for unrealized PnL percentage using populated data
+StockHoldingSchema.virtual('marketUnrealizedPnLPercent').get(function() {
+  const investmentAtBuy = this.investmentValueAtBuy || (this.buyPrice * this.quantity);
+  if (investmentAtBuy > 0) {
+    return parseFloat(((this.marketUnrealizedPnL / investmentAtBuy) * 100).toFixed(2));
+  }
+  return 0;
+});
 
 const portfolioDownLoadLinkSchema = new Schema({
   linkType: {
@@ -407,21 +447,25 @@ PortfolioSchema.virtual('holdingsValue').get(function() {
   }, 0) || 0;
 });
 
-// Virtual for holdings value at current market prices
+// Virtual for holdings value at current market prices using populated data
 PortfolioSchema.virtual('holdingsValueAtMarket').get(function() {
   return this.holdings?.reduce((sum, holding) => {
-    return sum + (holding.investmentValueAtMarket || 0);
+    // Use marketInvestmentValue virtual if stockRef is populated, otherwise use stored value
+    const marketValue = holding.marketInvestmentValue || holding.investmentValueAtMarket || 0;
+    return sum + marketValue;
   }, 0) || 0;
 });
 
-// Virtual for total unrealized PnL across all holdings
+// Virtual for total unrealized PnL across all holdings using populated data
 PortfolioSchema.virtual('totalUnrealizedPnL').get(function() {
   return this.holdings?.reduce((sum, holding) => {
-    return sum + (holding.unrealizedPnL || 0);
+    // Use marketUnrealizedPnL virtual if stockRef is populated, otherwise use stored value
+    const pnl = holding.marketUnrealizedPnL || holding.unrealizedPnL || 0;
+    return sum + pnl;
   }, 0) || 0;
 });
 
-// Virtual for total unrealized PnL percentage
+// Virtual for total unrealized PnL percentage using populated data
 PortfolioSchema.virtual('totalUnrealizedPnLPercent').get(function() {
   const totalInvestmentAtBuy = this.holdingsValue;
   if (totalInvestmentAtBuy > 0) {
@@ -435,7 +479,7 @@ PortfolioSchema.virtual('daysSinceCreation').get(function() {
   return Math.floor((Date.now() - this.createdAt) / 86400000);
 });
 
-// Pre-save hook for data consistency
+// Pre-save hook for data consistency and stockRef linking
 PortfolioSchema.pre('save', async function(next) {
   // Sanitize holdings data to prevent NaN values
   this.holdings.forEach(holding => {
@@ -446,38 +490,54 @@ PortfolioSchema.pre('save', async function(next) {
     holding.realizedPnL = parseFloat(holding.realizedPnL) || 0;
   });
 
-  // Fetch current prices from StockSymbol collection if holdings exist
+  // Auto-link stockRef for holdings and calculate PnL
   if (this.holdings && this.holdings.length > 0) {
     const StockSymbol = mongoose.model('StockSymbol');
     const symbols = this.holdings.map(h => h.symbol);
     
     try {
+      // Fetch stock symbols with their IDs and prices
       const stocks = await StockSymbol.find({ 
         symbol: { $in: symbols },
         isActive: true 
-      }).select('symbol currentPrice todayClosingPrice closingPriceUpdatedAt');
+      }).select('_id symbol currentPrice todayClosingPrice closingPriceUpdatedAt');
       
-      const priceMap = new Map();
+      const stockMap = new Map();
       stocks.forEach(stock => {
-        // Use todayClosingPrice if available and recent, otherwise use currentPrice
-        const useClosingPrice = stock.todayClosingPrice && 
-          stock.closingPriceUpdatedAt && 
-          (Date.now() - stock.closingPriceUpdatedAt.getTime()) < 24 * 60 * 60 * 1000; // Within 24 hours
-        
-        const marketPrice = useClosingPrice ? stock.todayClosingPrice : stock.currentPrice;
-        priceMap.set(stock.symbol, marketPrice || 0);
+        stockMap.set(stock.symbol, {
+          _id: stock._id,
+          currentPrice: stock.currentPrice,
+          todayClosingPrice: stock.todayClosingPrice,
+          closingPriceUpdatedAt: stock.closingPriceUpdatedAt
+        });
       });
 
-      // Calculate investment values for PnL tracking
+      // Update holdings with stockRef and calculate PnL
       this.holdings.forEach(holding => {
-        // Investment value at buy price (always calculated from buyPrice)
+        const stockData = stockMap.get(holding.symbol);
+        
+        // Auto-link stockRef if not already set
+        if (stockData && !holding.stockRef) {
+          holding.stockRef = stockData._id;
+        }
+        
+        // Calculate investment value at buy price (preserve original buy price tracking)
         holding.investmentValueAtBuy = parseFloat((holding.buyPrice * holding.quantity).toFixed(2));
         
-        // Get current price from StockSymbol collection, fallback to buy price if not found
-        const marketPrice = priceMap.get(holding.symbol);
-        holding.currentPrice = marketPrice || holding.buyPrice || 0;
+        // Get current market price from StockSymbol collection
+        if (stockData) {
+          // Use todayClosingPrice if available and recent, otherwise use currentPrice
+          const useClosingPrice = stockData.todayClosingPrice && 
+            stockData.closingPriceUpdatedAt && 
+            (Date.now() - stockData.closingPriceUpdatedAt.getTime()) < 24 * 60 * 60 * 1000;
+          
+          holding.currentPrice = useClosingPrice ? stockData.todayClosingPrice : stockData.currentPrice;
+        } else {
+          // Fallback to buy price if stock not found in database
+          holding.currentPrice = holding.buyPrice || 0;
+        }
         
-        // Investment value at current market price
+        // Calculate investment value at current market price
         holding.investmentValueAtMarket = parseFloat((holding.currentPrice * holding.quantity).toFixed(2));
         
         // Calculate unrealized PnL
@@ -490,12 +550,12 @@ PortfolioSchema.pre('save', async function(next) {
           holding.unrealizedPnLPercent = 0;
         }
         
-        // Update minimumInvestmentValueStock to current market value for new calculations
+        // Update minimumInvestmentValueStock to current market value
         holding.minimumInvestmentValueStock = holding.investmentValueAtMarket;
       });
     } catch (error) {
-      console.warn('Failed to fetch stock prices in pre-save hook:', error.message);
-      // Continue with existing logic if price fetch fails
+      console.warn('Failed to fetch stock data in pre-save hook:', error.message);
+      // Continue with fallback calculations if database fetch fails
       this.holdings.forEach(holding => {
         holding.investmentValueAtBuy = parseFloat((holding.buyPrice * holding.quantity).toFixed(2));
         holding.currentPrice = parseFloat(holding.currentPrice) || holding.buyPrice || 0;
@@ -680,6 +740,33 @@ PortfolioSchema.methods.calculatePeriodGain = function(periodDays) {
   return `${gainPercent.toFixed(2)}%`;
 };
 
+// Static method to find portfolio with populated stock references
+PortfolioSchema.statics.findWithMarketPrices = function(query = {}) {
+  return this.find(query).populate({
+    path: 'holdings.stockRef',
+    select: 'symbol currentPrice todayClosingPrice closingPriceUpdatedAt lastUpdated isActive',
+    match: { isActive: true }
+  });
+};
+
+// Static method to find one portfolio with populated stock references
+PortfolioSchema.statics.findOneWithMarketPrices = function(query = {}) {
+  return this.findOne(query).populate({
+    path: 'holdings.stockRef',
+    select: 'symbol currentPrice todayClosingPrice closingPriceUpdatedAt lastUpdated isActive',
+    match: { isActive: true }
+  });
+};
+
+// Static method to find portfolio by ID with populated stock references
+PortfolioSchema.statics.findByIdWithMarketPrices = function(id) {
+  return this.findById(id).populate({
+    path: 'holdings.stockRef',
+    select: 'symbol currentPrice todayClosingPrice closingPriceUpdatedAt lastUpdated isActive',
+    match: { isActive: true }
+  });
+};
+
 // Initialize gains for existing portfolios
 PortfolioSchema.statics.initializeGains = async function() {
   const portfolios = await this.find();
@@ -698,6 +785,140 @@ PortfolioSchema.statics.initializeGains = async function() {
   }
 
   return results;
+};
+
+// Method to add or update a stock holding with buy price averaging
+PortfolioSchema.methods.addOrUpdateHolding = function(symbol, newBuyPrice, newQuantity, sector, stockCapType = null, status = 'Hold') {
+  const existingHoldingIndex = this.holdings.findIndex(h => h.symbol === symbol);
+  
+  if (existingHoldingIndex >= 0) {
+    // Update existing holding with weighted average buy price
+    const existingHolding = this.holdings[existingHoldingIndex];
+    const existingValue = existingHolding.buyPrice * existingHolding.quantity;
+    const newValue = newBuyPrice * newQuantity;
+    const totalQuantity = existingHolding.quantity + newQuantity;
+    const totalValue = existingValue + newValue;
+    
+    // Store original buy price if not already set
+    if (!existingHolding.originalBuyPrice) {
+      existingHolding.originalBuyPrice = existingHolding.buyPrice;
+    }
+    
+    // Calculate weighted average buy price
+    existingHolding.buyPrice = parseFloat((totalValue / totalQuantity).toFixed(2));
+    existingHolding.quantity = totalQuantity;
+    existingHolding.status = status;
+    existingHolding.lastUpdated = new Date();
+    
+    // Add to price history
+    existingHolding.priceHistory.push({
+      date: new Date(),
+      price: newBuyPrice,
+      quantity: newQuantity,
+      investment: newValue,
+      action: 'buy'
+    });
+    
+    return existingHolding;
+  } else {
+    // Create new holding
+    const newHolding = {
+      symbol: symbol.toUpperCase(),
+      sector: sector,
+      stockCapType: stockCapType,
+      status: status,
+      buyPrice: newBuyPrice,
+      originalBuyPrice: newBuyPrice,
+      quantity: newQuantity,
+      minimumInvestmentValueStock: newBuyPrice * newQuantity,
+      currentPrice: newBuyPrice, // Will be updated by pre-save hook
+      investmentValueAtBuy: newBuyPrice * newQuantity,
+      investmentValueAtMarket: newBuyPrice * newQuantity, // Will be updated by pre-save hook
+      unrealizedPnL: 0,
+      unrealizedPnLPercent: 0,
+      realizedPnL: 0,
+      priceHistory: [{
+        date: new Date(),
+        price: newBuyPrice,
+        quantity: newQuantity,
+        investment: newBuyPrice * newQuantity,
+        action: 'buy'
+      }],
+      lastUpdated: new Date(),
+      createdAt: new Date()
+    };
+    
+    this.holdings.push(newHolding);
+    return newHolding;
+  }
+};
+
+// Method to sell or partially sell a holding
+PortfolioSchema.methods.sellHolding = function(symbol, sellPrice, sellQuantity) {
+  const holdingIndex = this.holdings.findIndex(h => h.symbol === symbol);
+  
+  if (holdingIndex < 0) {
+    throw new Error(`Holding ${symbol} not found`);
+  }
+  
+  const holding = this.holdings[holdingIndex];
+  
+  if (sellQuantity > holding.quantity) {
+    throw new Error(`Cannot sell ${sellQuantity} shares. Only ${holding.quantity} available.`);
+  }
+  
+  const saleValue = sellPrice * sellQuantity;
+  const buyValueForSoldShares = holding.buyPrice * sellQuantity;
+  const profitLoss = saleValue - buyValueForSoldShares;
+  
+  // Update realized PnL
+  holding.realizedPnL += profitLoss;
+  
+  // Add to price history
+  holding.priceHistory.push({
+    date: new Date(),
+    price: sellPrice,
+    quantity: -sellQuantity, // Negative for sales
+    saleValue: saleValue,
+    profitLoss: profitLoss,
+    action: sellQuantity === holding.quantity ? 'complete_sell' : 'partial_sell'
+  });
+  
+  // Update quantity
+  holding.quantity -= sellQuantity;
+  holding.lastUpdated = new Date();
+  
+  if (holding.quantity === 0) {
+    // Complete sale - move to sale history
+    holding.soldDate = new Date();
+    holding.finalSalePrice = sellPrice;
+    holding.totalSaleValue = saleValue;
+    holding.totalProfitLoss = holding.realizedPnL;
+    
+    this.saleHistory.push({
+      symbol: holding.symbol,
+      soldDate: new Date(),
+      originalQuantity: holding.quantity + sellQuantity,
+      salePrice: sellPrice,
+      saleValue: saleValue,
+      profitLoss: profitLoss,
+      originalBuyPrice: holding.originalBuyPrice || holding.buyPrice
+    });
+    
+    // Remove from holdings
+    this.holdings.splice(holdingIndex, 1);
+  } else {
+    // Partial sale
+    holding.lastSaleDate = new Date();
+    holding.status = 'partial-sell';
+  }
+  
+  return {
+    soldQuantity: sellQuantity,
+    saleValue: saleValue,
+    profitLoss: profitLoss,
+    remainingQuantity: holding.quantity || 0
+  };
 };
 
 // Method to update portfolio value with current market prices from StockSymbol collection
