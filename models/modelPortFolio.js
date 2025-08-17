@@ -65,7 +65,6 @@ const StockHoldingSchema = new Schema({
   },
   minimumInvestmentValueStock: {
     type: Number,
-    required: true,
     min: 1
   },
   quantity: {
@@ -441,7 +440,7 @@ const PortfolioSchema = new Schema({
 // Virtuals
 PortfolioSchema.virtual('holdingsValue').get(function() {
   return this.holdings?.reduce((sum, holding) => {
-    const buyPrice = parseFloat(holding.buyPrice) || 0;
+    const buyPrice = parseFloat(holding.currentPrice) || 0;
     const quantity = parseFloat(holding.quantity) || 0;
     return sum + (buyPrice * quantity);
   }, 0) || 0;
