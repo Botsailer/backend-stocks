@@ -19,6 +19,7 @@ const Portfolio = require('../models/modelPortFolio');
 const PriceLog = require('../models/PriceLog');
 const portfolioService = require('../services/portfolioservice');
 const { PortfolioCalculationValidator, calcLogger } = require('../utils/portfolioCalculationValidator');
+const transactionLogger = require('../utils/transactionLogger');
 
 const asyncHandler = fn => (req, res, next) => {
   Promise.resolve(fn(req, res, next)).catch(next);
@@ -142,18 +143,18 @@ exports.createPortfolio = asyncHandler(async (req, res) => {
     res.status(201).json(savedPortfolio);
     
   } catch (error) {
-    calcLogger.error('Portfolio creation failed', { 
+    // Log error with transaction context
+    await transactionLogger.logError(error, `Portfolio Update - ${req.body.stockAction || 'Unknown Action'}`);
+    
+    calcLogger.error('Unhandled error in portfolio update', { 
       error: error.message, 
-      requestData: requestData.name 
+      portfolioId: req.params.id,
+      stackTrace: error.stack 
     });
     
-    if (error.code === 11000) {
-      return res.status(400).json({ error: 'Portfolio name already exists' });
-    }
-    
-    res.status(500).json({ 
-      error: 'Failed to create portfolio', 
-      details: error.message 
+    res.status(500).json({
+      error: 'Portfolio update failed',
+      message: error.message
     });
   }
 });
@@ -314,6 +315,16 @@ exports.updatePortfolio = asyncHandler(async (req, res) => {
 
     } else if (stockAction.includes('buy')) {
       // BUY: Add to existing holdings using buy price averaging
+      
+      // Capture portfolio state before transaction
+      const portfolioBefore = {
+        totalValue: portfolio.totalValue || portfolio.minInvestment,
+        cashBalance: portfolio.cashBalance || portfolio.minInvestment,
+        totalInvestment: portfolio.holdings.reduce((sum, h) => sum + (h.buyPrice * h.quantity), 0),
+        minInvestment: portfolio.minInvestment,
+        holdingsCount: portfolio.holdings.length
+      };
+      
       for (const buyRequest of req.body.holdings) {
         // Validate required fields for buy action
         if (!buyRequest.symbol || !buyRequest.sector || !buyRequest.buyPrice) {
@@ -332,8 +343,29 @@ exports.updatePortfolio = asyncHandler(async (req, res) => {
           });
         }
 
-        // Find existing holding
+        // Get stock market data for logging
+        const StockSymbol = require('../models/stockSymbol');
+        const stockData = await StockSymbol.findOne({ symbol: buyRequest.symbol.toUpperCase() });
+        
+        // Find existing holding and capture before state
         const existingHoldingIndex = updatedHoldings.findIndex(h => h.symbol === buyRequest.symbol);
+        const beforeState = existingHoldingIndex >= 0 ? {
+          exists: true,
+          quantity: updatedHoldings[existingHoldingIndex].quantity,
+          buyPrice: updatedHoldings[existingHoldingIndex].buyPrice,
+          investmentValue: updatedHoldings[existingHoldingIndex].investmentValueAtBuy,
+          totalInvestment: updatedHoldings[existingHoldingIndex].buyPrice * updatedHoldings[existingHoldingIndex].quantity,
+          weight: updatedHoldings[existingHoldingIndex].weight || 0,
+          unrealizedPnL: updatedHoldings[existingHoldingIndex].unrealizedPnL || 0
+        } : { exists: false };
+        
+        const transactionData = {
+          buyPrice: buyPrice,
+          quantity: quantity,
+          totalInvestment: buyPrice * quantity,
+          transactionFee: 0, // Can be added if needed
+          netAmount: buyPrice * quantity
+        };
         
         if (existingHoldingIndex >= 0 && quantity > 0) {
           // Update existing holding with weighted average buy price
@@ -353,6 +385,35 @@ exports.updatePortfolio = asyncHandler(async (req, res) => {
           existingHolding.quantity = totalQuantity;
           existingHolding.status = buyRequest.status || 'addon-buy';
           existingHolding.lastUpdated = new Date();
+          
+          // Log the transaction
+          await transactionLogger.logBuyTransaction({
+            portfolioId: portfolio._id,
+            portfolioName: portfolio.name,
+            stockSymbol: buyRequest.symbol.toUpperCase(),
+            action: 'addon-buy',
+            beforeState,
+            stockData: stockData || { currentPrice: buyPrice, symbol: buyRequest.symbol },
+            transactionData,
+            afterState: {
+              quantity: existingHolding.quantity,
+              buyPrice: existingHolding.buyPrice,
+              investmentValueAtBuy: existingHolding.buyPrice * existingHolding.quantity,
+              investmentValueAtMarket: (stockData?.currentPrice || buyPrice) * existingHolding.quantity,
+              weight: 0, // Will be calculated after save
+              unrealizedPnL: ((stockData?.currentPrice || buyPrice) - existingHolding.buyPrice) * existingHolding.quantity,
+              unrealizedPnLPercent: (((stockData?.currentPrice || buyPrice) - existingHolding.buyPrice) / existingHolding.buyPrice) * 100,
+              status: existingHolding.status
+            },
+            portfolioBefore,
+            portfolioAfter: {
+              totalValue: portfolioBefore.totalValue + transactionData.totalInvestment,
+              cashBalance: portfolioBefore.cashBalance - transactionData.netAmount,
+              totalInvestment: portfolioBefore.totalInvestment + transactionData.totalInvestment,
+              holdingsCount: portfolioBefore.holdingsCount
+            },
+            userEmail: req.user?.email || 'Unknown'
+          });
           
         } else if (quantity > 0) {
           // Create new holding
@@ -383,6 +444,36 @@ exports.updatePortfolio = asyncHandler(async (req, res) => {
           };
           
           updatedHoldings.push(newHolding);
+          
+          // Log the transaction
+          await transactionLogger.logBuyTransaction({
+            portfolioId: portfolio._id,
+            portfolioName: portfolio.name,
+            stockSymbol: buyRequest.symbol.toUpperCase(),
+            action: 'Fresh-Buy',
+            beforeState,
+            stockData: stockData || { currentPrice: buyPrice, symbol: buyRequest.symbol },
+            transactionData,
+            afterState: {
+              quantity: newHolding.quantity,
+              buyPrice: newHolding.buyPrice,
+              investmentValueAtBuy: newHolding.investmentValueAtBuy,
+              investmentValueAtMarket: newHolding.investmentValueAtMarket,
+              weight: 0, // Will be calculated after save
+              unrealizedPnL: newHolding.unrealizedPnL,
+              unrealizedPnLPercent: newHolding.unrealizedPnLPercent,
+              status: newHolding.status
+            },
+            portfolioBefore,
+            portfolioAfter: {
+              totalValue: portfolioBefore.totalValue + transactionData.totalInvestment,
+              cashBalance: portfolioBefore.cashBalance - transactionData.netAmount,
+              totalInvestment: portfolioBefore.totalInvestment + transactionData.totalInvestment,
+              holdingsCount: portfolioBefore.holdingsCount + 1
+            },
+            userEmail: req.user?.email || 'Unknown'
+          });
+          
         } else {
           // Just update the current price for tracking without buying
           const existingHolding = updatedHoldings[existingHoldingIndex];
@@ -641,6 +732,11 @@ exports.updatePortfolio = asyncHandler(async (req, res) => {
 
   // Save portfolio (this will trigger pre-save hooks to recalculate weights and values)
   await portfolio.save();
+  
+  // Log portfolio snapshot after transaction
+  if (stockAction && (stockAction.includes('buy') || stockAction.includes('sell'))) {
+    await transactionLogger.logPortfolioSnapshot(portfolio, `After ${stockAction} transaction`);
+  }
   
   // Return updated portfolio with calculated values
   const populatedPortfolio = await Portfolio.findById(portfolio._id);

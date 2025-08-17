@@ -70,7 +70,8 @@ const StockHoldingSchema = new Schema({
   quantity: {
     type: Number,
     required: true,
-    min: 0 
+    min: 0 ,
+    set: v => Math.round(v * 100) / 100
   },
   // Investment value at buy price (buyPrice * quantity)
   investmentValueAtBuy: {

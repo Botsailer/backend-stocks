@@ -4,6 +4,7 @@ const PriceLog = require('../models/PriceLog');
 const winston = require('winston');
 const { default: mongoose } = require('mongoose');
 const portfolioCalculationLogger = require('./portfolioCalculationLogger');
+const transactionLogger = require('../utils/transactionLogger');
 
 
 // Configure logger
@@ -701,6 +702,25 @@ exports.processStockSaleWithLogging = async (portfolioId, saleData) => {
       saleData.saleType = 'complete';
     }
 
+    // Capture portfolio state before transaction for logging
+    const portfolioBefore = {
+      totalValue: await exports.calculatePortfolioValue(portfolio).then(result => result.totalValue),
+      cashBalance: portfolio.cashBalance || 0,
+      totalInvestment: portfolio.holdings.reduce((sum, h) => sum + (h.buyPrice * h.quantity), 0),
+      holdingsCount: portfolio.holdings.filter(h => h.status !== 'Sell').length
+    };
+
+    // Capture holding state before transaction
+    const beforeState = {
+      quantity: existingHolding.quantity,
+      buyPrice: existingHolding.buyPrice,
+      investmentValueAtBuy: existingHolding.buyPrice * existingHolding.quantity,
+      investmentValueAtMarket: currentMarketPrice * existingHolding.quantity,
+      weight: existingHolding.weight || 0,
+      unrealizedPnL: (currentMarketPrice - existingHolding.buyPrice) * existingHolding.quantity,
+      unrealizedPnLPercent: ((currentMarketPrice - existingHolding.buyPrice) / existingHolding.buyPrice) * 100
+    };
+
     // Process the sale using the calculation validator
     const { PortfolioCalculationValidator } = require('../utils/portfolioCalculationValidator');
     const saleResult = PortfolioCalculationValidator.processStockSale(
@@ -709,6 +729,31 @@ exports.processStockSaleWithLogging = async (portfolioId, saleData) => {
       currentMarketPrice,
       portfolio.cashBalance || 0
     );
+
+    // Prepare transaction data for logging
+    const transactionData = {
+      sellPrice: currentMarketPrice,
+      quantity: actualQuantityToSell,
+      totalSaleValue: saleResult.operation.saleValue,
+      transactionFee: 0,
+      netAmount: saleResult.operation.saleValue
+    };
+
+    const sellCalculation = {
+      originalInvestment: existingHolding.buyPrice * actualQuantityToSell,
+      realizedPnL: saleResult.operation.profitLoss,
+      realizedPnLPercent: ((currentMarketPrice - existingHolding.buyPrice) / existingHolding.buyPrice) * 100,
+      remainingInvestment: saleResult.operation.type === 'complete_sale' ? 0 : 
+        existingHolding.buyPrice * (existingHolding.quantity - actualQuantityToSell),
+      remainingMarketValue: saleResult.operation.type === 'complete_sale' ? 0 : 
+        currentMarketPrice * (existingHolding.quantity - actualQuantityToSell)
+    };
+
+    // Get stock data for logging
+    const stockData = await StockSymbol.findOne({ symbol: existingHolding.symbol }) || {
+      currentPrice: currentMarketPrice,
+      symbol: existingHolding.symbol
+    };
 
     // Update portfolio with sale results
     portfolio.cashBalance = saleResult.cashImpact.newBalance;
@@ -801,6 +846,43 @@ exports.processStockSaleWithLogging = async (portfolioId, saleData) => {
         saleValue: saleValue
       });
     }
+
+    // Calculate portfolio state after transaction for logging
+    const portfolioAfter = {
+      totalValue: portfolioBefore.totalValue - sellCalculation.originalInvestment + saleResult.operation.profitLoss,
+      cashBalance: saleResult.cashImpact.newBalance,
+      totalInvestment: portfolioBefore.totalInvestment - sellCalculation.originalInvestment,
+      holdingsCount: saleResult.operation.type === 'complete_sale' ? 
+        portfolioBefore.holdingsCount - 1 : portfolioBefore.holdingsCount
+    };
+
+    // Determine after state for logging
+    const afterState = saleResult.operation.type === 'complete_sale' ? null : {
+      quantity: saleResult.updatedHolding.quantity,
+      buyPrice: existingHolding.buyPrice,
+      investmentValueAtBuy: existingHolding.buyPrice * saleResult.updatedHolding.quantity,
+      investmentValueAtMarket: currentMarketPrice * saleResult.updatedHolding.quantity,
+      weight: 0, // Will be calculated after save
+      unrealizedPnL: (currentMarketPrice - existingHolding.buyPrice) * saleResult.updatedHolding.quantity,
+      unrealizedPnLPercent: ((currentMarketPrice - existingHolding.buyPrice) / existingHolding.buyPrice) * 100,
+      status: saleResult.operation.type === 'complete_sale' ? 'Sell' : 'Hold'
+    };
+
+    // Log the sell transaction
+    await transactionLogger.logSellTransaction({
+      portfolioId: portfolio._id,
+      portfolioName: portfolio.name,
+      stockSymbol: existingHolding.symbol,
+      action: saleResult.operation.type === 'complete_sale' ? 'Sell' : 'partial-sell',
+      beforeState,
+      stockData,
+      transactionData,
+      afterState,
+      portfolioBefore,
+      portfolioAfter,
+      userEmail: 'System', // Can be passed from controller if available
+      sellCalculation
+    });
     
     // Validate all holdings before saving
     for (let i = 0; i < portfolio.holdings.length; i++) {
@@ -825,6 +907,9 @@ exports.processStockSaleWithLogging = async (portfolioId, saleData) => {
 
     // Save portfolio
     await portfolio.save();
+
+    // Log final portfolio snapshot
+    await transactionLogger.logPortfolioSnapshot(portfolio, `After ${saleResult.operation.type} of ${symbol}`);
 
     logger.info(`✅ Stock sale completed for ${symbol}`, {
       portfolioId,
