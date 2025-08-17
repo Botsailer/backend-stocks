@@ -70,7 +70,7 @@ const StockHoldingSchema = new Schema({
   quantity: {
     type: Number,
     required: true,
-    min: 1
+    min: 0 
   },
   // Investment value at buy price (buyPrice * quantity)
   investmentValueAtBuy: {
@@ -697,19 +697,8 @@ PortfolioSchema.methods.addHistoricalValue = function(value) {
   }
 };
 
-// Update pre-save hook
-PortfolioSchema.pre('save', function(next) {
-  // Add current value to historical data
-  if (this.isModified('currentValue')) {
-    this.addHistoricalValue(this.currentValue);
-    
-    // Calculate gains
-    this.CAGRSinceInception = this.calculateCAGR();
-    this.monthlyGains = this.calculatePeriodGain(30);
-    this.oneYearGains = this.calculatePeriodGain(365);
-  }
-  next();
-});
+// Update pre-save hook - REMOVED duplicate
+// This is now handled in the main pre-save hook above
 
 // Period gain calculation with minimum data requirements
 PortfolioSchema.methods.calculatePeriodGain = function(periodDays) {

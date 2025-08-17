@@ -319,6 +319,87 @@ exports.updatePortfolio = asyncHandler(async (req, res) => {
         updatedHoldings.push(newHolding);
       }
 
+    } else if (stockAction.includes('buy')) {
+      // BUY: Add to existing holdings using buy price averaging
+      for (const buyRequest of req.body.holdings) {
+        // Validate required fields for buy action
+        if (!buyRequest.symbol || !buyRequest.sector || !buyRequest.buyPrice) {
+          return res.status(400).json({ 
+            error: `Buy request missing required fields (symbol, sector, buyPrice)` 
+          });
+        }
+
+        // For addon-buy, quantity can be 0 (meaning add amount only)
+        const quantity = parseFloat(buyRequest.quantity) || 0;
+        const buyPrice = parseFloat(buyRequest.buyPrice);
+        
+        if (isNaN(buyPrice) || buyPrice <= 0) {
+          return res.status(400).json({ 
+            error: `Buy price must be a valid positive number for ${buyRequest.symbol}` 
+          });
+        }
+
+        // Find existing holding
+        const existingHoldingIndex = updatedHoldings.findIndex(h => h.symbol === buyRequest.symbol);
+        
+        if (existingHoldingIndex >= 0 && quantity > 0) {
+          // Update existing holding with weighted average buy price
+          const existingHolding = updatedHoldings[existingHoldingIndex];
+          const existingValue = existingHolding.buyPrice * existingHolding.quantity;
+          const newValue = buyPrice * quantity;
+          const totalQuantity = existingHolding.quantity + quantity;
+          const totalValue = existingValue + newValue;
+          
+          // Store original buy price if not already set
+          if (!existingHolding.originalBuyPrice) {
+            existingHolding.originalBuyPrice = existingHolding.buyPrice;
+          }
+          
+          // Calculate weighted average buy price
+          existingHolding.buyPrice = parseFloat((totalValue / totalQuantity).toFixed(2));
+          existingHolding.quantity = totalQuantity;
+          existingHolding.status = buyRequest.status || 'addon-buy';
+          existingHolding.lastUpdated = new Date();
+          
+        } else if (quantity > 0) {
+          // Create new holding
+          const newHolding = {
+            symbol: buyRequest.symbol.toUpperCase(),
+            sector: buyRequest.sector,
+            stockCapType: buyRequest.stockCapType,
+            status: buyRequest.status || 'Fresh-Buy',
+            buyPrice: buyPrice,
+            originalBuyPrice: buyPrice,
+            quantity: quantity,
+            minimumInvestmentValueStock: buyPrice * quantity,
+            currentPrice: buyPrice, // Will be updated by pre-save hook
+            investmentValueAtBuy: buyPrice * quantity,
+            investmentValueAtMarket: buyPrice * quantity, // Will be updated by pre-save hook
+            unrealizedPnL: 0,
+            unrealizedPnLPercent: 0,
+            realizedPnL: 0,
+            priceHistory: [{
+              date: new Date(),
+              price: buyPrice,
+              quantity: quantity,
+              investment: buyPrice * quantity,
+              action: 'buy'
+            }],
+            lastUpdated: new Date(),
+            createdAt: new Date()
+          };
+          
+          updatedHoldings.push(newHolding);
+        } else {
+          // Just update the current price for tracking without buying
+          const existingHolding = updatedHoldings[existingHoldingIndex];
+          if (existingHolding) {
+            existingHolding.currentPrice = buyPrice;
+            existingHolding.lastUpdated = new Date();
+          }
+        }
+      }
+
     } else if (stockAction.includes('delete') || stockAction.includes('remove')) {
       // DELETE: Remove holdings by symbol
       const symbolsToDelete = req.body.holdings.map(h => h.symbol.toUpperCase());
