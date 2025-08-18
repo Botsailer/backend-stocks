@@ -26,6 +26,7 @@ const cronScheduler = new CronScheduler();
 class LogCleanupService {
   constructor() {
     this.logsDir = path.join(__dirname, 'logs');
+    this.mainlogDir = path.join(__dirname, 'mainlog'); // Protected directory for transaction logs
     this.maxAge = 14; // 14 days
     this.isRunning = false;
   }
@@ -41,6 +42,8 @@ class LogCleanupService {
     
     try {
       console.log(`🧹 Starting automated log cleanup (${this.maxAge} days retention)...`);
+      console.log(`📁 Cleaning logs directory: ${this.logsDir}`);
+      console.log(`🔒 Protected directory: ${this.mainlogDir} (transaction logs preserved)`);
       
       // Ensure logs directory exists
       try {
@@ -280,35 +283,127 @@ dbAdapter.connect()
     require('./config/passport')(passport, dbAdapter);
     
 
-    app.get('/transactionlog',(req,res)=>{
-      //load the transaction log file to response 
+    /**
+     * @swagger
+     * /transactionlog:
+     *   get:
+     *     summary: Get detailed transaction logs
+     *     description: |
+     *       Streams the comprehensive transaction log file with detailed debugging information.
+     *       Shows today's transaction log by default, or specify a date parameter.
+     *     tags: [System]
+     *     parameters:
+     *       - in: query
+     *         name: date
+     *         required: false
+     *         schema:
+     *           type: string
+     *           format: date
+     *           example: "2025-08-18"
+     *         description: Specific date to retrieve logs for (YYYY-MM-DD format)
+     *     responses:
+     *       200:
+     *         description: Transaction log file content
+     *         content:
+     *           text/plain:
+     *             schema:
+     *               type: string
+     *               example: |
+     *                 [2025-08-18 19:42:17.865] [INFO] 🛒 BUY TRANSACTION INITIATED
+     *                 {
+     *                   "transactionType": "BUY",
+     *                   "portfolioId": "66b123456789abcdef123456",
+     *                   "stockSymbol": "RELIANCE"
+     *                 }
+     *       404:
+     *         description: Log file not found
+     *         content:
+     *           application/json:
+     *             schema:
+     *               type: object
+     *               properties:
+     *                 success:
+     *                   type: boolean
+     *                   example: false
+     *                 message:
+     *                   type: string
+     *                   example: "Transaction log file not found for date: 2025-08-18"
+     *                 availableDates:
+     *                   type: array
+     *                   items:
+     *                     type: string
+     *                   example: ["2025-08-17", "2025-08-16"]
+     *       500:
+     *         description: Internal server error
+     */
+    app.get('/transactionlog', async (req, res) => {
       try {
-        const logFilePath = path.join(__dirname, 'transaction-logs.txt');
+        const requestedDate = req.query.date || new Date().toISOString().split('T')[0]; // Default to today
+        const logFileName = `portfolio-transactions-${requestedDate}.log`;
+        const logFilePath = path.join(__dirname, 'mainlog', logFileName);
         
-        // Check if file exists
-        require('fs').access(logFilePath, require('fs').constants.F_OK, (err) => {
+        // Check if the specific log file exists
+        require('fs').access(logFilePath, require('fs').constants.F_OK, async (err) => {
           if (err) {
-            return res.status(404).json({
-              success: false,
-              message: 'Transaction log file not found'
-            });
+            // If file not found, list available dates
+            try {
+              const mainlogDir = path.join(__dirname, 'mainlog');
+              const files = await require('fs').promises.readdir(mainlogDir);
+              const logFiles = files.filter(file => file.startsWith('portfolio-transactions-') && file.endsWith('.log'));
+              const availableDates = logFiles.map(file => {
+                const match = file.match(/portfolio-transactions-(\d{4}-\d{2}-\d{2})\.log/);
+                return match ? match[1] : null;
+              }).filter(Boolean).sort().reverse(); // Most recent first
+              
+              return res.status(404).json({
+                success: false,
+                message: `Transaction log file not found for date: ${requestedDate}`,
+                availableDates,
+                hint: 'Use ?date=YYYY-MM-DD parameter to specify a different date',
+                today: new Date().toISOString().split('T')[0]
+              });
+            } catch (dirError) {
+              return res.status(404).json({
+                success: false,
+                message: 'Transaction log directory not found',
+                note: 'No transaction logs have been generated yet'
+              });
+            }
           }
           
-          // Set appropriate headers for text file
+          // Set appropriate headers for log file
           res.setHeader('Content-Type', 'text/plain; charset=utf-8');
-          res.setHeader('Content-Disposition', 'inline; filename="transaction-logs.txt"');
+          res.setHeader('Content-Disposition', `inline; filename="${logFileName}"`);
+          res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+          res.setHeader('Pragma', 'no-cache');
+          res.setHeader('Expires', '0');
+          
+          // Add custom headers with file info
+          try {
+            const stats = require('fs').statSync(logFilePath);
+            res.setHeader('X-Log-Date', requestedDate);
+            res.setHeader('X-Log-Size', stats.size.toString());
+            res.setHeader('X-Log-Modified', stats.mtime.toISOString());
+          } catch (statError) {
+            // Ignore stat errors, just serve the file
+          }
           
           // Create readable stream and pipe to response
           const readStream = require('fs').createReadStream(logFilePath, { encoding: 'utf8' });
           
           readStream.on('error', (error) => {
-            console.error('Error reading transaction log file:', error);
+            console.error(`Error reading transaction log file ${logFileName}:`, error);
             if (!res.headersSent) {
               res.status(500).json({
                 success: false,
-                message: 'Error reading transaction log file'
+                message: 'Error reading transaction log file',
+                error: error.message
               });
             }
+          });
+          
+          readStream.on('open', () => {
+            console.log(`📖 Serving transaction log: ${logFileName} (${requestedDate})`);
           });
           
           // Pipe the file stream to response
@@ -318,7 +413,147 @@ dbAdapter.connect()
         console.error('Transaction log endpoint error:', error);
         res.status(500).json({
           success: false,
-          message: 'Internal server error'
+          message: 'Internal server error',
+          error: error.message
+        });
+      }
+    });
+
+    /**
+     * @swagger
+     * /transactionlog/dates:
+     *   get:
+     *     summary: Get available transaction log dates
+     *     description: |
+     *       Returns a list of all available dates for which transaction logs exist.
+     *       Useful for knowing which dates have log data available.
+     *     tags: [System]
+     *     responses:
+     *       200:
+     *         description: Available transaction log dates
+     *         content:
+     *           application/json:
+     *             schema:
+     *               type: object
+     *               properties:
+     *                 success:
+     *                   type: boolean
+     *                   example: true
+     *                 availableDates:
+     *                   type: array
+     *                   items:
+     *                     type: string
+     *                     format: date
+     *                   example: ["2025-08-18", "2025-08-17", "2025-08-16"]
+     *                   description: Available dates in descending order (most recent first)
+     *                 totalLogFiles:
+     *                   type: integer
+     *                   example: 3
+     *                 oldestLog:
+     *                   type: string
+     *                   format: date
+     *                   example: "2025-08-16"
+     *                 newestLog:
+     *                   type: string
+     *                   format: date
+     *                   example: "2025-08-18"
+     *                 logDirectory:
+     *                   type: string
+     *                   example: "mainlog/"
+     *       404:
+     *         description: No transaction logs found
+     *         content:
+     *           application/json:
+     *             schema:
+     *               type: object
+     *               properties:
+     *                 success:
+     *                   type: boolean
+     *                   example: false
+     *                 message:
+     *                   type: string
+     *                   example: "No transaction logs found"
+     */
+    app.get('/transactionlog/dates', async (req, res) => {
+      try {
+        const mainlogDir = path.join(__dirname, 'mainlog');
+        
+        // Check if mainlog directory exists
+        try {
+          await require('fs').promises.access(mainlogDir);
+        } catch (error) {
+          return res.status(404).json({
+            success: false,
+            message: 'Transaction log directory not found',
+            note: 'No transaction logs have been generated yet'
+          });
+        }
+        
+        const files = await require('fs').promises.readdir(mainlogDir);
+        const logFiles = files.filter(file => 
+          file.startsWith('portfolio-transactions-') && file.endsWith('.log')
+        );
+        
+        if (logFiles.length === 0) {
+          return res.status(404).json({
+            success: false,
+            message: 'No transaction log files found',
+            directory: 'mainlog/',
+            note: 'Transaction logs will be created when transactions occur'
+          });
+        }
+        
+        // Extract dates and sort
+        const availableDates = logFiles.map(file => {
+          const match = file.match(/portfolio-transactions-(\d{4}-\d{2}-\d{2})\.log/);
+          return match ? match[1] : null;
+        }).filter(Boolean).sort().reverse(); // Most recent first
+        
+        // Get file stats for additional info
+        const fileStats = [];
+        for (const file of logFiles) {
+          try {
+            const filePath = path.join(mainlogDir, file);
+            const stats = await require('fs').promises.stat(filePath);
+            const dateMatch = file.match(/portfolio-transactions-(\d{4}-\d{2}-\d{2})\.log/);
+            if (dateMatch) {
+              fileStats.push({
+                date: dateMatch[1],
+                size: stats.size,
+                sizeFormatted: `${Math.round(stats.size / 1024)}KB`,
+                created: stats.birthtime,
+                modified: stats.mtime
+              });
+            }
+          } catch (statError) {
+            // Skip files we can't stat
+          }
+        }
+        
+        // Sort file stats by date (newest first)
+        fileStats.sort((a, b) => new Date(b.date) - new Date(a.date));
+        
+        res.json({
+          success: true,
+          availableDates,
+          totalLogFiles: availableDates.length,
+          oldestLog: availableDates[availableDates.length - 1],
+          newestLog: availableDates[0],
+          logDirectory: 'mainlog/',
+          fileDetails: fileStats,
+          endpoints: {
+            viewLog: '/transactionlog?date=YYYY-MM-DD',
+            listDates: '/transactionlog/dates',
+            today: `/transactionlog?date=${new Date().toISOString().split('T')[0]}`
+          }
+        });
+        
+      } catch (error) {
+        console.error('Error fetching transaction log dates:', error);
+        res.status(500).json({
+          success: false,
+          message: 'Failed to fetch transaction log dates',
+          error: error.message
         });
       }
     });
@@ -338,6 +573,26 @@ app.use('/api/admin/configs', require('./routes/configRoute'));
 app.use('/api/portfolio-calculation-logs', require('./routes/portfolioCalculationLogs')); 
 app.use('/api/chart-data', require('./routes/chartData'));    
 app.use('/api', require('./routes/Portfolio'));                                    
+
+    // Cron job test endpoints
+    app.post('/api/cron/trigger-closing-update', async (req, res) => {
+      try {
+        CronLogger.info('Manual closing price update triggered via API');
+        await cronScheduler.triggerManualUpdate('closing');
+        res.json({
+          success: true,
+          message: 'Manual closing price update triggered successfully',
+          timestamp: new Date().toISOString()
+        });
+      } catch (error) {
+        CronLogger.error('Failed to trigger manual closing update via API', error);
+        res.status(500).json({
+          success: false,
+          message: 'Failed to trigger manual closing update',
+          error: error.message
+        });
+      }
+    });
 
     // Global error handling middleware
     app.use((err, req, res, next) => {
@@ -872,6 +1127,69 @@ app.use('/api', require('./routes/Portfolio'));
       }
     });
 
+    /**
+     * @swagger
+     * /api/cron/trigger-closing-update:
+     *   post:
+     *     summary: Manually trigger closing price update
+     *     description: |
+     *       Manually initiates the closing price update sequence which updates
+     *       todayClosingPrice for all stocks and then runs portfolio valuation.
+     *     tags: [System]
+     *     security:
+     *       - bearerAuth: []
+     *     responses:
+     *       200:
+     *         description: Closing update triggered successfully
+     *         content:
+     *           application/json:
+     *             schema:
+     *               type: object
+     *               properties:
+     *                 success:
+     *                   type: boolean
+     *                   example: true
+     *                 message:
+     *                   type: string
+     *                   example: "Manual closing price update triggered successfully"
+     *                 timestamp:
+     *                   type: string
+     *                   format: date-time
+     *       500:
+     *         description: Failed to trigger update
+     *         content:
+     *           application/json:
+     *             schema:
+     *               type: object
+     *               properties:
+     *                 success:
+     *                   type: boolean
+     *                   example: false
+     *                 message:
+     *                   type: string
+     *                   example: "Failed to trigger manual closing update"
+     *                 error:
+     *                   type: string
+     */
+    app.post('/api/cron/trigger-closing-update', async (req, res) => {
+      try {
+        CronLogger.info('Manual closing price update triggered via API');
+        await cronScheduler.triggerManualUpdate('closing');
+        res.json({
+          success: true,
+          message: 'Manual closing price update triggered successfully',
+          timestamp: new Date().toISOString()
+        });
+      } catch (error) {
+        CronLogger.error('Failed to trigger manual closing update via API', error);
+        res.status(500).json({
+          success: false,
+          message: 'Failed to trigger manual closing update',
+          error: error.message
+        });
+      }
+    });
+
     // Start server
     app.listen(config.server.port, async () => {
 
@@ -941,8 +1259,8 @@ app.use('/api', require('./routes/Portfolio'));
         console.log('   - Morning: 8:00 AM IST');
         console.log('   - Hourly: Every hour');
         console.log('   - Afternoon: 2:00 PM IST');
-        console.log('   - Closing Price: 3:45 PM IST (Indian market close)');
-        console.log('   - Portfolio Valuation: 3:50 PM IST (After market close)');
+        console.log('   - Closing Price: 4:00 PM IST (After Indian market close)');
+        console.log('   - Portfolio Valuation: 5:00 PM IST (1 hour after closing prices start)');
         
       } catch (error) {
         console.error('❌ Failed to initialize stock price cron scheduler:', error);

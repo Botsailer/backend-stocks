@@ -5,6 +5,7 @@ const winston = require('winston');
 const { default: mongoose } = require('mongoose');
 const portfolioCalculationLogger = require('./portfolioCalculationLogger');
 const transactionLogger = require('../utils/transactionLogger');
+const portfolioTransactionLogger = require('../utils/portfolioTransactionLogger');
 
 
 // Configure logger
@@ -930,6 +931,278 @@ exports.processStockSaleWithLogging = async (portfolioId, saleData) => {
 
   } catch (error) {
     logger.error(`Stock sale failed for portfolio ${portfolioId}: ${error.message}`);
+    throw error;
+  }
+};
+
+// Enhanced stock sale processing with comprehensive debug logging
+exports.processStockSaleWithDetailedLogging = async (portfolioId, saleData, userEmail = 'System') => {
+  const startTime = Date.now();
+  
+  try {
+    portfolioTransactionLogger.logger.info('💰 STOCK SALE TRANSACTION INITIATED', {
+      portfolioId,
+      userEmail,
+      frontendData: saleData,
+      timestamp: new Date().toISOString()
+    });
+
+    // 1. FRONTEND DATA VALIDATION & ANALYSIS
+    portfolioTransactionLogger.logger.debug('📥 ANALYZING FRONTEND SALE REQUEST', {
+      step: '1_FRONTEND_ANALYSIS',
+      receivedData: saleData,
+      saleType: saleData.saleType || 'partial',
+      dataValidation: {
+        hasSymbol: !!saleData.symbol,
+        hasQuantity: !!saleData.quantityToSell,
+        hasSaleType: !!saleData.saleType,
+        quantityIsValid: saleData.quantityToSell > 0
+      }
+    });
+
+    // 2. FETCH PORTFOLIO FROM DATABASE
+    const portfolio = await Portfolio.findById(portfolioId);
+    if (!portfolio) {
+      throw new Error(`Portfolio with ID ${portfolioId} not found`);
+    }
+
+    // 3. FIND HOLDING TO SELL
+    const holdingIndex = portfolio.holdings.findIndex(
+      h => h.symbol.toUpperCase() === saleData.symbol.toUpperCase() && h.status !== 'Sell'
+    );
+
+    if (holdingIndex === -1) {
+      throw new Error(`No active holding found for symbol: ${saleData.symbol}`);
+    }
+
+    const beforeHoldingState = portfolio.holdings[holdingIndex];
+    
+    portfolioTransactionLogger.logger.debug('🔍 HOLDING ANALYSIS BEFORE SALE', {
+      step: '3_HOLDING_ANALYSIS',
+      holdingData: {
+        symbol: beforeHoldingState.symbol,
+        currentQuantity: beforeHoldingState.quantity,
+        quantityToSell: saleData.quantityToSell,
+        remainingAfterSale: beforeHoldingState.quantity - saleData.quantityToSell,
+        originalBuyPrice: beforeHoldingState.buyPrice,
+        currentInvestment: beforeHoldingState.minimumInvestmentValueStock,
+        sector: beforeHoldingState.sector,
+        status: beforeHoldingState.status
+      },
+      saleValidation: {
+        hasSufficientQuantity: beforeHoldingState.quantity >= saleData.quantityToSell,
+        quantityDeficit: Math.max(0, saleData.quantityToSell - beforeHoldingState.quantity),
+        isCompleteSale: saleData.quantityToSell >= beforeHoldingState.quantity || saleData.saleType === 'complete'
+      }
+    });
+
+    // Validate quantity
+    if (beforeHoldingState.quantity < saleData.quantityToSell) {
+      throw new Error(`Insufficient quantity. Available: ${beforeHoldingState.quantity}, Requested: ${saleData.quantityToSell}`);
+    }
+
+    // 4. GET CURRENT MARKET PRICE
+    const stock = await StockSymbol.findOne({ symbol: beforeHoldingState.symbol });
+    let currentMarketPrice = beforeHoldingState.buyPrice; // fallback
+    
+    if (stock) {
+      if (stock.currentPrice && stock.currentPrice > 0) {
+        currentMarketPrice = stock.currentPrice;
+      } else if (stock.todayClosingPrice && stock.todayClosingPrice > 0) {
+        currentMarketPrice = stock.todayClosingPrice;
+      }
+    }
+
+    portfolioTransactionLogger.logger.debug('📈 MARKET PRICE ANALYSIS FOR SALE', {
+      step: '4_MARKET_PRICE_ANALYSIS',
+      priceData: {
+        currentMarketPrice,
+        originalBuyPrice: beforeHoldingState.buyPrice,
+        priceSource: stock?.currentPrice ? 'current' : (stock?.todayClosingPrice ? 'closing' : 'fallback'),
+        pricePerShareGain: (currentMarketPrice - beforeHoldingState.buyPrice).toFixed(2),
+        pricePerShareGainPercent: (((currentMarketPrice - beforeHoldingState.buyPrice) / beforeHoldingState.buyPrice) * 100).toFixed(2) + '%'
+      }
+    });
+
+    // 5. CALCULATE SALE DETAILS
+    const actualQuantityToSell = saleData.saleType === 'complete' ? beforeHoldingState.quantity : saleData.quantityToSell;
+    const grossSaleValue = actualQuantityToSell * currentMarketPrice;
+    const transactionFee = 0; // Add fee logic if needed
+    const netSaleProceeds = grossSaleValue - transactionFee;
+    const originalInvestment = actualQuantityToSell * beforeHoldingState.buyPrice;
+    const realizedProfitLoss = netSaleProceeds - originalInvestment;
+    const realizedProfitLossPercent = (realizedProfitLoss / originalInvestment) * 100;
+
+    const calculationProcess = {
+      quantityToSell: actualQuantityToSell,
+      salePrice: currentMarketPrice,
+      grossSaleValue,
+      transactionFee,
+      netSaleProceeds,
+      originalInvestment,
+      realizedProfitLoss,
+      realizedProfitLossPercent: realizedProfitLossPercent.toFixed(2) + '%',
+      newCashBalance: portfolio.cashBalance + netSaleProceeds
+    };
+
+    portfolioTransactionLogger.logger.debug('🧮 SALE CALCULATION BREAKDOWN', {
+      step: '5_SALE_CALCULATIONS',
+      calculations: calculationProcess,
+      profitLossAnalysis: {
+        totalGain: realizedProfitLoss.toFixed(2),
+        gainPerShare: ((currentMarketPrice - beforeHoldingState.buyPrice)).toFixed(2),
+        gainPercentage: realizedProfitLossPercent.toFixed(2) + '%',
+        isProfit: realizedProfitLoss > 0,
+        originalInvestmentValue: originalInvestment.toFixed(2),
+        saleValue: netSaleProceeds.toFixed(2)
+      }
+    });
+
+    // 6. UPDATE PORTFOLIO
+    const beforePortfolioState = {
+      currentValue: portfolio.currentValue,
+      cashBalance: portfolio.cashBalance,
+      totalHoldings: portfolio.holdings.length
+    };
+
+    portfolio.cashBalance = calculationProcess.newCashBalance;
+
+    let afterHoldingState = null;
+    
+    if (actualQuantityToSell >= beforeHoldingState.quantity) {
+      // Complete sale - remove holding
+      portfolio.holdings.splice(holdingIndex, 1);
+      
+      portfolioTransactionLogger.logger.debug('📤 COMPLETE SALE - HOLDING REMOVED', {
+        step: '6_COMPLETE_SALE',
+        symbol: saleData.symbol,
+        soldQuantity: actualQuantityToSell,
+        saleValue: netSaleProceeds,
+        profitLoss: realizedProfitLoss
+      });
+    } else {
+      // Partial sale - update holding
+      const remainingQuantity = beforeHoldingState.quantity - actualQuantityToSell;
+      const remainingInvestment = remainingQuantity * beforeHoldingState.buyPrice;
+      
+      afterHoldingState = {
+        ...beforeHoldingState,
+        quantity: remainingQuantity,
+        minimumInvestmentValueStock: remainingInvestment,
+        lastUpdated: new Date().toISOString()
+      };
+      
+      portfolio.holdings[holdingIndex] = afterHoldingState;
+      
+      portfolioTransactionLogger.logger.debug('🔄 PARTIAL SALE - HOLDING UPDATED', {
+        step: '6_PARTIAL_SALE',
+        symbol: saleData.symbol,
+        soldQuantity: actualQuantityToSell,
+        remainingQuantity,
+        remainingInvestment,
+        saleValue: netSaleProceeds,
+        profitLoss: realizedProfitLoss
+      });
+    }
+
+    // 7. SAVE TO DATABASE
+    const dbSaveStart = Date.now();
+    await portfolio.save();
+    const dbSaveTime = Date.now() - dbSaveStart;
+
+    // 8. AFTER STATE ANALYSIS
+    const afterPortfolioState = {
+      currentValue: await exports.calculatePortfolioValue(portfolio, false),
+      cashBalance: portfolio.cashBalance,
+      totalHoldings: portfolio.holdings.length
+    };
+
+    portfolioTransactionLogger.logger.debug('📊 PORTFOLIO STATE AFTER SALE', {
+      step: '8_AFTER_STATE',
+      changes: {
+        portfolioValueChange: afterPortfolioState.currentValue - beforePortfolioState.currentValue,
+        cashIncrease: calculationProcess.netSaleProceeds,
+        holdingsReduction: beforePortfolioState.totalHoldings - afterPortfolioState.totalHoldings
+      }
+    });
+
+    // 9. LOG COMPLETE TRANSACTION
+    await portfolioTransactionLogger.logSellTransactionFlow({
+      frontendData: saleData,
+      portfolioId,
+      portfolioName: portfolio.name,
+      userEmail,
+      stockSymbol: saleData.symbol,
+      beforePortfolioState,
+      beforeHoldingState,
+      stockMarketData: stock || { symbol: saleData.symbol },
+      calculationProcess,
+      afterHoldingState,
+      afterPortfolioState,
+      validationResults: {
+        portfolioValidation: { success: true },
+        holdingValidation: { success: true }
+      },
+      dbOperationResults: {
+        operations: ['portfolio_update', 'holding_update'],
+        portfolioSave: { success: true, executionTime: dbSaveTime },
+        errors: []
+      },
+      profitLossAnalysis: {
+        realizedProfitLoss,
+        realizedProfitLossPercent,
+        holdingPeriod: 'N/A', // Could calculate from purchase date
+        isLongTerm: false
+      }
+    });
+
+    const totalExecutionTime = Date.now() - startTime;
+
+    portfolioTransactionLogger.logger.info('✅ STOCK SALE COMPLETED SUCCESSFULLY', {
+      transactionSummary: {
+        portfolioId,
+        portfolioName: portfolio.name,
+        symbol: saleData.symbol,
+        quantitySold: actualQuantityToSell,
+        salePrice: currentMarketPrice,
+        netProceeds: netSaleProceeds,
+        realizedProfitLoss,
+        finalPortfolioValue: afterPortfolioState.currentValue,
+        finalCashBalance: afterPortfolioState.cashBalance,
+        executionTime: totalExecutionTime + 'ms',
+        timestamp: new Date().toISOString()
+      }
+    });
+
+    return {
+      success: true,
+      portfolio,
+      transaction: {
+        type: 'SELL',
+        symbol: saleData.symbol,
+        quantity: actualQuantityToSell,
+        price: currentMarketPrice,
+        netProceeds,
+        profitLoss: realizedProfitLoss,
+        executionTime: totalExecutionTime
+      }
+    };
+
+  } catch (error) {
+    const totalExecutionTime = Date.now() - startTime;
+    
+    await portfolioTransactionLogger.logError(
+      'STOCK_SALE_ERROR',
+      error.message,
+      {
+        portfolioId,
+        saleData,
+        userEmail,
+        executionTime: totalExecutionTime
+      },
+      error.stack
+    );
+
     throw error;
   }
 };

@@ -354,88 +354,35 @@ async function updateClosingPrices() {
     await tvService.initialize();
     CronLogger.info('TradingView service initialized for closing price update');
 
-    const today = new Date();
-    today.setHours(0, 0, 0, 0); // Start of today
+    // Get ALL active stocks for daily closing price update (no filtering by date)
+    const allActiveStocks = await StockSymbol.find({
+      isActive: true
+    }, '_id symbol exchange currentPrice todayClosingPrice');
 
-    // First, dynamically determine which symbols are used as benchmarks in portfolios
-    const Portfolio = require('../models/modelPortFolio');
-    const portfolios = await Portfolio.find({ compareWith: { $exists: true, $ne: "" } })
-                                    .select('compareWith');
-    
-    // Extract benchmark symbols or IDs
-    const benchmarks = portfolios.map(p => p.compareWith);
-    const benchmarkSymbols = [];
-    const benchmarkIds = [];
-    
-    // Separate IDs from symbols
-    benchmarks.forEach(benchmark => {
-      if (/^[0-9a-fA-F]{24}$/.test(benchmark)) {
-        benchmarkIds.push(mongoose.Types.ObjectId(benchmark));
-      } else {
-        benchmarkSymbols.push(benchmark);
-      }
-    });
-    
-    CronLogger.info(`Found ${benchmarks.length} unique benchmarks used in portfolios`);
-    
-    // First, get all benchmark stocks by either ID or symbol
-    const idCriteria = benchmarkIds.length > 0 ? { _id: { $in: benchmarkIds } } : null;
-    const symbolCriteria = benchmarkSymbols.length > 0 ? { symbol: { $in: benchmarkSymbols } } : null;
-    
-    let marketIndicesCriteria = { isActive: true };
-    if (idCriteria && symbolCriteria) {
-      marketIndicesCriteria.$or = [idCriteria, symbolCriteria];
-    } else if (idCriteria) {
-      marketIndicesCriteria = { ...marketIndicesCriteria, ...idCriteria };
-    } else if (symbolCriteria) {
-      marketIndicesCriteria = { ...marketIndicesCriteria, ...symbolCriteria };
-    }
-    
-    const marketIndices = await StockSymbol.find(marketIndicesCriteria, '_id symbol exchange currentPrice');
-    
-    // Extract the IDs and symbols of the benchmark stocks we found
-    const marketIndiceIds = marketIndices.map(index => index._id.toString());
-    const marketIndiceSymbols = marketIndices.map(index => index.symbol);
-    
-    CronLogger.info(`Found ${marketIndices.length} benchmark stocks: ${marketIndiceSymbols.join(', ')}`);
-    
-    // Then get all other stocks that need updating (excluding the benchmarks we just fetched)
-    const regularStocks = await StockSymbol.find({
-      isActive: true,
-      _id: { $nin: marketIndiceIds },
-      $or: [
-        { closingPriceUpdatedAt: { $lt: today } },
-        { closingPriceUpdatedAt: { $exists: false } }
-      ]
-    }, '_id symbol exchange currentPrice');
-
-    // Combine, placing indices first
-    const stocksToUpdate = [...marketIndices, ...regularStocks];
-
-    if (!stocksToUpdate.length) {
-      CronLogger.info('All stock closing prices are already up-to-date for today.');
+    if (!allActiveStocks.length) {
+      CronLogger.info('No active stocks found for closing price update.');
       tvService.cleanup();
       return {
         success: true,
-        message: 'All stock closing prices are already up-to-date.',
+        message: 'No active stocks found.',
         total: 0,
         updatedCount: 0,
         failed: []
       };
     }
 
-    CronLogger.info(`Found ${stocksToUpdate.length} stocks needing closing price update.`);
+    CronLogger.info(`Found ${allActiveStocks.length} active stocks for daily closing price update (updating ALL stocks at 4 PM daily).`);
 
     let updatedCount = 0;
     const failedUpdates = [];
     const updateQueue = [];
 
-    const batchCount = Math.ceil(stocksToUpdate.length / tvService.batchSize);
+    const batchCount = Math.ceil(allActiveStocks.length / tvService.batchSize);
 
     for (let i = 0; i < batchCount; i++) {
         const startIdx = i * tvService.batchSize;
-        const endIdx = Math.min(startIdx + tvService.batchSize, stocksToUpdate.length);
-        const batch = stocksToUpdate.slice(startIdx, endIdx);
+        const endIdx = Math.min(startIdx + tvService.batchSize, allActiveStocks.length);
+        const batch = allActiveStocks.slice(startIdx, endIdx);
 
         CronLogger.info(`Processing batch ${i+1}/${batchCount} with ${batch.length} stocks`);
         
@@ -480,10 +427,10 @@ async function updateClosingPrices() {
 
     const result = {
         success: true,
-        total: stocksToUpdate.length,
+        total: allActiveStocks.length,
         updatedCount,
         failed: failedUpdates,
-        message: `Processed ${stocksToUpdate.length} symbols (${updatedCount} updated)`,
+        message: `Processed ${allActiveStocks.length} symbols (${updatedCount} updated)`,
         duration: Date.now() - start
     };
     
@@ -583,9 +530,26 @@ class CronScheduler {
         timezone: "Asia/Kolkata"
       });
 
-      // Closing price update + chained portfolio valuation - 3:45 PM IST
-      const closingJob = cron.schedule('45 15 * * *', async () => {
-        await runClosingSequence();
+      // Closing price update only - 4:00 PM IST (after market close)
+      const closingJob = cron.schedule('0 16 * * *', async () => {
+        await updateClosingPrices();
+      }, {
+        scheduled: false,
+        timezone: "Asia/Kolkata"
+      });
+
+      // Portfolio valuation with closing prices - 5:00 PM IST (1 hour after closing prices start)
+      const portfolioValuationJob = cron.schedule('0 17 * * *', async () => {
+        const portfolioService = require('../services/portfolioservice');
+        CronLogger.info('🧮 Starting portfolio valuation with closing prices at 5:00 PM IST');
+        try {
+          const results = await portfolioService.logAllPortfoliosDaily(true);
+          const successCount = results.filter(r => r.status === 'success').length;
+          const failedCount = results.filter(r => r.status === 'failed').length;
+          CronLogger.success(`✅ Portfolio valuation completed: ${successCount} successful, ${failedCount} failed`);
+        } catch (error) {
+          CronLogger.error('❌ Portfolio valuation failed', error);
+        }
       }, {
         scheduled: false,
         timezone: "Asia/Kolkata"
@@ -595,10 +559,11 @@ class CronScheduler {
         { name: 'Hourly Update + Portfolio Sync', job: hourlyJob, type: 'hourly' },
         { name: 'Morning Update', job: morningJob, type: 'morning' },
         { name: 'Afternoon Update', job: afternoonJob, type: 'afternoon' },
-        { name: 'Closing Price Update', job: closingJob, type: 'closing' }
+        { name: 'Closing Price Update', job: closingJob, type: 'closing' },
+        { name: 'Portfolio Valuation', job: portfolioValuationJob, type: 'valuation' }
       ];
 
-      CronLogger.info('📅 Cron scheduler initialized with 4 jobs');
+      CronLogger.info('📅 Cron scheduler initialized with 5 jobs');
     } catch (error) {
       CronLogger.error('Failed to initialize cron scheduler', error);
       throw error; // Re-throw to allow caller to handle
