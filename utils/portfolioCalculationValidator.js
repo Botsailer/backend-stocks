@@ -296,9 +296,9 @@ class PortfolioCalculationValidator {
       originalBuyPrice: Number(originalBuyPrice || averagedBuyPrice || currentMarketPrice),
       currentMarketPrice: Number(currentMarketPrice),
       
-      // CASH IMPACT: SIMPLE - just add sale value to cash
-      cashIncrease: Number(saleValue.toFixed(2)), // currentPrice * quantity
-      realizedPnL: Number(profitLoss.toFixed(2)),
+      // CASH IMPACT: CORRECTED - only add sale value to cash (P&L is already included in sale value)
+      cashIncrease: Number(saleValue.toFixed(2)), // This is the ONLY amount that should be added to cash
+      realizedPnL: Number(profitLoss.toFixed(2)), // This is for tracking only, NOT for cash calculation
       
       calculatedAt: new Date().toISOString()
     };

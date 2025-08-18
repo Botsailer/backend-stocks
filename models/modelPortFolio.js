@@ -571,7 +571,11 @@ PortfolioSchema.pre('save', async function(next) {
           holding.unrealizedPnLPercent = 0;
         }
         
-        holding.minimumInvestmentValueStock = holding.investmentValueAtMarket;
+        // Update minimumInvestmentValueStock to current market value only for active holdings
+        // Do not update for sold stocks to preserve original investment tracking
+        if (holding.status !== 'Sell' && holding.quantity > 0) {
+          holding.minimumInvestmentValueStock = holding.investmentValueAtMarket;
+        }
       });
     }
   }
