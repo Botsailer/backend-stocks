@@ -104,3 +104,43 @@ ls -la | head -20
 
 echo ""
 echo "✨ Repository is now clean and production-ready!"
+
+# Add log cleanup functionality
+echo ""
+echo "📜 Starting log file cleanup..."
+
+# Define log cleanup parameters
+LOG_DIR="./logs"
+ARCHIVE_DIR="./logs/archive"
+DAYS_TO_KEEP=30
+
+# Create archive directory if it doesn't exist
+mkdir -p "$ARCHIVE_DIR"
+
+echo "🔍 Looking for log files older than $DAYS_TO_KEEP days..."
+
+# Find log files older than DAYS_TO_KEEP days and move them to archive
+find "$LOG_DIR" -name "*.log" -type f -mtime +$DAYS_TO_KEEP 2>/dev/null | while read logfile; do
+  filename=$(basename "$logfile")
+  archive_name="${filename%.*}_$(date +%Y%m%d).log.gz"
+  
+  echo "📦 Archiving old log file: $filename"
+  gzip -c "$logfile" > "$ARCHIVE_DIR/$archive_name"
+  
+  # Only remove the original if gzip was successful
+  if [ $? -eq 0 ]; then
+    echo "✅ Compressed to $archive_name and removing original"
+    rm "$logfile"
+  else
+    echo "⚠️ Failed to compress $filename, original file not removed"
+  fi
+done
+
+# Clean up very old archives (older than 90 days)
+echo "🗑️ Removing archives older than 90 days..."
+find "$ARCHIVE_DIR" -name "*.log.gz" -type f -mtime +90 -delete 2>/dev/null
+
+echo ""
+echo "📊 Log cleanup completed!"
+echo "📂 Current log directory structure:"
+ls -la "$LOG_DIR" | head -10

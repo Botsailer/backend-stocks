@@ -340,14 +340,24 @@ dbAdapter.connect()
       try {
         const requestedDate = req.query.date || new Date().toISOString().split('T')[0]; // Default to today
         const logFileName = `portfolio-transactions-${requestedDate}.log`;
-        const logFilePath = path.join(__dirname, 'mainlog', logFileName);
+        const mainlogDir = path.join(__dirname, 'mainlog');
+        const logFilePath = path.join(mainlogDir, logFileName);
+        
+        // Ensure mainlog directory exists
+        try {
+          await require('fs').promises.mkdir(mainlogDir, { recursive: true });
+        } catch (mkdirError) {
+          // Ignore if directory already exists
+          if (mkdirError.code !== 'EEXIST') {
+            console.error('Error creating mainlog directory:', mkdirError);
+          }
+        }
         
         // Check if the specific log file exists
         require('fs').access(logFilePath, require('fs').constants.F_OK, async (err) => {
           if (err) {
             // If file not found, list available dates
             try {
-              const mainlogDir = path.join(__dirname, 'mainlog');
               const files = await require('fs').promises.readdir(mainlogDir);
               const logFiles = files.filter(file => file.startsWith('portfolio-transactions-') && file.endsWith('.log'));
               const availableDates = logFiles.map(file => {
@@ -358,9 +368,10 @@ dbAdapter.connect()
               return res.status(404).json({
                 success: false,
                 message: `Transaction log file not found for date: ${requestedDate}`,
-                availableDates,
+                availableDates: availableDates.length > 0 ? availableDates : [],
                 hint: 'Use ?date=YYYY-MM-DD parameter to specify a different date',
-                today: new Date().toISOString().split('T')[0]
+                today: new Date().toISOString().split('T')[0],
+                note: availableDates.length === 0 ? 'No transaction logs have been generated yet' : undefined
               });
             } catch (dirError) {
               return res.status(404).json({
@@ -478,17 +489,18 @@ dbAdapter.connect()
       try {
         const mainlogDir = path.join(__dirname, 'mainlog');
         
-        // Check if mainlog directory exists
+        // Ensure mainlog directory exists
         try {
-          await require('fs').promises.access(mainlogDir);
-        } catch (error) {
-          return res.status(404).json({
-            success: false,
-            message: 'Transaction log directory not found',
-            note: 'No transaction logs have been generated yet'
-          });
+          await require('fs').promises.mkdir(mainlogDir, { recursive: true });
+          console.log(`✅ Ensured mainlog directory exists at: ${mainlogDir}`);
+        } catch (mkdirError) {
+          // Ignore if directory already exists
+          if (mkdirError.code !== 'EEXIST') {
+            console.error('Error creating mainlog directory:', mkdirError);
+          }
         }
         
+        // Get all files in the directory
         const files = await require('fs').promises.readdir(mainlogDir);
         const logFiles = files.filter(file => 
           file.startsWith('portfolio-transactions-') && file.endsWith('.log')
@@ -499,7 +511,9 @@ dbAdapter.connect()
             success: false,
             message: 'No transaction log files found',
             directory: 'mainlog/',
-            note: 'Transaction logs will be created when transactions occur'
+            note: 'Transaction logs will be created when transactions occur',
+            createSampleLogs: '/api/admin/logs/create-sample (admin only)',
+            today: new Date().toISOString().split('T')[0]
           });
         }
         
@@ -558,6 +572,60 @@ dbAdapter.connect()
       }
     });
 
+    /**
+     * @swagger
+     * /api/admin/logs/create-sample:
+     *   post:
+     *     summary: Create sample transaction logs
+     *     description: |
+     *       Creates sample transaction logs for testing purposes.
+     *       This is an admin-only endpoint and should not be used in production.
+     *     tags: [System]
+     *     security:
+     *       - bearerAuth: []
+     *     responses:
+     *       200:
+     *         description: Sample logs created successfully
+     *         content:
+     *           application/json:
+     *             schema:
+     *               type: object
+     *               properties:
+     *                 success:
+     *                   type: boolean
+     *                   example: true
+     *                 message:
+     *                   type: string
+     *                   example: "Sample transaction logs created successfully"
+     *                 generatedFiles:
+     *                   type: array
+     *                   items:
+     *                     type: string
+     *                   example: ["/home/user/app/mainlog/portfolio-transactions-2025-08-19.log"]
+     *       500:
+     *         description: Failed to create sample logs
+     */
+    app.post('/api/admin/logs/create-sample', async (req, res) => {
+      try {
+        // In a real app, we would check for admin permissions here
+        const transactionLogGenerator = require('./utils/transactionLogGenerator');
+        const generatedFiles = transactionLogGenerator.generateSampleLogs();
+        
+        res.json({
+          success: true,
+          message: 'Sample transaction logs created successfully',
+          generatedFiles,
+          note: 'These are sample logs for testing purposes only'
+        });
+      } catch (error) {
+        console.error('Error creating sample logs:', error);
+        res.status(500).json({
+          success: false,
+          message: 'Failed to create sample logs',
+          error: error.message
+        });
+      }
+    });
 
     // Routes
     app.use('/auth', authRoutes);

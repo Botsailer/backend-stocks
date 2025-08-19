@@ -130,6 +130,35 @@ exports.createPortfolio = asyncHandler(async (req, res) => {
       currentValue: portfolioSummary.totalPortfolioValueAtBuy
     };
 
+    // Debug logging before portfolio creation
+    calcLogger.debug('Portfolio creation details', {
+      name: portfolioData.name,
+      minInvestment: portfolioData.minInvestment,
+      cashBalance: portfolioData.cashBalance,
+      totalValue: portfolioData.currentValue,
+      holdingsCount: portfolioData.holdings.length,
+      subscriptionFee: portfolioData.subscriptionFee,
+      category: portfolioData.PortfolioCategory,
+      timeHorizon: portfolioData.timeHorizon,
+      durationMonths: portfolioData.durationMonths
+    });
+
+    // Log detailed holdings information
+    if (portfolioData.holdings && portfolioData.holdings.length > 0) {
+      calcLogger.debug('Initial portfolio holdings', {
+        holdings: portfolioData.holdings.map(holding => ({
+          symbol: holding.symbol,
+          sector: holding.sector,
+          stockCapType: holding.stockCapType || 'Unknown',
+          buyPrice: holding.buyPrice,
+          quantity: holding.quantity,
+          totalValue: holding.buyPrice * holding.quantity,
+          minimumInvestmentValueStock: holding.minimumInvestmentValueStock,
+          weight: holding.weight || 0
+        }))
+      });
+    }
+
     const portfolio = new Portfolio(portfolioData);
     const savedPortfolio = await portfolio.save();
 
@@ -137,7 +166,8 @@ exports.createPortfolio = asyncHandler(async (req, res) => {
       portfolioId: savedPortfolio._id,
       name: savedPortfolio.name,
       totalInvestment: portfolioSummary.totalActualInvestment,
-      holdingsCount: savedPortfolio.holdings.length
+      holdingsCount: savedPortfolio.holdings.length,
+      createdAt: new Date().toISOString()
     });
 
     res.status(201).json(savedPortfolio);
@@ -653,20 +683,33 @@ exports.updatePortfolio = asyncHandler(async (req, res) => {
     portfolio.holdings = updatedHoldings;
     
     // For sell actions, cash balance is already calculated by portfolioService
-    // For other actions, recalculate cash balance based on holdings only (ignore frontend data)
+    // For other actions, check if this is the first initialization or an update
     if (!stockAction.includes('sell')) {
-      const totalHoldingsCostAtBuy = updatedHoldings.reduce((sum, holding) => {
-        const buyPrice = parseFloat(holding.buyPrice) || 0;
-        const quantity = parseFloat(holding.quantity) || 0;
-        return sum + (buyPrice * quantity);
-      }, 0);
-      
-      // Calculate cash balance from minInvestment minus actual holdings cost at buy price
-      const minInvestment = parseFloat(portfolio.minInvestment) || 0;
-      const calculatedCashBalance = minInvestment - totalHoldingsCostAtBuy;
-      
-      // Ensure cash balance is valid and not negative
-      portfolio.cashBalance = Math.max(0, parseFloat(calculatedCashBalance.toFixed(2)));
+      // Check if this is a new portfolio initialization (no existing cash balance)
+      if (portfolio.cashBalance === undefined || portfolio.cashBalance === null) {
+        // First initialization ONLY: Calculate cash from minInvestment minus holdings cost
+        const totalHoldingsCostAtBuy = updatedHoldings.reduce((sum, holding) => {
+          const buyPrice = parseFloat(holding.buyPrice) || 0;
+          const quantity = parseFloat(holding.quantity) || 0;
+          return sum + (buyPrice * quantity);
+        }, 0);
+        
+        // Initial cash balance based on minInvestment (only for first setup)
+        const minInvestment = parseFloat(portfolio.minInvestment) || 0;
+        const calculatedCashBalance = minInvestment - totalHoldingsCostAtBuy;
+        
+        // Ensure cash balance is valid and not negative
+        portfolio.cashBalance = Math.max(0, parseFloat(calculatedCashBalance.toFixed(2)));
+        
+        calcLogger.info('Portfolio initial cash balance calculated', {
+          portfolioId: portfolio._id,
+          minInvestment,
+          totalHoldingsCostAtBuy,
+          initialCashBalance: portfolio.cashBalance
+        });
+      }
+      // For existing portfolios, PRESERVE the cash balance (acts as a wallet)
+      // This ensures all sales proceeds correctly accumulate in the wallet
       
       // Calculate investment values and PnL for each holding
       updatedHoldings.forEach(holding => {

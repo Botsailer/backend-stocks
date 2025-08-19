@@ -756,8 +756,16 @@ exports.processStockSaleWithLogging = async (portfolioId, saleData) => {
       symbol: existingHolding.symbol
     };
 
-    // Update portfolio with sale results
+    // Update portfolio with sale results - WALLET BEHAVIOR: Add full sale proceeds to cash
+    const previousCashBalance = portfolio.cashBalance || 0;
     portfolio.cashBalance = saleResult.cashImpact.newBalance;
+    
+    logger.info(`💰 Cash balance updated for sale of ${symbol}`, {
+      previousCashBalance,
+      saleProceeds: saleResult.cashImpact.saleProceeds,
+      newCashBalance: portfolio.cashBalance,
+      explanation: 'Cash behaves like a wallet - adding full sale value regardless of profit/loss'
+    });
     
     // Handle complete vs partial sales
     if (saleResult.operation.type === 'complete_sale' || saleResult.updatedHolding.quantity === 0) {

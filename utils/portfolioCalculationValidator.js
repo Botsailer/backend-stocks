@@ -1,20 +1,42 @@
 const winston = require('winston');
+const path = require('path');
+const fs = require('fs');
+
+// Ensure logs directory exists
+const logsDir = path.resolve(__dirname, '../logs');
+if (!fs.existsSync(logsDir)) {
+  fs.mkdirSync(logsDir, { recursive: true });
+  console.log(`Created logs directory at: ${logsDir}`);
+}
 
 // Configure logger for portfolio calculations
 const calcLogger = winston.createLogger({
-  level: 'info',
+  level: 'debug', // Set to debug level to capture all transaction details
   format: winston.format.combine(
-    winston.format.timestamp({ format: 'YYYY-MM-DD HH:mm:ss' }),
+    winston.format.timestamp({ format: 'YYYY-MM-DD HH:mm:ss.SSS' }),
     winston.format.errors({ stack: true }),
     winston.format.splat(),
-    winston.format.json()
+    winston.format.printf(({ timestamp, level, message, ...rest }) => {
+      let logMessage = `[${timestamp}] [${level.toUpperCase()}] ${message}`;
+      if (Object.keys(rest).length > 0) {
+        logMessage += `\n${JSON.stringify(rest, null, 2)}`;
+      }
+      return logMessage;
+    })
   ),
   transports: [
-    new winston.transports.Console(),
+    new winston.transports.Console({
+      level: 'info',
+      format: winston.format.combine(
+        winston.format.colorize(),
+        winston.format.simple()
+      )
+    }),
     new winston.transports.File({ 
-      filename: 'logs/portfolio-calculations.log',
-      maxsize: 5 * 1024 * 1024,
-      maxFiles: 7
+      filename: path.join(logsDir, 'portfolio-calculations.log'),
+      maxsize: 10 * 1024 * 1024, // 10MB
+      maxFiles: 10,
+      tailable: true
     })
   ]
 });
@@ -278,6 +300,18 @@ class PortfolioCalculationValidator {
     // What remains after sale
     const remainingQuantity = currentQuantity - quantityToSell;
 
+    // Log the sale calculation for debugging
+    calcLogger.info('💰 Stock sale calculation', {
+      symbol,
+      quantityToSell,
+      currentMarketPrice,
+      averagedBuyPrice,
+      saleValue,
+      averagedCost,
+      profitLoss,
+      cashEffect: 'Adding full sale value to cash balance regardless of profit/loss'
+    });
+
     const result = {
       symbol,
       quantitySold: Number(quantityToSell),
@@ -296,8 +330,9 @@ class PortfolioCalculationValidator {
       originalBuyPrice: Number(originalBuyPrice || averagedBuyPrice || currentMarketPrice),
       currentMarketPrice: Number(currentMarketPrice),
       
-      // CASH IMPACT: CORRECTED - only add sale value to cash (P&L is already included in sale value)
-      cashIncrease: Number(saleValue.toFixed(2)), // This is the ONLY amount that should be added to cash
+      // CASH IMPACT: WALLET BEHAVIOR - Simply add the full sale value to cash
+      // This works like a real wallet - you get back exactly what you sell for
+      cashIncrease: Number(saleValue.toFixed(2)), // Full sale proceeds added to cash
       realizedPnL: Number(profitLoss.toFixed(2)), // This is for tracking only, NOT for cash calculation
       
       calculatedAt: new Date().toISOString()
@@ -407,6 +442,18 @@ class PortfolioCalculationValidator {
    * @returns {object} Complete financial summary
    */
   static calculatePortfolioSummary(portfolioData) {
+    // Log start of calculation
+    calcLogger.debug('Starting portfolio summary calculation', {
+      timestamp: new Date().toISOString(),
+      inputData: {
+        holdingsCount: portfolioData.holdings?.length || 0,
+        minInvestment: portfolioData.minInvestment,
+        hasMarketPrices: Object.keys(portfolioData.currentMarketPrices || {}).length > 0,
+        existingCashBalance: portfolioData.existingCashBalance !== null ? 
+          `${portfolioData.existingCashBalance}` : 'null'
+      }
+    });
+
     const { 
       holdings = [], 
       minInvestment = 0, 
@@ -493,17 +540,21 @@ class PortfolioCalculationValidator {
 
     // Enhanced cash balance calculation
     let cashBalance;
-    if (existingCashBalance !== null) {
+    if (existingCashBalance !== null && existingCashBalance !== undefined) {
       // Use existing cash balance (for updates where profits may have accumulated)
+      // This ensures cash balance functions as a wallet rather than being reset
       cashBalance = existingCashBalance;
     } else {
-      // Calculate from minimum investment (for new portfolios)
+      // Calculate from minimum investment (for new portfolios only)
       cashBalance = minInvestment - totalActualInvestment;
     }
 
-    // Calculate derived values
-    const totalPortfolioValueAtBuy = holdingsValueAtBuy + Math.max(0, cashBalance);
+    // Calculate derived values - use market value for the current portfolio value
+    // Market value is based on current/closing prices, not buy prices
+    const totalPortfolioValue = holdingsValueAtMarket + Math.max(0, cashBalance);
     const totalPortfolioValueAtMarket = holdingsValueAtMarket + Math.max(0, cashBalance);
+    // Calculate total portfolio value at buy price (original investment)
+    const totalPortfolioValueAtBuy = holdingsValueAtBuy + Math.max(0, cashBalance);
 
     // Enhanced validation with profit consideration
     const canExceedMinInvestment = totalRealizedPnL > 0 || existingCashBalance !== null;
@@ -588,6 +639,46 @@ class PortfolioCalculationValidator {
         realizedPnL: summary.totalRealizedPnL,
         maxPurchase: summary.maxPurchaseAmount,
         isValid: summary.isFinanciallyValid
+      }
+    });
+
+    // Enhanced debug logging for comprehensive transaction tracking
+    calcLogger.debug('Portfolio calculation details', {
+      timestamp: new Date().toISOString(),
+      calculationId: `calc-${Date.now()}`,
+      financialMetrics: {
+        minInvestment: summary.minInvestment,
+        totalActualInvestment: summary.totalActualInvestment,
+        cashBalance: summary.cashBalance,
+        holdingsValueAtBuy: summary.holdingsValueAtBuy,
+        holdingsValueAtMarket: summary.holdingsValueAtMarket,
+        totalPortfolioValueAtBuy: summary.totalPortfolioValueAtBuy,
+        totalPortfolioValueAtMarket: summary.totalPortfolioValueAtMarket,
+      },
+      profitAndLoss: {
+        totalRealizedPnL: summary.totalRealizedPnL,
+        totalUnrealizedPnL: summary.totalUnrealizedPnL,
+        totalPnL: summary.totalPnL,
+      },
+      holdings: {
+        totalCount: summary.totalHoldings,
+        activeCount: summary.activeHoldings,
+        soldCount: summary.soldHoldings,
+        detailedHoldings: activeHoldings.map(h => ({
+          symbol: h.symbol,
+          quantity: h.quantity,
+          buyPrice: h.buyPrice,
+          marketPrice: h.currentPrice || h.buyPrice,
+          valueAtBuy: h.buyPrice * h.quantity,
+          valueAtMarket: (h.currentPrice || h.buyPrice) * h.quantity,
+          unrealizedPnL: ((h.currentPrice || h.buyPrice) - h.buyPrice) * h.quantity
+        }))
+      },
+      validations: {
+        weightValidationPassed: weightValidation.isValid,
+        minInvestmentValidationPassed: minInvestmentValidation.isValid,
+        totalWeight: weightValidation.totalWeight,
+        remainingWeight: weightValidation.remainingWeight
       }
     });
 
@@ -931,6 +1022,19 @@ class PortfolioCalculationValidator {
    */
   static processStockSale(saleData, existingHolding, currentMarketPrice, currentCashBalance) {
     const { quantityToSell, saleType = 'partial' } = saleData; // 'partial' or 'complete'
+    
+    // Debug log at the start of stock sale processing
+    calcLogger.debug('Starting stock sale processing', {
+      symbol: existingHolding.symbol,
+      quantityToSell,
+      saleType,
+      existingQuantity: existingHolding.quantity,
+      buyPrice: existingHolding.buyPrice,
+      currentMarketPrice,
+      currentCashBalance,
+      timestamp: new Date().toISOString(),
+      transactionId: `sale-${Date.now()}`
+    });
 
     // Validate inputs
     if (typeof quantityToSell !== 'number' || quantityToSell <= 0) {
@@ -999,14 +1103,13 @@ class PortfolioCalculationValidator {
       };
 
     } else {
-      // Complete sale - mark as sold with quantity = 0
       updatedHolding = {
         ...existingHolding,
         quantity: 0,
         minimumInvestmentValueStock: 0,
         weight: 0,
         status: 'Sell',
-        realizedPnL: (existingHolding.realizedPnL || 0) + pnlResult.realizedPnL,
+        realizedPnL: (existingHolding.realizedPnL || 0) + pnlResult.profitLoss,
         soldDate: new Date().toISOString(),
         finalSalePrice: currentMarketPrice,
         totalSaleValue: pnlResult.saleValue,
@@ -1043,6 +1146,7 @@ class PortfolioCalculationValidator {
         previousBalance: Number(currentCashBalance.toFixed(2)),
         saleProceeds: Number(pnlResult.cashIncrease.toFixed(2)),
         newBalance: Number(newCashBalance.toFixed(2)),
+        walletBehavior: true, // Indicates that full sale value is added to cash
         profitAdded: pnlResult.profitLoss > 0,
         profitAmount: Number(Math.max(0, pnlResult.profitLoss).toFixed(2))
       },
@@ -1063,6 +1167,37 @@ class PortfolioCalculationValidator {
       profitLoss: operation.profitLoss,
       newCashBalance: newCashBalance,
       isCompleteSale: isCompleteSale
+    });
+
+    // Add detailed debug logging for comprehensive transaction tracking
+    calcLogger.debug('Stock sale details', {
+      timestamp: new Date().toISOString(),
+      transactionId: `sale-${Date.now()}`,
+      symbol: existingHolding.symbol,
+      beforeSale: {
+        quantity: existingHolding.quantity,
+        buyPrice: existingHolding.buyPrice,
+        totalValueAtBuy: existingHolding.quantity * existingHolding.buyPrice,
+        cashBalance: currentCashBalance
+      },
+      sale: {
+        quantitySold: operation.quantitySold,
+        marketPrice: currentMarketPrice,
+        saleValue: operation.saleValue,
+        walletAddition: pnlResult.cashIncrease,
+        profitLoss: operation.profitLoss,
+        profitLossPercent: pnlResult.profitLossPercent
+      },
+      afterSale: {
+        remainingQuantity: isCompleteSale ? 0 : pnlResult.remainingQuantity,
+        newCashBalance: newCashBalance,
+        totalProfitOrLoss: operation.profitLoss,
+        status: isCompleteSale ? 'Sold' : 'Partial Sale'
+      },
+      walletBehavior: {
+        addedToWallet: pnlResult.cashIncrease,
+        explanation: 'Full sale amount added to cash balance regardless of profit/loss'
+      }
     });
 
     return result;
