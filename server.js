@@ -285,35 +285,51 @@ dbAdapter.connect()
 
     /**
      * @swagger
-     * /transactionlog:
+     * /portfoliolog:
      *   get:
-     *     summary: Get detailed transaction logs
+     *     summary: Get enhanced portfolio operation logs
      *     description: |
-     *       Streams the comprehensive transaction log file with detailed debugging information.
-     *       Shows today's transaction log by default, or specify a date parameter.
+     *       Streams the comprehensive portfolio log file with detailed operation tracking.
+     *       Shows portfolio.log (all operations) or portfolio-error.log (errors only).
+     *       Includes CREATE, READ, UPDATE, DELETE operations with full context.
      *     tags: [System]
      *     parameters:
      *       - in: query
-     *         name: date
+     *         name: type
      *         required: false
      *         schema:
      *           type: string
-     *           format: date
-     *           example: "2025-08-18"
-     *         description: Specific date to retrieve logs for (YYYY-MM-DD format)
+     *           enum: [all, errors]
+     *           default: all
+     *         description: Type of log to retrieve (all operations or errors only)
+     *       - in: query
+     *         name: lines
+     *         required: false
+     *         schema:
+     *           type: integer
+     *           default: 100
+     *           minimum: 1
+     *           maximum: 1000
+     *         description: Number of recent lines to retrieve (tail behavior)
      *     responses:
      *       200:
-     *         description: Transaction log file content
+     *         description: Portfolio log file content
      *         content:
      *           text/plain:
      *             schema:
      *               type: string
      *               example: |
-     *                 [2025-08-18 19:42:17.865] [INFO] 🛒 BUY TRANSACTION INITIATED
-     *                 {
-     *                   "transactionType": "BUY",
-     *                   "portfolioId": "66b123456789abcdef123456",
-     *                   "stockSymbol": "RELIANCE"
+     *                 [2025-08-20 14:49:50.581] [INFO] [UPDATE] [Portfolio: portfolio_123] [User: user_456] Portfolio updated successfully | Details: {
+     *                   "stockAction": "buy",
+     *                   "holdingsModified": true,
+     *                   "portfolioBefore": {
+     *                     "cashBalance": 50000,
+     *                     "holdingsCount": 5
+     *                   },
+     *                   "portfolioAfter": {
+     *                     "cashBalance": 40000,
+     *                     "holdingsCount": 6
+     *                   }
      *                 }
      *       404:
      *         description: Log file not found
@@ -327,57 +343,65 @@ dbAdapter.connect()
      *                   example: false
      *                 message:
      *                   type: string
-     *                   example: "Transaction log file not found for date: 2025-08-18"
-     *                 availableDates:
+     *                   example: "Portfolio log file not found"
+     *                 availableTypes:
      *                   type: array
      *                   items:
      *                     type: string
-     *                   example: ["2025-08-17", "2025-08-16"]
+     *                   example: ["all", "errors"]
      *       500:
      *         description: Internal server error
      */
-    app.get('/transactionlog', async (req, res) => {
+    app.get('/portfoliolog', async (req, res) => {
       try {
-        const requestedDate = req.query.date || new Date().toISOString().split('T')[0]; // Default to today
-        const logFileName = `portfolio-transactions-${requestedDate}.log`;
-        const mainlogDir = path.join(__dirname, 'mainlog');
-        const logFilePath = path.join(mainlogDir, logFileName);
+        const logType = req.query.type || 'all';
+        const lines = Math.min(Math.max(parseInt(req.query.lines) || 100, 1), 1000);
         
-        // Ensure mainlog directory exists
+        // Determine log file based on type
+        const logFileName = logType === 'errors' ? 'portfolio-error.log' : 'portfolio.log';
+        const logsDir = path.join(__dirname, 'logs');
+        const logFilePath = path.join(logsDir, logFileName);
+        
+        // Ensure logs directory exists
         try {
-          await require('fs').promises.mkdir(mainlogDir, { recursive: true });
+          await require('fs').promises.mkdir(logsDir, { recursive: true });
         } catch (mkdirError) {
-          // Ignore if directory already exists
           if (mkdirError.code !== 'EEXIST') {
-            console.error('Error creating mainlog directory:', mkdirError);
+            console.error('Error creating logs directory:', mkdirError);
           }
         }
         
-        // Check if the specific log file exists
+        // Check if the log file exists
         require('fs').access(logFilePath, require('fs').constants.F_OK, async (err) => {
           if (err) {
-            // If file not found, list available dates
+            // Check what log files are available
             try {
-              const files = await require('fs').promises.readdir(mainlogDir);
-              const logFiles = files.filter(file => file.startsWith('portfolio-transactions-') && file.endsWith('.log'));
-              const availableDates = logFiles.map(file => {
-                const match = file.match(/portfolio-transactions-(\d{4}-\d{2}-\d{2})\.log/);
-                return match ? match[1] : null;
-              }).filter(Boolean).sort().reverse(); // Most recent first
+              const files = await require('fs').promises.readdir(logsDir);
+              const portfolioLogFiles = files.filter(file => 
+                file === 'portfolio.log' || file === 'portfolio-error.log'
+              );
               
               return res.status(404).json({
                 success: false,
-                message: `Transaction log file not found for date: ${requestedDate}`,
-                availableDates: availableDates.length > 0 ? availableDates : [],
-                hint: 'Use ?date=YYYY-MM-DD parameter to specify a different date',
-                today: new Date().toISOString().split('T')[0],
-                note: availableDates.length === 0 ? 'No transaction logs have been generated yet' : undefined
+                message: `Portfolio log file not found: ${logFileName}`,
+                requestedType: logType,
+                availableTypes: portfolioLogFiles.map(file => 
+                  file === 'portfolio-error.log' ? 'errors' : 'all'
+                ),
+                availableFiles: portfolioLogFiles,
+                hint: 'Use ?type=all or ?type=errors parameter',
+                note: portfolioLogFiles.length === 0 ? 'No portfolio logs have been generated yet. Try making some portfolio operations.' : undefined,
+                endpoints: {
+                  allLogs: '/portfoliolog?type=all',
+                  errorLogs: '/portfoliolog?type=errors',
+                  recent: '/portfoliolog?lines=50'
+                }
               });
             } catch (dirError) {
               return res.status(404).json({
                 success: false,
-                message: 'Transaction log directory not found',
-                note: 'No transaction logs have been generated yet'
+                message: 'Portfolio logs directory not found',
+                note: 'No portfolio logs have been generated yet'
               });
             }
           }
@@ -392,36 +416,58 @@ dbAdapter.connect()
           // Add custom headers with file info
           try {
             const stats = require('fs').statSync(logFilePath);
-            res.setHeader('X-Log-Date', requestedDate);
+            res.setHeader('X-Log-Type', logType);
             res.setHeader('X-Log-Size', stats.size.toString());
             res.setHeader('X-Log-Modified', stats.mtime.toISOString());
+            res.setHeader('X-Log-Lines-Requested', lines.toString());
           } catch (statError) {
-            // Ignore stat errors, just serve the file
+            // Ignore stat errors
           }
           
-          // Create readable stream and pipe to response
-          const readStream = require('fs').createReadStream(logFilePath, { encoding: 'utf8' });
-          
-          readStream.on('error', (error) => {
-            console.error(`Error reading transaction log file ${logFileName}:`, error);
-            if (!res.headersSent) {
-              res.status(500).json({
+          // If lines parameter is specified, use tail-like behavior
+          if (lines < 1000) {
+            try {
+              const fileContent = await require('fs').promises.readFile(logFilePath, 'utf8');
+              const allLines = fileContent.split('\n');
+              const recentLines = allLines.slice(-lines).join('\n');
+              
+              res.setHeader('X-Total-Lines', allLines.length.toString());
+              res.setHeader('X-Returned-Lines', Math.min(lines, allLines.length).toString());
+              
+              console.log(`📖 Serving portfolio log: ${logFileName} (${logType}) - Last ${lines} lines`);
+              return res.send(recentLines);
+            } catch (readError) {
+              console.error(`Error reading portfolio log file ${logFileName}:`, readError);
+              return res.status(500).json({
                 success: false,
-                message: 'Error reading transaction log file',
-                error: error.message
+                message: 'Error reading portfolio log file',
+                error: readError.message
               });
             }
-          });
-          
-          readStream.on('open', () => {
-            console.log(`📖 Serving transaction log: ${logFileName} (${requestedDate})`);
-          });
-          
-          // Pipe the file stream to response
-          readStream.pipe(res);
+          } else {
+            // Stream entire file for larger requests
+            const readStream = require('fs').createReadStream(logFilePath, { encoding: 'utf8' });
+            
+            readStream.on('error', (error) => {
+              console.error(`Error reading portfolio log file ${logFileName}:`, error);
+              if (!res.headersSent) {
+                res.status(500).json({
+                  success: false,
+                  message: 'Error reading portfolio log file',
+                  error: error.message
+                });
+              }
+            });
+            
+            readStream.on('open', () => {
+              console.log(`📖 Serving portfolio log: ${logFileName} (${logType}) - Full file`);
+            });
+            
+            readStream.pipe(res);
+          }
         });
       } catch (error) {
-        console.error('Transaction log endpoint error:', error);
+        console.error('Portfolio log endpoint error:', error);
         res.status(500).json({
           success: false,
           message: 'Internal server error',
@@ -432,16 +478,16 @@ dbAdapter.connect()
 
     /**
      * @swagger
-     * /transactionlog/dates:
+     * /portfoliolog/info:
      *   get:
-     *     summary: Get available transaction log dates
+     *     summary: Get portfolio logging system information
      *     description: |
-     *       Returns a list of all available dates for which transaction logs exist.
-     *       Useful for knowing which dates have log data available.
+     *       Returns information about the enhanced portfolio logging system.
+     *       Shows available log files, their sizes, operation counts, and logging statistics.
      *     tags: [System]
      *     responses:
      *       200:
-     *         description: Available transaction log dates
+     *         description: Portfolio logging system information
      *         content:
      *           application/json:
      *             schema:
@@ -450,123 +496,179 @@ dbAdapter.connect()
      *                 success:
      *                   type: boolean
      *                   example: true
-     *                 availableDates:
+     *                 logFiles:
      *                   type: array
      *                   items:
-     *                     type: string
-     *                     format: date
-     *                   example: ["2025-08-18", "2025-08-17", "2025-08-16"]
-     *                   description: Available dates in descending order (most recent first)
-     *                 totalLogFiles:
-     *                   type: integer
-     *                   example: 3
-     *                 oldestLog:
-     *                   type: string
-     *                   format: date
-     *                   example: "2025-08-16"
-     *                 newestLog:
-     *                   type: string
-     *                   format: date
-     *                   example: "2025-08-18"
+     *                     type: object
+     *                     properties:
+     *                       name:
+     *                         type: string
+     *                         example: "portfolio.log"
+     *                       type:
+     *                         type: string
+     *                         example: "all"
+     *                       size:
+     *                         type: integer
+     *                         example: 1628
+     *                       sizeFormatted:
+     *                         type: string
+     *                         example: "1.6KB"
+     *                       created:
+     *                         type: string
+     *                         format: date-time
+     *                       modified:
+     *                         type: string
+     *                         format: date-time
+     *                       lineCount:
+     *                         type: integer
+     *                         example: 45
+     *                 operationCounts:
+     *                   type: object
+     *                   properties:
+     *                     CREATE:
+     *                       type: integer
+     *                       example: 5
+     *                     READ:
+     *                       type: integer
+     *                       example: 15
+     *                     UPDATE:
+     *                       type: integer
+     *                       example: 8
+     *                     DELETE:
+     *                       type: integer
+     *                       example: 2
+     *                     ERROR:
+     *                       type: integer
+     *                       example: 1
      *                 logDirectory:
      *                   type: string
-     *                   example: "mainlog/"
-     *       404:
-     *         description: No transaction logs found
-     *         content:
-     *           application/json:
-     *             schema:
-     *               type: object
-     *               properties:
-     *                 success:
+     *                   example: "logs/"
+     *                 loggingActive:
      *                   type: boolean
-     *                   example: false
-     *                 message:
-     *                   type: string
-     *                   example: "No transaction logs found"
+     *                   example: true
+     *       404:
+     *         description: No portfolio logs found
      */
-    app.get('/transactionlog/dates', async (req, res) => {
+    app.get('/portfoliolog/info', async (req, res) => {
       try {
-        const mainlogDir = path.join(__dirname, 'mainlog');
+        const logsDir = path.join(__dirname, 'logs');
         
-        // Ensure mainlog directory exists
+        // Ensure logs directory exists
         try {
-          await require('fs').promises.mkdir(mainlogDir, { recursive: true });
-          console.log(`✅ Ensured mainlog directory exists at: ${mainlogDir}`);
+          await require('fs').promises.mkdir(logsDir, { recursive: true });
+          console.log(`✅ Ensured logs directory exists at: ${logsDir}`);
         } catch (mkdirError) {
-          // Ignore if directory already exists
           if (mkdirError.code !== 'EEXIST') {
-            console.error('Error creating mainlog directory:', mkdirError);
+            console.error('Error creating logs directory:', mkdirError);
           }
         }
         
-        // Get all files in the directory
-        const files = await require('fs').promises.readdir(mainlogDir);
-        const logFiles = files.filter(file => 
-          file.startsWith('portfolio-transactions-') && file.endsWith('.log')
+        // Get all portfolio log files
+        const files = await require('fs').promises.readdir(logsDir);
+        const portfolioLogFiles = files.filter(file => 
+          file === 'portfolio.log' || file === 'portfolio-error.log'
         );
         
-        if (logFiles.length === 0) {
+        if (portfolioLogFiles.length === 0) {
           return res.status(404).json({
             success: false,
-            message: 'No transaction log files found',
-            directory: 'mainlog/',
-            note: 'Transaction logs will be created when transactions occur',
-            createSampleLogs: '/api/admin/logs/create-sample (admin only)',
-            today: new Date().toISOString().split('T')[0]
+            message: 'No portfolio log files found',
+            directory: 'logs/',
+            note: 'Portfolio logs will be created when portfolio operations occur',
+            loggingActive: true,
+            systemReady: true,
+            nextSteps: [
+              'Create a portfolio to generate logs',
+              'Update an existing portfolio',
+              'Check /portfoliolog endpoint after operations'
+            ]
           });
         }
         
-        // Extract dates and sort
-        const availableDates = logFiles.map(file => {
-          const match = file.match(/portfolio-transactions-(\d{4}-\d{2}-\d{2})\.log/);
-          return match ? match[1] : null;
-        }).filter(Boolean).sort().reverse(); // Most recent first
+        // Get detailed info for each log file
+        const logFilesInfo = [];
+        const operationCounts = {
+          CREATE: 0,
+          READ: 0,
+          READ_ALL: 0,
+          UPDATE: 0,
+          DELETE: 0,
+          ERROR: 0
+        };
         
-        // Get file stats for additional info
-        const fileStats = [];
-        for (const file of logFiles) {
+        for (const file of portfolioLogFiles) {
           try {
-            const filePath = path.join(mainlogDir, file);
+            const filePath = path.join(logsDir, file);
             const stats = await require('fs').promises.stat(filePath);
-            const dateMatch = file.match(/portfolio-transactions-(\d{4}-\d{2}-\d{2})\.log/);
-            if (dateMatch) {
-              fileStats.push({
-                date: dateMatch[1],
-                size: stats.size,
-                sizeFormatted: `${Math.round(stats.size / 1024)}KB`,
-                created: stats.birthtime,
-                modified: stats.mtime
-              });
-            }
-          } catch (statError) {
-            // Skip files we can't stat
+            const content = await require('fs').promises.readFile(filePath, 'utf8');
+            const lines = content.split('\n').filter(line => line.trim());
+            
+            // Count operations in this file
+            const fileOperationCounts = { ...operationCounts };
+            lines.forEach(line => {
+              const operationMatch = line.match(/\[([A-Z_]+)\]/);
+              if (operationMatch && fileOperationCounts.hasOwnProperty(operationMatch[1])) {
+                fileOperationCounts[operationMatch[1]]++;
+              }
+            });
+            
+            // Update total counts
+            Object.keys(operationCounts).forEach(op => {
+              operationCounts[op] += fileOperationCounts[op];
+            });
+            
+            logFilesInfo.push({
+              name: file,
+              type: file === 'portfolio-error.log' ? 'errors' : 'all',
+              size: stats.size,
+              sizeFormatted: stats.size < 1024 ? `${stats.size}B` : 
+                           stats.size < 1024 * 1024 ? `${Math.round(stats.size / 1024)}KB` :
+                           `${Math.round(stats.size / (1024 * 1024))}MB`,
+              created: stats.birthtime.toISOString(),
+              modified: stats.mtime.toISOString(),
+              lineCount: lines.length,
+              operationCounts: fileOperationCounts,
+              endpoint: `/portfoliolog?type=${file === 'portfolio-error.log' ? 'errors' : 'all'}`
+            });
+          } catch (fileError) {
+            console.error(`Error processing log file ${file}:`, fileError);
           }
         }
         
-        // Sort file stats by date (newest first)
-        fileStats.sort((a, b) => new Date(b.date) - new Date(a.date));
+        // Sort by modified date (newest first)
+        logFilesInfo.sort((a, b) => new Date(b.modified) - new Date(a.modified));
+        
+        // Calculate total operations
+        const totalOperations = Object.values(operationCounts).reduce((sum, count) => sum + count, 0);
         
         res.json({
           success: true,
-          availableDates,
-          totalLogFiles: availableDates.length,
-          oldestLog: availableDates[availableDates.length - 1],
-          newestLog: availableDates[0],
-          logDirectory: 'mainlog/',
-          fileDetails: fileStats,
+          logFiles: logFilesInfo,
+          operationCounts,
+          totalOperations,
+          logDirectory: 'logs/',
+          loggingActive: true,
+          systemInfo: {
+            enhancedLogging: true,
+            logRotation: '10MB max per file',
+            retentionPolicy: '10 files for portfolio.log, 5 files for errors',
+            logFormat: 'Winston with structured JSON details',
+            operationTypes: ['CREATE', 'READ', 'READ_ALL', 'UPDATE', 'DELETE', 'ERROR']
+          },
           endpoints: {
-            viewLog: '/transactionlog?date=YYYY-MM-DD',
-            listDates: '/transactionlog/dates',
-            today: `/transactionlog?date=${new Date().toISOString().split('T')[0]}`
-          }
+            viewAllLogs: '/portfoliolog?type=all',
+            viewErrorLogs: '/portfoliolog?type=errors',
+            recentLogs: '/portfoliolog?lines=50',
+            logInfo: '/portfoliolog/info'
+          },
+          lastActivity: logFilesInfo.length > 0 ? logFilesInfo[0].modified : null
         });
         
       } catch (error) {
-        console.error('Error fetching transaction log dates:', error);
+        console.error('Error fetching portfolio log info:', error);
         res.status(500).json({
           success: false,
-          message: 'Failed to fetch transaction log dates',
+          message: 'Failed to fetch portfolio log information',
           error: error.message
         });
       }

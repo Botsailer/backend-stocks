@@ -18,8 +18,69 @@ const { default: mongoose } = require('mongoose');
 const Portfolio = require('../models/modelPortFolio');
 const PriceLog = require('../models/PriceLog');
 const portfolioService = require('../services/portfolioservice');
-const { PortfolioCalculationValidator, calcLogger } = require('../utils/portfolioCalculationValidator');
+const { PortfolioCalculationValidator } = require('../utils/portfolioCalculationValidator');
 const transactionLogger = require('../utils/transactionLogger');
+const winston = require('winston');
+const path = require('path');
+const fs = require('fs');
+
+// Ensure logs directory exists
+const logsDir = path.resolve(__dirname, '../logs');
+if (!fs.existsSync(logsDir)) {
+  fs.mkdirSync(logsDir, { recursive: true });
+  console.log(`Created logs directory at: ${logsDir}`);
+}
+
+// Enhanced Portfolio Operations Logger
+const portfolioLogger = winston.createLogger({
+  level: 'debug',
+  format: winston.format.combine(
+    winston.format.timestamp({ format: 'YYYY-MM-DD HH:mm:ss.SSS' }),
+    winston.format.errors({ stack: true }),
+    winston.format.splat(),
+    winston.format.printf(({ timestamp, level, message, operation, portfolioId, userId, details, ...rest }) => {
+      let logMessage = `[${timestamp}] [${level.toUpperCase()}]`;
+      
+      if (operation) logMessage += ` [${operation}]`;
+      if (portfolioId) logMessage += ` [Portfolio: ${portfolioId}]`;
+      if (userId) logMessage += ` [User: ${userId}]`;
+      
+      logMessage += ` ${message}`;
+      
+      if (details) {
+        logMessage += `\nDetails: ${JSON.stringify(details, null, 2)}`;
+      }
+      
+      if (Object.keys(rest).length > 0) {
+        logMessage += `\nAdditional Data: ${JSON.stringify(rest, null, 2)}`;
+      }
+      
+      return logMessage + '\n' + '='.repeat(120);
+    })
+  ),
+  transports: [
+    new winston.transports.Console({
+      level: 'info',
+      format: winston.format.combine(
+        winston.format.colorize(),
+        winston.format.simple()
+      )
+    }),
+    new winston.transports.File({ 
+      filename: path.join(logsDir, 'portfolio-operations.log'),
+      maxsize: 20 * 1024 * 1024, // 20MB
+      maxFiles: 15,
+      tailable: true
+    }),
+    new winston.transports.File({ 
+      filename: path.join(logsDir, 'portfolio-operations-error.log'),
+      level: 'error',
+      maxsize: 10 * 1024 * 1024, // 10MB
+      maxFiles: 10,
+      tailable: true
+    })
+  ]
+});
 
 const asyncHandler = fn => (req, res, next) => {
   Promise.resolve(fn(req, res, next)).catch(next);
@@ -30,6 +91,23 @@ const asyncHandler = fn => (req, res, next) => {
  */
 exports.createPortfolio = asyncHandler(async (req, res) => {
   const requestData = req.body;
+  const userId = req.user?._id || 'Unknown';
+  const userEmail = req.user?.email || 'Unknown';
+  
+  portfolioLogger.info('Portfolio creation started', {
+    operation: 'CREATE',
+    userId,
+    userEmail,
+    details: {
+      requestData: {
+        name: requestData.name,
+        minInvestment: requestData.minInvestment,
+        durationMonths: requestData.durationMonths,
+        subscriptionFeeCount: requestData.subscriptionFee?.length || 0,
+        holdingsCount: requestData.holdings?.length || 0
+      }
+    }
+  });
   
   try {
     // Step 1: Validate required fields
@@ -37,6 +115,11 @@ exports.createPortfolio = asyncHandler(async (req, res) => {
     const missingFields = requiredFields.filter(field => !requestData[field]);
     
     if (missingFields.length > 0) {
+      portfolioLogger.warn('Portfolio creation failed - missing required fields', {
+        operation: 'CREATE',
+        userId,
+        details: { missingFields, providedFields: Object.keys(requestData) }
+      });
       return res.status(400).json({ 
         error: 'Missing required fields',
         missingFields,
@@ -131,59 +214,85 @@ exports.createPortfolio = asyncHandler(async (req, res) => {
     };
 
     // Debug logging before portfolio creation
-    calcLogger.debug('Portfolio creation details', {
-      name: portfolioData.name,
-      minInvestment: portfolioData.minInvestment,
-      cashBalance: portfolioData.cashBalance,
-      totalValue: portfolioData.currentValue,
-      holdingsCount: portfolioData.holdings.length,
-      subscriptionFee: portfolioData.subscriptionFee,
-      category: portfolioData.PortfolioCategory,
-      timeHorizon: portfolioData.timeHorizon,
-      durationMonths: portfolioData.durationMonths
+    portfolioLogger.debug('Portfolio creation details', {
+      operation: 'CREATE',
+      details: {
+        name: portfolioData.name,
+        minInvestment: portfolioData.minInvestment,
+        cashBalance: portfolioData.cashBalance,
+        totalValue: portfolioData.currentValue,
+        holdingsCount: portfolioData.holdings.length,
+        subscriptionFee: portfolioData.subscriptionFee,
+        category: portfolioData.PortfolioCategory,
+        timeHorizon: portfolioData.timeHorizon,
+        durationMonths: portfolioData.durationMonths
+      }
     });
 
     // Log detailed holdings information
     if (portfolioData.holdings && portfolioData.holdings.length > 0) {
-      calcLogger.debug('Initial portfolio holdings', {
-        holdings: portfolioData.holdings.map(holding => ({
-          symbol: holding.symbol,
-          sector: holding.sector,
-          stockCapType: holding.stockCapType || 'Unknown',
-          buyPrice: holding.buyPrice,
-          quantity: holding.quantity,
-          totalValue: holding.buyPrice * holding.quantity,
-          minimumInvestmentValueStock: holding.minimumInvestmentValueStock,
-          weight: holding.weight || 0
-        }))
+      portfolioLogger.debug('Initial portfolio holdings', {
+        operation: 'CREATE',
+        details: {
+          holdings: portfolioData.holdings.map(holding => ({
+            symbol: holding.symbol,
+            sector: holding.sector,
+            stockCapType: holding.stockCapType || 'Unknown',
+            buyPrice: holding.buyPrice,
+            quantity: holding.quantity,
+            totalValue: holding.buyPrice * holding.quantity,
+            minimumInvestmentValueStock: holding.minimumInvestmentValueStock,
+            weight: holding.weight || 0
+          }))
+        }
       });
     }
 
     const portfolio = new Portfolio(portfolioData);
     const savedPortfolio = await portfolio.save();
 
-    calcLogger.info('Portfolio created successfully', {
+    portfolioLogger.info('Portfolio created successfully', {
+      operation: 'CREATE',
       portfolioId: savedPortfolio._id,
-      name: savedPortfolio.name,
-      totalInvestment: portfolioSummary.totalActualInvestment,
-      holdingsCount: savedPortfolio.holdings.length,
-      createdAt: new Date().toISOString()
+      userId,
+      userEmail,
+      details: {
+        portfolioName: savedPortfolio.name,
+        minInvestment: savedPortfolio.minInvestment,
+        durationMonths: savedPortfolio.durationMonths,
+        totalInvestment: portfolioSummary.totalActualInvestment,
+        cashBalance: savedPortfolio.cashBalance,
+        holdingsCount: savedPortfolio.holdings.length,
+        subscriptionFeeTypes: savedPortfolio.subscriptionFee.map(fee => fee.type),
+        createdAt: savedPortfolio.createdAt,
+        portfolioCategory: savedPortfolio.PortfolioCategory
+      }
     });
 
     res.status(201).json(savedPortfolio);
     
   } catch (error) {
-    // Log error with transaction context
-    await transactionLogger.logError(error, `Portfolio Update - ${req.body.stockAction || 'Unknown Action'}`);
-    
-    calcLogger.error('Unhandled error in portfolio update', { 
-      error: error.message, 
-      portfolioId: req.params.id,
-      stackTrace: error.stack 
+    // Enhanced error logging
+    portfolioLogger.error('Portfolio creation failed', {
+      operation: 'CREATE',
+      userId,
+      userEmail,
+      details: {
+        errorMessage: error.message,
+        errorStack: error.stack,
+        requestData: {
+          name: requestData.name,
+          minInvestment: requestData.minInvestment,
+          holdingsCount: requestData.holdings?.length || 0
+        }
+      }
     });
     
+    // Log error with transaction context
+    await transactionLogger.logError(error, `Portfolio Creation`);
+    
     res.status(500).json({
-      error: 'Portfolio update failed',
+      error: 'Portfolio creation failed',
       message: error.message
     });
   }
@@ -193,7 +302,33 @@ exports.createPortfolio = asyncHandler(async (req, res) => {
  * Get all portfolios
  */
 exports.getAllPortfolios = asyncHandler(async (req, res) => { 
+  const userId = req.user?.id;
+  const userEmail = req.user?.email;
+  const startTime = Date.now();
+  
+  portfolioLogger.info('Fetching all portfolios', {
+    operation: 'READ_ALL',
+    userId,
+    userEmail,
+    details: {
+      timestamp: new Date().toISOString()
+    }
+  });
+  
   const portfolios = await Portfolio.find().sort('name');
+  const endTime = Date.now();
+  
+  portfolioLogger.info('All portfolios fetched successfully', {
+    operation: 'READ_ALL',
+    userId,
+    userEmail,
+    details: {
+      portfolioCount: portfolios.length,
+      fetchTimeMs: endTime - startTime,
+      timestamp: new Date().toISOString()
+    }
+  });
+  
   res.status(200).json(portfolios);
 });
 
@@ -201,10 +336,53 @@ exports.getAllPortfolios = asyncHandler(async (req, res) => {
  * Get portfolio by ID
  */
 exports.getPortfolioById = asyncHandler(async (req, res) => {
-  const portfolio = await Portfolio.findById(req.params.id);
+  const portfolioId = req.params.id;
+  const userId = req.user?.id;
+  const userEmail = req.user?.email;
+  const startTime = Date.now();
+  
+  portfolioLogger.info('Fetching portfolio by ID', {
+    operation: 'READ',
+    portfolioId,
+    userId,
+    userEmail,
+    details: {
+      timestamp: new Date().toISOString()
+    }
+  });
+  
+  const portfolio = await Portfolio.findById(portfolioId);
+  const endTime = Date.now();
+  
   if (!portfolio) {
+    portfolioLogger.warn('Portfolio not found', {
+      operation: 'READ',
+      portfolioId,
+      userId,
+      userEmail,
+      details: {
+        error: 'Portfolio not found',
+        fetchTimeMs: endTime - startTime,
+        timestamp: new Date().toISOString()
+      }
+    });
     return res.status(404).json({ error: 'Portfolio not found' });
   }
+  
+  portfolioLogger.info('Portfolio fetched successfully', {
+    operation: 'READ',
+    portfolioId,
+    userId,
+    userEmail,
+    details: {
+      portfolioName: portfolio.name,
+      holdingsCount: portfolio.holdings?.length || 0,
+      cashBalance: portfolio.cashBalance,
+      fetchTimeMs: endTime - startTime,
+      timestamp: new Date().toISOString()
+    }
+  });
+  
   res.status(200).json(portfolio);
 });
 
@@ -252,7 +430,15 @@ exports.getPortfolioPriceHistory = asyncHandler(async (req, res) => {
       ...historyData
     });
   } catch (error) {
-    calcLogger.error('Portfolio price history error', { error: error.message, portfolioId: id });
+    portfolioLogger.error('Portfolio price history error', { 
+      operation: 'READ_HISTORY',
+      portfolioId: id,
+      details: {
+        error: error.message,
+        period,
+        tz
+      }
+    });
     res.status(500).json({ 
       status: 'error',
       error: 'Failed to retrieve price history',
@@ -263,11 +449,55 @@ exports.getPortfolioPriceHistory = asyncHandler(async (req, res) => {
 
 // filepath: controllers/portfolioController.js
 exports.updatePortfolio = asyncHandler(async (req, res) => {
-  const portfolio = await Portfolio.findById(req.params.id);
+  const portfolioId = req.params.id;
+  const userId = req.user?._id || 'Unknown';
+  const userEmail = req.user?.email || 'Unknown';
+  
+  // Log the start of update operation
+  portfolioLogger.info('Portfolio update started', {
+    operation: 'UPDATE',
+    portfolioId,
+    userId,
+    userEmail,
+    details: {
+      requestFields: Object.keys(req.body),
+      stockAction: req.body.stockAction || 'update',
+      hasHoldings: !!req.body.holdings,
+      holdingsCount: req.body.holdings?.length || 0,
+      updateType: req.body.stockAction || 'field-update'
+    }
+  });
+
+  const portfolio = await Portfolio.findById(portfolioId);
   
   if (!portfolio) {
-    return res.status(404).json({ error: 'Portfolio not found' });
+    portfolioLogger.warn('Portfolio update failed - portfolio not found', {
+      operation: 'UPDATE',
+      portfolioId,
+      userId,
+      userEmail
+    });
+    return res.status(404).json({ 
+      status: "error",
+      message: "Portfolio not found" 
+    });
   }
+
+  // Log portfolio state before update
+  const portfolioBefore = {
+    name: portfolio.name,
+    cashBalance: portfolio.cashBalance,
+    holdingsCount: portfolio.holdings.length,
+    totalValue: portfolio.totalValue,
+    minInvestment: portfolio.minInvestment
+  };
+
+  portfolioLogger.debug('Portfolio state before update', {
+    operation: 'UPDATE',
+    portfolioId,
+    userId,
+    details: { portfolioBefore }
+  });
 
   // Prevent changing minInvestment after creation
   if (req.body.minInvestment && req.body.minInvestment !== portfolio.minInvestment) {
@@ -353,13 +583,19 @@ exports.updatePortfolio = asyncHandler(async (req, res) => {
         const oldCashBalance = portfolio.cashBalance || 0;
         portfolio.cashBalance = Math.max(0, oldCashBalance - totalCost);
         
-        calcLogger.info('Cash balance deducted for ADD action', {
-          symbol: newHolding.symbol,
-          buyPrice,
-          quantity,
-          totalCost,
-          oldCashBalance,
-          newCashBalance: portfolio.cashBalance
+        portfolioLogger.info('Cash balance deducted for ADD action', {
+          operation: 'UPDATE-ADD',
+          portfolioId,
+          userId,
+          details: {
+            symbol: newHolding.symbol,
+            buyPrice,
+            quantity,
+            totalCost,
+            oldCashBalance,
+            newCashBalance: portfolio.cashBalance,
+            action: 'stock-add'
+          }
         });
 
         updatedHoldings.push(newHolding);
@@ -442,13 +678,21 @@ exports.updatePortfolio = asyncHandler(async (req, res) => {
           const oldCashBalance = portfolio.cashBalance || 0;
           portfolio.cashBalance = Math.max(0, oldCashBalance - transactionData.netAmount);
           
-          calcLogger.info('Cash balance deducted for ADDON-BUY', {
-            symbol: buyRequest.symbol,
-            buyPrice,
-            quantity,
-            netAmount: transactionData.netAmount,
-            oldCashBalance,
-            newCashBalance: portfolio.cashBalance
+          portfolioLogger.info('Cash balance deducted for ADDON-BUY', {
+            operation: 'UPDATE-ADDON-BUY',
+            portfolioId,
+            userId,
+            details: {
+              symbol: buyRequest.symbol,
+              buyPrice,
+              quantity,
+              netAmount: transactionData.netAmount,
+              oldCashBalance,
+              newCashBalance: portfolio.cashBalance,
+              action: 'addon-buy',
+              averagedBuyPrice: existingHolding.buyPrice,
+              totalQuantity: existingHolding.quantity
+            }
           });
           
           // Log the transaction
@@ -514,13 +758,20 @@ exports.updatePortfolio = asyncHandler(async (req, res) => {
           const oldCashBalance = portfolio.cashBalance || 0;
           portfolio.cashBalance = Math.max(0, oldCashBalance - transactionData.netAmount);
           
-          calcLogger.info('Cash balance deducted for FRESH-BUY', {
-            symbol: buyRequest.symbol,
-            buyPrice,
-            quantity,
-            netAmount: transactionData.netAmount,
-            oldCashBalance,
-            newCashBalance: portfolio.cashBalance
+          portfolioLogger.info('Cash balance deducted for FRESH-BUY', {
+            operation: 'UPDATE-FRESH-BUY',
+            portfolioId,
+            userId,
+            details: {
+              symbol: buyRequest.symbol,
+              buyPrice,
+              quantity,
+              netAmount: transactionData.netAmount,
+              oldCashBalance,
+              newCashBalance: portfolio.cashBalance,
+              action: 'fresh-buy',
+              newHoldingCreated: true
+            }
           });
           
           // Log the transaction
@@ -648,11 +899,17 @@ exports.updatePortfolio = asyncHandler(async (req, res) => {
             saleType: saleType
           });
 
-          // Sale processed successfully - logged via calcLogger
+          // Sale processed successfully - logged via portfolioLogger
         } catch (saleError) {
-          calcLogger.error('Stock sale processing failed', { 
-            symbol: saleRequest.symbol, 
-            error: saleError.message 
+          portfolioLogger.error('Stock sale processing failed', { 
+            operation: 'UPDATE',
+            portfolioId: portfolio._id,
+            details: {
+              symbol: saleRequest.symbol, 
+              error: saleError.message,
+              quantityToSell,
+              saleType
+            }
           });
           return res.status(400).json({ 
             error: `Failed to process sale for ${saleRequest.symbol}: ${saleError.message}` 
@@ -759,11 +1016,14 @@ exports.updatePortfolio = asyncHandler(async (req, res) => {
         // Ensure cash balance is valid and not negative
         portfolio.cashBalance = Math.max(0, parseFloat(calculatedCashBalance.toFixed(2)));
         
-        calcLogger.info('Portfolio initial cash balance calculated', {
+        portfolioLogger.info('Portfolio initial cash balance calculated', {
+          operation: 'UPDATE',
           portfolioId: portfolio._id,
-          minInvestment,
-          totalHoldingsCostAtBuy,
-          initialCashBalance: portfolio.cashBalance
+          details: {
+            minInvestment,
+            totalHoldingsCostAtBuy,
+            initialCashBalance: portfolio.cashBalance
+          }
         });
       }
       // For existing portfolios, PRESERVE the cash balance (acts as a wallet)
@@ -828,20 +1088,50 @@ exports.updatePortfolio = asyncHandler(async (req, res) => {
   // Log warning if frontend tries to send calculated fields
   ignoredFields.forEach(field => {
     if (req.body[field] !== undefined) {
-      calcLogger.debug('Ignoring calculated field from frontend', { field });
+      portfolioLogger.debug('Ignoring calculated field from frontend', { 
+        operation: 'UPDATE',
+        portfolioId: portfolio._id,
+        details: { field }
+      });
     }
   });
 
   // Save portfolio (this will trigger pre-save hooks to recalculate weights and values)
+  const saveStartTime = Date.now();
   await portfolio.save();
+  const saveEndTime = Date.now();
   
   // Log portfolio snapshot after transaction (only if holdings were modified)
   if (holdingsModified && stockAction && (stockAction.includes('buy') || stockAction.includes('sell'))) {
     await transactionLogger.logPortfolioSnapshot(portfolio, `After ${stockAction} transaction`);
   }
   
-  // Return updated portfolio with calculated values
+  // Get portfolio state after update
   const populatedPortfolio = await Portfolio.findById(portfolio._id);
+  const portfolioAfter = {
+    name: populatedPortfolio.name,
+    cashBalance: populatedPortfolio.cashBalance,
+    holdingsCount: populatedPortfolio.holdings.length,
+    totalValue: populatedPortfolio.totalValue,
+    holdingsValue: populatedPortfolio.holdingsValue
+  };
+
+  // Log successful update
+  portfolioLogger.info('Portfolio update completed successfully', {
+    operation: 'UPDATE',
+    portfolioId,
+    userId,
+    userEmail,
+    details: {
+      stockAction,
+      holdingsModified,
+      saveTimeMs: saveEndTime - saveStartTime,
+      portfolioBefore,
+      portfolioAfter,
+      fieldsUpdated: Object.keys(req.body).filter(key => key !== 'holdings' && key !== 'stockAction'),
+      processingTimeMs: Date.now() - saveStartTime
+    }
+  });
   
   res.status(200).json({
     status: "success",
@@ -858,15 +1148,67 @@ exports.updatePortfolio = asyncHandler(async (req, res) => {
 
 
 exports.deletePortfolio = asyncHandler(async (req, res) => {
-  const portfolio = await Portfolio.findByIdAndDelete(req.params.id);
-
+  const portfolioId = req.params.id;
+  const userId = req.user?.id;
+  const userEmail = req.user?.email;
+  
+  // Get portfolio before deletion for logging
+  const portfolio = await Portfolio.findById(portfolioId);
+  
   if (!portfolio) {
+    portfolioLogger.warn('Portfolio deletion attempted for non-existent portfolio', {
+      operation: 'DELETE',
+      portfolioId,
+      userId,
+      userEmail,
+      details: {
+        error: 'Portfolio not found',
+        timestamp: new Date().toISOString()
+      }
+    });
     return res.status(404).json({ error: 'Portfolio not found' });
   }
+  
+  // Log portfolio state before deletion
+  const portfolioBefore = {
+    id: portfolio._id,
+    name: portfolio.name,
+    userId: portfolio.userId,
+    cashBalance: portfolio.cashBalance,
+    holdingsCount: portfolio.holdings.length,
+    totalValue: portfolio.totalValue,
+    createdAt: portfolio.createdAt,
+    updatedAt: portfolio.updatedAt
+  };
+  
+  const deleteStartTime = Date.now();
+  
+  // Delete portfolio
+  await Portfolio.findByIdAndDelete(portfolioId);
+  
+  // Delete related price logs
+  const priceLogDeleteResult = await PriceLog.deleteMany({ portfolio: portfolio._id });
+  
+  const deleteEndTime = Date.now();
 
-  await PriceLog.deleteMany({ portfolio: portfolio._id });
+  // Log successful deletion
+  portfolioLogger.info('Portfolio deleted successfully', {
+    operation: 'DELETE',
+    portfolioId,
+    userId,
+    userEmail,
+    details: {
+      portfolioBefore,
+      deletedPriceLogsCount: priceLogDeleteResult.deletedCount,
+      deleteTimeMs: deleteEndTime - deleteStartTime,
+      timestamp: new Date().toISOString()
+    }
+  });
 
-  res.status(200).json({ message: 'Portfolio and related price logs deleted successfully' });
+  res.status(200).json({ 
+    message: 'Portfolio and related price logs deleted successfully',
+    deletedPriceLogs: priceLogDeleteResult.deletedCount
+  });
 });
 
 // CRUD operations for YouTube links
@@ -1135,7 +1477,16 @@ exports.updateAllPortfoliosWithMarketPrices = asyncHandler(async (req, res) => {
 });
 
 exports.errorHandler = (err, req, res, next) => {
-  calcLogger.error('Unhandled portfolio controller error', { error: err.message, stack: err.stack });
+  portfolioLogger.error('Unhandled portfolio controller error', { 
+    operation: 'ERROR',
+    details: {
+      error: err.message, 
+      stack: err.stack,
+      status: err.status || 500,
+      url: req.url,
+      method: req.method
+    }
+  });
   const status = err.status || 500;
   res.status(status).json({ 
     error: err.message || 'Server Error',
