@@ -144,6 +144,62 @@ router.get('/:id', adminCtl.getSubscription);
 
 /**
  * @swagger
+ * /api/admin/subscriptions/{id}/invoice:
+ *   get:
+ *     summary: Generate invoice for a subscription
+ *     description: Generate and return invoice data for a specific subscription
+ *     tags: [AdminSubscriptions]
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema:
+ *           type: string
+ *         description: Subscription ID
+ *     responses:
+ *       200:
+ *         description: Invoice generated successfully
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success:
+ *                   type: boolean
+ *                   example: true
+ *                 invoice:
+ *                   type: object
+ *                   properties:
+ *                     invoiceNumber:
+ *                       type: string
+ *                       example: "INV-12345678-987654"
+ *                     customerName:
+ *                       type: string
+ *                       example: "John Doe"
+ *                     customerEmail:
+ *                       type: string
+ *                       example: "john@example.com"
+ *                     productName:
+ *                       type: string
+ *                       example: "Premium Portfolio"
+ *                     paymentType:
+ *                       type: string
+ *                       example: "Emandate"
+ *                     amount:
+ *                       type: number
+ *                       example: 1200
+ *                     paymentStatus:
+ *                       type: string
+ *                       example: "active"
+ *       404:
+ *         description: Subscription not found
+ *       500:
+ *         description: Server error
+ */
+router.get('/:id/invoice', adminCtl.generateInvoice);
+
+/**
+ * @swagger
  * /api/admin/subscriptions:
  *   post:
  *     summary: Create a new subscription record
