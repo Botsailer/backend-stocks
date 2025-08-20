@@ -614,20 +614,86 @@ exports.updatePortfolio = asyncHandler(async (req, res) => {
       };
       
       for (const buyRequest of req.body.holdings) {
+        // PATCH: Reuse existing holding values for missing fields
+        let existingHolding = portfolio.holdings.find(h => h.symbol === buyRequest.symbol);
+        let sector = buyRequest.sector || (existingHolding ? existingHolding.sector : undefined);
+        let buyPrice = buyRequest.buyPrice || (existingHolding ? existingHolding.buyPrice : undefined);
+        let quantity = buyRequest.quantity !== undefined ? buyRequest.quantity : (existingHolding ? existingHolding.quantity : 0);
         // Validate required fields for buy action
-        if (!buyRequest.symbol || !buyRequest.sector || !buyRequest.buyPrice) {
+        const missingFields = [];
+        if (!buyRequest.symbol) missingFields.push('symbol');
+        if (!sector) missingFields.push('sector');
+        if (!buyPrice) missingFields.push('buyPrice');
+        if (missingFields.length > 0) {
+          portfolioLogger.error('Buy request validation failed - missing required fields (after patch reuse)', {
+            operation: 'UPDATE',
+            portfolioId: portfolio._id,
+            details: {
+              stockAction,
+              receivedFields: Object.keys(buyRequest),
+              missingFields,
+              buyRequest,
+              requiredFields: ['symbol', 'sector', 'buyPrice'],
+              optionalFields: ['quantity', 'stockCapType', 'minimumInvestmentValueStock'],
+              reusedFromExisting: existingHolding ? existingHolding : null
+            }
+          });
           return res.status(400).json({ 
-            error: `Buy request missing required fields (symbol, sector, buyPrice)` 
+            error: `Buy request missing required fields: ${missingFields.join(', ')}`,
+            receivedFields: Object.keys(buyRequest),
+            requiredFields: ['symbol', 'sector', 'buyPrice'],
+            optionalFields: ['quantity', 'stockCapType', 'minimumInvestmentValueStock'],
+            reusedFromExisting: existingHolding ? existingHolding : null,
+            example: {
+              symbol: "RELIANCE",
+              sector: "Energy",
+              buyPrice: 2500.00,
+              quantity: 10
+            }
+          });
+        }
+        // Use the resolved values for further processing
+        buyRequest.sector = sector;
+        buyRequest.buyPrice = buyPrice;
+        buyRequest.quantity = quantity;
+
+        if (isNaN(buyPrice) || buyPrice <= 0) {
+          portfolioLogger.error('Buy request validation failed - invalid buy price', {
+            operation: 'UPDATE',
+            portfolioId: portfolio._id,
+            details: {
+              stockAction,
+              symbol: buyRequest.symbol,
+              receivedBuyPrice: buyRequest.buyPrice,
+              parsedBuyPrice: buyPrice,
+              quantity
+            }
+          });
+          
+          return res.status(400).json({ 
+            error: `Buy price must be a valid positive number for ${buyRequest.symbol}`,
+            receivedBuyPrice: buyRequest.buyPrice,
+            validExample: "2500.00"
           });
         }
 
-        // For addon-buy, quantity can be 0 (meaning add amount only)
-        const quantity = parseFloat(buyRequest.quantity) || 0;
-        const buyPrice = parseFloat(buyRequest.buyPrice);
-        
-        if (isNaN(buyPrice) || buyPrice <= 0) {
+        // Validate quantity if provided
+        if (buyRequest.quantity !== undefined && (isNaN(quantity) || quantity < 0)) {
+          portfolioLogger.error('Buy request validation failed - invalid quantity', {
+            operation: 'UPDATE',
+            portfolioId: portfolio._id,
+            details: {
+              stockAction,
+              symbol: buyRequest.symbol,
+              receivedQuantity: buyRequest.quantity,
+              parsedQuantity: quantity
+            }
+          });
+          
           return res.status(400).json({ 
-            error: `Buy price must be a valid positive number for ${buyRequest.symbol}` 
+            error: `Quantity must be a valid non-negative number for ${buyRequest.symbol}`,
+            receivedQuantity: buyRequest.quantity,
+            note: "Quantity can be 0 for amount-only purchases"
           });
         }
 
@@ -815,6 +881,45 @@ exports.updatePortfolio = asyncHandler(async (req, res) => {
 
     } else if (stockAction.includes('delete') || stockAction.includes('remove')) {
       // DELETE: Remove holdings by symbol
+      // Validate that holdings array contains symbols
+      if (!req.body.holdings || !Array.isArray(req.body.holdings) || req.body.holdings.length === 0) {
+        portfolioLogger.error('Delete request validation failed - no holdings provided', {
+          operation: 'UPDATE',
+          portfolioId: portfolio._id,
+          details: {
+            stockAction,
+            receivedHoldings: req.body.holdings,
+            requiredFormat: 'Array of objects with symbol field'
+          }
+        });
+        
+        return res.status(400).json({ 
+          error: `Delete request requires holdings array with symbols`,
+          requiredFormat: [{ symbol: "RELIANCE" }, { symbol: "TCS" }],
+          received: req.body.holdings
+        });
+      }
+      
+      // Check that all holdings have symbols
+      const invalidHoldings = req.body.holdings.filter(h => !h.symbol);
+      if (invalidHoldings.length > 0) {
+        portfolioLogger.error('Delete request validation failed - holdings missing symbols', {
+          operation: 'UPDATE',
+          portfolioId: portfolio._id,
+          details: {
+            stockAction,
+            invalidHoldings,
+            totalHoldings: req.body.holdings.length
+          }
+        });
+        
+        return res.status(400).json({ 
+          error: `Some holdings are missing symbol field`,
+          invalidHoldings: invalidHoldings,
+          requiredFormat: { symbol: "STOCK_SYMBOL" }
+        });
+      }
+      
       const symbolsToDelete = req.body.holdings.map(h => h.symbol.toUpperCase());
       const initialCount = updatedHoldings.length;
       
@@ -824,8 +929,21 @@ exports.updatePortfolio = asyncHandler(async (req, res) => {
 
       const deletedCount = initialCount - updatedHoldings.length;
       if (deletedCount === 0) {
+        portfolioLogger.warn('Delete request failed - no holdings found', {
+          operation: 'UPDATE',
+          portfolioId: portfolio._id,
+          details: {
+            stockAction,
+            symbolsToDelete,
+            existingSymbols: portfolio.holdings.map(h => h.symbol),
+            deletedCount: 0
+          }
+        });
+        
         return res.status(400).json({ 
-          error: `No holdings found with symbols: ${symbolsToDelete.join(', ')}` 
+          error: `No holdings found with symbols: ${symbolsToDelete.join(', ')}`,
+          existingSymbols: portfolio.holdings.map(h => h.symbol),
+          requestedSymbols: symbolsToDelete
         });
       }
 
@@ -833,17 +951,57 @@ exports.updatePortfolio = asyncHandler(async (req, res) => {
       // REPLACE: Replace entire holdings array
       for (const holding of req.body.holdings) {
         // Validate required fields
-        if (!holding.symbol || !holding.sector || !holding.buyPrice || 
-            !holding.quantity || !holding.minimumInvestmentValueStock) {
+        const missingFields = [];
+        if (!holding.symbol) missingFields.push('symbol');
+        if (!holding.sector) missingFields.push('sector');
+        if (!holding.buyPrice) missingFields.push('buyPrice');
+        if (!holding.quantity) missingFields.push('quantity');
+        if (!holding.minimumInvestmentValueStock) missingFields.push('minimumInvestmentValueStock');
+        
+        if (missingFields.length > 0) {
+          portfolioLogger.error('Replace request validation failed - missing required fields', {
+            operation: 'UPDATE',
+            portfolioId: portfolio._id,
+            details: {
+              stockAction,
+              symbol: holding.symbol || 'Unknown',
+              missingFields,
+              receivedFields: Object.keys(holding),
+              requiredFields: ['symbol', 'sector', 'buyPrice', 'quantity', 'minimumInvestmentValueStock']
+            }
+          });
+          
           return res.status(400).json({ 
-            error: `Holding missing required fields (symbol, sector, buyPrice, quantity, minimumInvestmentValueStock)` 
+            error: `Holding missing required fields: ${missingFields.join(', ')}`,
+            symbol: holding.symbol || 'Unknown',
+            receivedFields: Object.keys(holding),
+            requiredFields: ['symbol', 'sector', 'buyPrice', 'quantity', 'minimumInvestmentValueStock'],
+            example: {
+              symbol: "RELIANCE",
+              sector: "Energy",
+              buyPrice: 2500.00,
+              quantity: 10,
+              minimumInvestmentValueStock: 25000
+            }
           });
         }
 
         // Validate minimumInvestmentValueStock
         if (holding.minimumInvestmentValueStock < 1) {
+          portfolioLogger.error('Replace request validation failed - invalid minimumInvestmentValueStock', {
+            operation: 'UPDATE',
+            portfolioId: portfolio._id,
+            details: {
+              stockAction,
+              symbol: holding.symbol,
+              minimumInvestmentValueStock: holding.minimumInvestmentValueStock
+            }
+          });
+          
           return res.status(400).json({ 
-            error: `Holding ${holding.symbol}: minimumInvestmentValueStock must be >= 1` 
+            error: `Holding ${holding.symbol}: minimumInvestmentValueStock must be >= 1`,
+            received: holding.minimumInvestmentValueStock,
+            minimum: 1
           });
         }
       }
@@ -866,8 +1024,28 @@ exports.updatePortfolio = asyncHandler(async (req, res) => {
       for (const saleRequest of req.body.holdings) {
         // Validate required fields for sell action
         if (!saleRequest.symbol) {
+          portfolioLogger.error('Sell request validation failed - missing symbol', {
+            operation: 'UPDATE',
+            portfolioId: portfolio._id,
+            details: {
+              stockAction,
+              receivedFields: Object.keys(saleRequest),
+              saleRequest,
+              requiredFields: ['symbol'],
+              optionalFields: ['quantity', 'saleType']
+            }
+          });
+          
           return res.status(400).json({ 
-            error: `Sale request missing required field: symbol` 
+            error: `Sale request missing required field: symbol`,
+            receivedFields: Object.keys(saleRequest),
+            requiredFields: ['symbol'],
+            optionalFields: ['quantity', 'saleType'],
+            example: {
+              symbol: "RELIANCE",
+              quantity: 5,
+              saleType: "partial"
+            }
           });
         }
 
