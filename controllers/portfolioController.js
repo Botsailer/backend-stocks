@@ -304,8 +304,6 @@ exports.updatePortfolio = asyncHandler(async (req, res) => {
     }
   }
 
-  // Get stockAction (case insensitive) - needed for logging and transaction handling
-  // Default to 'update' if not provided (for cases when only basic fields are being updated)
   const stockAction = req.body.stockAction ? req.body.stockAction.toLowerCase() : 'update';
   
   // Track if holdings were actually modified
@@ -345,6 +343,24 @@ exports.updatePortfolio = asyncHandler(async (req, res) => {
             error: `Holding ${newHolding.symbol}: minimumInvestmentValueStock must be >= 1` 
           });
         }
+
+        // Calculate cost and deduct from cash balance
+        const buyPrice = parseFloat(newHolding.buyPrice) || 0;
+        const quantity = parseFloat(newHolding.quantity) || 0;
+        const totalCost = buyPrice * quantity;
+        
+        // Deduct cash balance for added holdings
+        const oldCashBalance = portfolio.cashBalance || 0;
+        portfolio.cashBalance = Math.max(0, oldCashBalance - totalCost);
+        
+        calcLogger.info('Cash balance deducted for ADD action', {
+          symbol: newHolding.symbol,
+          buyPrice,
+          quantity,
+          totalCost,
+          oldCashBalance,
+          newCashBalance: portfolio.cashBalance
+        });
 
         updatedHoldings.push(newHolding);
       }
@@ -422,6 +438,19 @@ exports.updatePortfolio = asyncHandler(async (req, res) => {
           existingHolding.status = buyRequest.status || 'addon-buy';
           existingHolding.lastUpdated = new Date();
           
+          // Update cash balance: deduct the cost of the new purchase
+          const oldCashBalance = portfolio.cashBalance || 0;
+          portfolio.cashBalance = Math.max(0, oldCashBalance - transactionData.netAmount);
+          
+          calcLogger.info('Cash balance deducted for ADDON-BUY', {
+            symbol: buyRequest.symbol,
+            buyPrice,
+            quantity,
+            netAmount: transactionData.netAmount,
+            oldCashBalance,
+            newCashBalance: portfolio.cashBalance
+          });
+          
           // Log the transaction
           await transactionLogger.logBuyTransaction({
             portfolioId: portfolio._id,
@@ -435,16 +464,16 @@ exports.updatePortfolio = asyncHandler(async (req, res) => {
               quantity: existingHolding.quantity,
               buyPrice: existingHolding.buyPrice,
               investmentValueAtBuy: existingHolding.buyPrice * existingHolding.quantity,
-              investmentValueAtMarket: (stockData?.currentPrice || buyPrice) * existingHolding.quantity,
+              investmentValueAtMarket: buyPrice * existingHolding.quantity, // Use buyPrice for initial market value
               weight: 0, // Will be calculated after save
-              unrealizedPnL: ((stockData?.currentPrice || buyPrice) - existingHolding.buyPrice) * existingHolding.quantity,
-              unrealizedPnLPercent: (((stockData?.currentPrice || buyPrice) - existingHolding.buyPrice) / existingHolding.buyPrice) * 100,
+              unrealizedPnL: (buyPrice - existingHolding.buyPrice) * existingHolding.quantity, // Use buyPrice
+              unrealizedPnLPercent: ((buyPrice - existingHolding.buyPrice) / existingHolding.buyPrice) * 100, // Use buyPrice
               status: existingHolding.status
             },
             portfolioBefore,
             portfolioAfter: {
               totalValue: portfolioBefore.totalValue + transactionData.totalInvestment,
-              cashBalance: portfolioBefore.cashBalance - transactionData.netAmount,
+              cashBalance: portfolio.cashBalance, // Use the updated cash balance
               totalInvestment: portfolioBefore.totalInvestment + transactionData.totalInvestment,
               holdingsCount: portfolioBefore.holdingsCount
             },
@@ -481,6 +510,19 @@ exports.updatePortfolio = asyncHandler(async (req, res) => {
           
           updatedHoldings.push(newHolding);
           
+          // Update cash balance: deduct the cost of the new purchase
+          const oldCashBalance = portfolio.cashBalance || 0;
+          portfolio.cashBalance = Math.max(0, oldCashBalance - transactionData.netAmount);
+          
+          calcLogger.info('Cash balance deducted for FRESH-BUY', {
+            symbol: buyRequest.symbol,
+            buyPrice,
+            quantity,
+            netAmount: transactionData.netAmount,
+            oldCashBalance,
+            newCashBalance: portfolio.cashBalance
+          });
+          
           // Log the transaction
           await transactionLogger.logBuyTransaction({
             portfolioId: portfolio._id,
@@ -503,7 +545,7 @@ exports.updatePortfolio = asyncHandler(async (req, res) => {
             portfolioBefore,
             portfolioAfter: {
               totalValue: portfolioBefore.totalValue + transactionData.totalInvestment,
-              cashBalance: portfolioBefore.cashBalance - transactionData.netAmount,
+              cashBalance: portfolio.cashBalance, // Use the updated cash balance
               totalInvestment: portfolioBefore.totalInvestment + transactionData.totalInvestment,
               holdingsCount: portfolioBefore.holdingsCount + 1
             },
@@ -555,6 +597,16 @@ exports.updatePortfolio = asyncHandler(async (req, res) => {
         }
       }
       updatedHoldings = req.body.holdings;
+
+      // For replace action, recalculate cash balance from minInvestment
+      const totalHoldingsCost = updatedHoldings.reduce((sum, holding) => {
+        const buyPrice = parseFloat(holding.buyPrice) || 0;
+        const quantity = parseFloat(holding.quantity) || 0;
+        return sum + (buyPrice * quantity);
+      }, 0);
+      
+      const minInvestment = parseFloat(portfolio.minInvestment) || 0;
+      portfolio.cashBalance = Math.max(0, minInvestment - totalHoldingsCost);
 
     } else if (stockAction.includes('sell')) {
       // SELL: Process stock sales using portfolio service
