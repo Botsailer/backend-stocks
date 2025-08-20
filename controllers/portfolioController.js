@@ -304,14 +304,20 @@ exports.updatePortfolio = asyncHandler(async (req, res) => {
     }
   }
 
+  // Get stockAction (case insensitive) - needed for logging and transaction handling
+  // Default to 'update' if not provided (for cases when only basic fields are being updated)
+  const stockAction = req.body.stockAction ? req.body.stockAction.toLowerCase() : 'update';
+  
+  // Track if holdings were actually modified
+  let holdingsModified = false;
+
   // Handle holdings based on stockAction
   if (req.body.holdings) {
+    holdingsModified = true;
     if (!Array.isArray(req.body.holdings)) {
       return res.status(400).json({ error: 'Holdings must be an array' });
     }
 
-    // Get stockAction (case insensitive)
-    const stockAction = (req.body.stockAction || 'update').toLowerCase();
     let updatedHoldings = [...portfolio.holdings];
 
     if (stockAction.includes('add')) {
@@ -750,7 +756,8 @@ exports.updatePortfolio = asyncHandler(async (req, res) => {
     'name', 'description', 'subscriptionFee', 'expiryDate', 
     'PortfolioCategory', 'downloadLinks', 'youTubeLinks', 'timeHorizon', 
     'rebalancing', 'index', 'details', 'compareWith', 
-    'lastRebalanceDate', 'nextRebalanceDate', 'monthlyContribution'
+    'lastRebalanceDate', 'nextRebalanceDate', 'monthlyContribution',
+    'durationMonths'
   ];
   
   // Explicitly ignore calculated fields that should not come from frontend
@@ -776,8 +783,8 @@ exports.updatePortfolio = asyncHandler(async (req, res) => {
   // Save portfolio (this will trigger pre-save hooks to recalculate weights and values)
   await portfolio.save();
   
-  // Log portfolio snapshot after transaction
-  if (stockAction && (stockAction.includes('buy') || stockAction.includes('sell'))) {
+  // Log portfolio snapshot after transaction (only if holdings were modified)
+  if (holdingsModified && stockAction && (stockAction.includes('buy') || stockAction.includes('sell'))) {
     await transactionLogger.logPortfolioSnapshot(portfolio, `After ${stockAction} transaction`);
   }
   
@@ -785,8 +792,14 @@ exports.updatePortfolio = asyncHandler(async (req, res) => {
   const populatedPortfolio = await Portfolio.findById(portfolio._id);
   
   res.status(200).json({
-    ...populatedPortfolio.toObject(),
-    holdingsValue: populatedPortfolio.holdingsValue
+    status: "success",
+    message: holdingsModified ? 
+      `Portfolio updated successfully with ${stockAction} action` : 
+      "Portfolio details updated successfully",
+    data: {
+      ...populatedPortfolio.toObject(),
+      holdingsValue: populatedPortfolio.holdingsValue
+    }
   });
 });
 
