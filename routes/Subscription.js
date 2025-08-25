@@ -45,6 +45,10 @@ const requireAuth = passport.authenticate("jwt", { session: false });
  *                 enum: [monthly, quarterly, yearly]
  *                 example: "quarterly"
  *                 description: Plan type for the subscription
+ *               couponCode:
+ *                 type: string
+ *                 example: "WELCOME10"
+ *                 description: Optional coupon code for discount
  *     responses:
  *       201:
  *         description: Payment order created
@@ -79,6 +83,10 @@ router.post("/order", requireAuth, subscriptionController.createOrder);
  *                 enum: [monthly, quarterly, yearly]
  *                 example: "quarterly"
  *                 description: Plan type for the cart items
+ *               couponCode:
+ *                 type: string
+ *                 example: "WELCOME10"
+ *                 description: Optional coupon code for discount
  *     responses:
  *       201:
  *         description: Payment order created for cart
@@ -197,6 +205,10 @@ router.get("/history", requireAuth, subscriptionController.getHistory);
  *                 type: string
  *                 format: objectid
  *                 example: "615a2d4b87d9c34f7d4f8a12"
+ *               couponCode:
+ *                 type: string
+ *                 example: "WELCOME10"
+ *                 description: Optional coupon code for discount
  *     responses:
  *       201:
  *         description: eMandate created successfully
