@@ -16,7 +16,7 @@ const ConfigSettingsSchema = new Schema({
   category: {
     type: String,
     required: true,
-    enum: ['smtp', 'payment', 'general', 'security', 'fmp_api', 'other'],
+    enum: ['smtp', 'payment', 'general', 'security', 'digio', 'other'],
     index: true
   },
   description: {

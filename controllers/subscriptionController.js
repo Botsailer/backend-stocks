@@ -2,7 +2,7 @@ const Razorpay = require("razorpay");
 const crypto = require("crypto");
 const mongoose = require("mongoose");
 const cron = require("node-cron");
-
+const Coupon = require("../models/couponScheama");
 const Subscription = require("../models/subscription");
 const Portfolio = require("../models/modelPortFolio");
 const Cart = require("../models/carts");
@@ -748,7 +748,7 @@ const sendRenewalConfirmationEmail = async (user, subscription, portfolio, compe
  * ✨ ENHANCED: Supports renewal with compensation logic
  */
 exports.createOrder = async (req, res) => {
-  const { productType, productId, planType = "monthly", isRenewal = false } = req.body;
+  const { productType, productId, planType = "monthly", isRenewal = false, couponCode } = req.body;
   const userId = req.user._id;
 
   try {
@@ -771,12 +771,138 @@ exports.createOrder = async (req, res) => {
       });
     }
 
-    const { amount, category } = await getProductInfo(productType, productId, planType);
-    const razorpay = await getRazorpayInstance();
+    // Get product info and original amount
+    const { amount: originalAmount, category } = await getProductInfo(productType, productId, planType);
+    let finalAmount = originalAmount;
+    let discountApplied = 0;
+    let couponUsed = null;
+    let couponDetails = null;
 
+    // ✨ NEW: Apply coupon if provided
+    if (couponCode) {
+      try {
+        const coupon = await Coupon.findOne({ code: couponCode.toUpperCase() });
+        
+        if (!coupon) {
+          return res.status(404).json({
+            success: false,
+            error: 'Invalid coupon code'
+          });
+        }
+
+        // Check if coupon is valid (active and not expired)
+        if (!coupon.isValid) {
+          let reason = 'Coupon is not valid';
+          if (coupon.status !== 'active') {
+            reason = 'Coupon is inactive';
+          } else if (coupon.isExpired) {
+            reason = 'Coupon has expired';
+          } else {
+            reason = 'Coupon is not yet active';
+          }
+          
+          return res.status(400).json({
+            success: false,
+            error: reason
+          });
+        }
+
+        // Check usage limit
+        if (coupon.usageLimit !== -1 && coupon.usedCount >= coupon.usageLimit) {
+          return res.status(400).json({
+            success: false,
+            error: 'Coupon usage limit exceeded'
+          });
+        }
+
+        // Check if user can use this coupon
+        const userCheck = coupon.canUserUseCoupon(userId);
+        if (!userCheck.canUse) {
+          return res.status(400).json({
+            success: false,
+            error: userCheck.reason
+          });
+        }
+
+        // Check if coupon applies to the product
+        if (!coupon.appliesTo(productType, productId)) {
+          return res.status(400).json({
+            success: false,
+            error: 'Coupon is not applicable to this product'
+          });
+        }
+
+        // Check for new users only restriction
+        if (coupon.userRestrictions.newUsersOnly) {
+          const hasAnySubscription = await Subscription.findOne({ user: userId });
+          if (hasAnySubscription) {
+            return res.status(400).json({
+              success: false,
+              error: 'This coupon is only for new users'
+            });
+          }
+        }
+
+        // Calculate discount
+        const discountResult = coupon.calculateDiscount(originalAmount);
+        
+        if (discountResult.reason) {
+          return res.status(400).json({
+            success: false,
+            error: discountResult.reason
+          });
+        }
+
+        // Apply discount
+        finalAmount = discountResult.finalAmount;
+        discountApplied = discountResult.discount;
+        couponUsed = coupon._id;
+        couponDetails = {
+          code: coupon.code,
+          title: coupon.title,
+          description: coupon.description,
+          discountType: coupon.discountType,
+          discountValue: coupon.discountValue
+        };
+
+        logger.info('Coupon applied successfully in order creation', {
+          userId: userId.toString(),
+          couponCode: coupon.code,
+          originalAmount,
+          discountApplied,
+          finalAmount,
+          productType,
+          productId: productId.toString()
+        });
+
+      } catch (couponError) {
+        logger.error('Error processing coupon in order creation', {
+          error: couponError.message,
+          stack: couponError.stack,
+          userId: userId.toString(),
+          couponCode
+        });
+        
+        return res.status(500).json({
+          success: false,
+          error: 'Failed to process coupon. Please try again.'
+        });
+      }
+    }
+
+    // Validate final amount
+    if (finalAmount <= 0) {
+      return res.status(400).json({
+        success: false,
+        error: 'Invalid final amount after discount'
+      });
+    }
+
+    const razorpay = await getRazorpayInstance();
     const receipt = generateShortReceipt("ord", userId);
+    
     const order = await razorpay.orders.create({
-      amount: Math.round(amount * 100),
+      amount: Math.round(finalAmount * 100), // Use final amount after discount
       currency: "INR",
       receipt,
       notes: {
@@ -786,30 +912,70 @@ exports.createOrder = async (req, res) => {
         planType,
         category,
         isRenewal: subscriptionStatus.canRenew.toString(),
-        existingSubscriptionId: subscriptionStatus.existingSubscription?._id?.toString() || null
+        existingSubscriptionId: subscriptionStatus.existingSubscription?._id?.toString() || null,
+        // Coupon related notes
+        couponCode: couponCode || null,
+        couponUsed: couponUsed?.toString() || null,
+        originalAmount: originalAmount.toString(),
+        discountApplied: discountApplied.toString(),
+        finalAmount: finalAmount.toString()
       }
     });
 
     const responseData = { 
       success: true, 
       orderId: order.id, 
-      amount: order.amount, 
+      amount: order.amount, // This is in paisa (finalAmount * 100)
       currency: order.currency, 
       planType, 
-      category 
+      category,
+      // Pricing breakdown
+      originalAmount,
+      discountApplied,
+      finalAmount,
+      savings: discountApplied
     };
+
+    // Add coupon information to response
+    if (couponDetails) {
+      responseData.couponApplied = couponDetails;
+      responseData.message = `Coupon "${couponDetails.code}" applied successfully! You saved ₹${discountApplied}`;
+    }
 
     // Add renewal information if applicable
     if (subscriptionStatus.canRenew) {
       responseData.isRenewal = true;
       responseData.compensationDays = Math.ceil((subscriptionStatus.existingSubscription.expiresAt - new Date()) / (24 * 60 * 60 * 1000));
-      responseData.message = `Renewal order created. You will get ${responseData.compensationDays} bonus days added to your new subscription.`;
+      const renewalMessage = `Renewal order created. You will get ${responseData.compensationDays} bonus days added to your new subscription.`;
+      responseData.message = responseData.message ? `${responseData.message} ${renewalMessage}` : renewalMessage;
     }
 
+    logger.info('Order created successfully with coupon support', {
+      userId: userId.toString(),
+      orderId: order.id,
+      originalAmount,
+      finalAmount,
+      discountApplied,
+      couponCode: couponCode || 'none',
+      isRenewal: subscriptionStatus.canRenew
+    });
+
     res.status(201).json(responseData);
+    
   } catch (err) {
-    logger.error("Error in createOrder", err);
-    res.status(500).json({ success: false, error: err.message || "Order creation failed" });
+    logger.error("Error in createOrder", {
+      error: err.message,
+      stack: err.stack,
+      userId: userId.toString(),
+      productType,
+      productId: productId?.toString(),
+      couponCode
+    });
+    
+    res.status(500).json({ 
+      success: false, 
+      error: err.message || "Order creation failed" 
+    });
   }
 };
 
@@ -818,7 +984,7 @@ exports.createOrder = async (req, res) => {
  * ✨ ENHANCED: Supports renewal with compensation logic + Enhanced Error Handling
  */
 exports.createEmandate = async (req, res) => {
-  const { productType, productId } = req.body;
+  const { productType, productId, couponCode } = req.body;
   const userId = req.user._id;
   
   try {
@@ -843,6 +1009,7 @@ exports.createEmandate = async (req, res) => {
       productType,
       productId: productId.toString(),
       userEmail: req.user.email,
+      couponCode: couponCode || 'none',
       timestamp: new Date().toISOString()
     });
 
@@ -866,20 +1033,20 @@ exports.createEmandate = async (req, res) => {
     }
 
     // Get product info with enhanced validation
-    let product, yearlyAmount, category;
+    let product, originalYearlyAmount, category;
     try {
       const productInfo = await getProductInfo(productType, productId, "yearly");
       product = productInfo.product;
-      yearlyAmount = productInfo.amount;
+      originalYearlyAmount = productInfo.amount;
       category = productInfo.category;
       
       // Validate amount for emandate
-      if (!yearlyAmount || yearlyAmount < 100) {
-        throw new Error(`Invalid yearly amount: ${yearlyAmount}. Minimum ₹100 required for emandate.`);
+      if (!originalYearlyAmount || originalYearlyAmount < 100) {
+        throw new Error(`Invalid yearly amount: ${originalYearlyAmount}. Minimum ₹100 required for emandate.`);
       }
       
-      if (yearlyAmount > 1000000) {
-        throw new Error(`Amount too high: ₹${yearlyAmount}. Maximum ₹10,00,000 allowed for emandate.`);
+      if (originalYearlyAmount > 1000000) {
+        throw new Error(`Amount too high: ₹${originalYearlyAmount}. Maximum ₹10,00,000 allowed for emandate.`);
       }
       
     } catch (error) {
@@ -896,20 +1063,147 @@ exports.createEmandate = async (req, res) => {
       });
     }
 
-    const monthlyAmount = Math.round(yearlyAmount / 12);
+    // ✨ NEW: Apply coupon if provided for eMandate
+    let finalYearlyAmount = originalYearlyAmount;
+    let discountApplied = 0;
+    let couponUsed = null;
+    let couponDetails = null;
+
+    if (couponCode) {
+      try {
+        const coupon = await Coupon.findOne({ code: couponCode.toUpperCase() });
+        
+        if (!coupon) {
+          return res.status(404).json({
+            success: false,
+            error: 'Invalid coupon code',
+            code: "INVALID_COUPON"
+          });
+        }
+
+        // Check if coupon is valid (active and not expired)
+        if (!coupon.isValid) {
+          let reason = 'Coupon is not valid';
+          if (coupon.status !== 'active') {
+            reason = 'Coupon is inactive';
+          } else if (coupon.isExpired) {
+            reason = 'Coupon has expired';
+          } else {
+            reason = 'Coupon is not yet active';
+          }
+          
+          return res.status(400).json({
+            success: false,
+            error: reason,
+            code: "COUPON_INVALID"
+          });
+        }
+
+        // Check usage limit
+        if (coupon.usageLimit !== -1 && coupon.usedCount >= coupon.usageLimit) {
+          return res.status(400).json({
+            success: false,
+            error: 'Coupon usage limit exceeded',
+            code: "COUPON_LIMIT_EXCEEDED"
+          });
+        }
+
+        // Check if user can use this coupon
+        const userCheck = coupon.canUserUseCoupon(userId);
+        if (!userCheck.canUse) {
+          return res.status(400).json({
+            success: false,
+            error: userCheck.reason,
+            code: "COUPON_USER_RESTRICTED"
+          });
+        }
+
+        // Check if coupon applies to the product
+        if (!coupon.appliesTo(productType, productId)) {
+          return res.status(400).json({
+            success: false,
+            error: 'Coupon is not applicable to this product',
+            code: "COUPON_NOT_APPLICABLE"
+          });
+        }
+
+        // Check for new users only restriction
+        if (coupon.userRestrictions.newUsersOnly) {
+          const hasAnySubscription = await Subscription.findOne({ user: userId });
+          if (hasAnySubscription) {
+            return res.status(400).json({
+              success: false,
+              error: 'This coupon is only for new users',
+              code: "COUPON_NEW_USERS_ONLY"
+            });
+          }
+        }
+
+        // Calculate discount
+        const discountResult = coupon.calculateDiscount(originalYearlyAmount);
+        
+        if (discountResult.reason) {
+          return res.status(400).json({
+            success: false,
+            error: discountResult.reason,
+            code: "COUPON_CALCULATION_ERROR"
+          });
+        }
+
+        // Apply discount
+        finalYearlyAmount = discountResult.finalAmount;
+        discountApplied = discountResult.discount;
+        couponUsed = coupon._id;
+        couponDetails = {
+          code: coupon.code,
+          title: coupon.title,
+          description: coupon.description,
+          discountType: coupon.discountType,
+          discountValue: coupon.discountValue
+        };
+
+        logger.info('Coupon applied successfully in eMandate creation', {
+          userId: userId.toString(),
+          couponCode: coupon.code,
+          originalYearlyAmount,
+          discountApplied,
+          finalYearlyAmount,
+          productType,
+          productId: productId.toString()
+        });
+
+      } catch (couponError) {
+        logger.error('Error processing coupon in eMandate creation', {
+          error: couponError.message,
+          stack: couponError.stack,
+          userId: userId.toString(),
+          couponCode
+        });
+        
+        return res.status(500).json({
+          success: false,
+          error: 'Failed to process coupon. Please try again.',
+          code: "COUPON_PROCESSING_ERROR"
+        });
+      }
+    }
+
+    const monthlyAmount = Math.round(finalYearlyAmount / 12);
     
-    // Validate monthly amount
+    // Validate monthly amount after discount
     if (monthlyAmount < 10) {
-      logger.error("EMandate creation failed: Monthly amount too low", {
+      logger.error("EMandate creation failed: Monthly amount too low after discount", {
         userId: userId.toString(),
-        yearlyAmount,
+        originalYearlyAmount,
+        finalYearlyAmount,
         monthlyAmount,
+        discountApplied,
         productType,
         productId: productId.toString()
       });
       return res.status(400).json({
         success: false,
-        error: `Monthly amount (₹${monthlyAmount}) is too low. Minimum ₹10 required.`,
+        error: `Monthly amount (₹${monthlyAmount}) is too low after discount. Minimum ₹10 required.`,
         code: "AMOUNT_TOO_LOW"
       });
     }
@@ -1035,7 +1329,13 @@ exports.createEmandate = async (req, res) => {
         isRenewal: subscriptionStatus.canRenew.toString(),
         existingSubscriptionId: subscriptionStatus.existingSubscription?._id?.toString() || null,
         created_at: new Date().toISOString(),
-        user_email: req.user.email
+        user_email: req.user.email,
+        // Coupon related notes
+        couponCode: couponCode || null,
+        couponUsed: couponUsed?.toString() || null,
+        originalYearlyAmount: originalYearlyAmount.toString(),
+        discountApplied: discountApplied.toString(),
+        finalYearlyAmount: finalYearlyAmount.toString()
       }
     };
 
@@ -1047,7 +1347,9 @@ exports.createEmandate = async (req, res) => {
       startAt,
       expireBy,
       monthlyAmount,
-      yearlyAmount
+      originalYearlyAmount,
+      finalYearlyAmount,
+      discountApplied
     });
 
     // Create Razorpay subscription with enhanced error handling
@@ -1101,7 +1403,7 @@ exports.createEmandate = async (req, res) => {
       });
     }
     
-    // ✨ ENHANCED: Save to DB with compensation logic and enhanced error handling
+    // ✨ ENHANCED: Save to DB with compensation logic and coupon information
     const session = await mongoose.startSession();
     let dbSubscriptions = [];
     
@@ -1128,6 +1430,8 @@ exports.createEmandate = async (req, res) => {
                 type: "recurring",
                 status: "pending",
                 amount: Math.round(monthlyAmount / product.portfolios.length),
+                originalAmount: Math.round(originalYearlyAmount / product.portfolios.length / 12),
+                discountApplied: Math.round(discountApplied / product.portfolios.length / 12),
                 category: portfolio.PortfolioCategory ? portfolio.PortfolioCategory.toLowerCase() : category,
                 planType: "yearly",
                 expiresAt: commitmentEndDate,
@@ -1135,6 +1439,7 @@ exports.createEmandate = async (req, res) => {
                 bundleId: productId,
                 isRenewal: subscriptionStatus.canRenew,
                 previousSubscriptionId: subscriptionStatus.existingSubscription?._id || null,
+                couponUsed: couponUsed,
                 createdAt: new Date(),
                 updatedAt: new Date()
               },
@@ -1143,11 +1448,13 @@ exports.createEmandate = async (req, res) => {
             dbSubscriptions.push(dbSubscription);
           }
           
-          logger.info("Bundle subscriptions saved to database", {
+          logger.info("Bundle subscriptions saved to database with coupon", {
             userId: userId.toString(),
             bundleId: productId.toString(),
             portfolioCount: product.portfolios.length,
-            razorpaySubscriptionId: razorpaySubscription.id
+            razorpaySubscriptionId: razorpaySubscription.id,
+            couponCode: couponCode || 'none',
+            discountApplied
           });
           
         } else {
@@ -1166,12 +1473,15 @@ exports.createEmandate = async (req, res) => {
               type: "recurring",
               status: "pending",
               amount: monthlyAmount,
+              originalAmount: Math.round(originalYearlyAmount / 12),
+              discountApplied: Math.round(discountApplied / 12),
               category,
               planType: "yearly",
               expiresAt: commitmentEndDate,
               razorpaySubscriptionId: razorpaySubscription.id,
               isRenewal: subscriptionStatus.canRenew,
               previousSubscriptionId: subscriptionStatus.existingSubscription?._id || null,
+              couponUsed: couponUsed,
               createdAt: new Date(),
               updatedAt: new Date()
             },
@@ -1179,12 +1489,14 @@ exports.createEmandate = async (req, res) => {
           );
           dbSubscriptions.push(dbSubscription);
           
-          logger.info("Single subscription saved to database", {
+          logger.info("Single subscription saved to database with coupon", {
             userId: userId.toString(),
             productType,
             productId: productId.toString(),
             subscriptionId: dbSubscription._id.toString(),
-            razorpaySubscriptionId: razorpaySubscription.id
+            razorpaySubscriptionId: razorpaySubscription.id,
+            couponCode: couponCode || 'none',
+            discountApplied
           });
         }
       });
@@ -1223,29 +1535,44 @@ exports.createEmandate = async (req, res) => {
       subscriptionId: razorpaySubscription.id, 
       setupUrl: razorpaySubscription.short_url,
       amount: monthlyAmount,
-      yearlyAmount,
+      originalYearlyAmount,
+      finalYearlyAmount,
+      discountApplied,
+      savings: discountApplied,
       category,
       status: razorpaySubscription.status || "pending_authentication",
       totalCount: 12,
       createdAt: new Date().toISOString()
     };
 
+    // Add coupon information to response
+    if (couponDetails) {
+      responseData.couponApplied = couponDetails;
+      responseData.message = `Coupon "${couponDetails.code}" applied successfully! You saved ₹${discountApplied} on your yearly subscription.`;
+    }
+
     // Add renewal information if applicable
     if (subscriptionStatus.canRenew) {
       responseData.isRenewal = true;
       responseData.compensationDays = Math.ceil((subscriptionStatus.existingSubscription.expiresAt - new Date()) / (24 * 60 * 60 * 1000));
-      responseData.message = `eMandate renewal created successfully. You will get ${responseData.compensationDays} bonus days added to your new subscription.`;
+      const renewalMessage = `eMandate renewal created successfully. You will get ${responseData.compensationDays} bonus days added to your new subscription.`;
+      responseData.message = responseData.message ? `${responseData.message} ${renewalMessage}` : renewalMessage;
     } else {
-      responseData.message = "eMandate subscription created successfully. Please complete the authentication process.";
+      if (!responseData.message) {
+        responseData.message = "eMandate subscription created successfully. Please complete the authentication process.";
+      }
     }
 
-    logger.info("EMandate creation completed successfully", {
+    logger.info("EMandate creation completed successfully with coupon support", {
       userId: userId.toString(),
       subscriptionId: razorpaySubscription.id,
       productType,
       productId: productId.toString(),
       monthlyAmount,
-      yearlyAmount,
+      originalYearlyAmount,
+      finalYearlyAmount,
+      discountApplied,
+      couponCode: couponCode || 'none',
       isRenewal: subscriptionStatus.canRenew
     });
 
@@ -1256,6 +1583,7 @@ exports.createEmandate = async (req, res) => {
       userId: userId.toString(),
       productType,
       productId: productId?.toString(),
+      couponCode,
       error: err.message,
       stack: err.stack,
       timestamp: new Date().toISOString()
@@ -1329,57 +1657,347 @@ exports.verifyPayment = async (req, res) => {
 
     // Extract note fields
     const notes = order.notes || {};
-    const { productType, productId, planType = "monthly", isRenewal, existingSubscriptionId } = notes;
     const userId = req.user._id;
-    const paidAmount = order.amount / 100;
-
-    // Compute expiry and compensation
-    let expiryDate = calculateEndDate(planType);
-    let compensationDays = 0;
-    if (isRenewal === "true" && existingSubscriptionId) {
-      const existing = await Subscription.findById(existingSubscriptionId);
-      if (existing && existing.expiresAt > new Date()) {
-        const comp = calculateCompensatedEndDate(planType, existing.expiresAt);
-        expiryDate = comp.endDate;
-        compensationDays = comp.compensationDays;
-      }
-    }
+    const paidAmount = order.amount / 100; // Convert from paisa
 
     let responseData = {};
     let newSubscriptions = [];
-    let telegramInviteLinks = [];
 
-    if (productType === "Bundle") {
-      // Bundle processing logic
-      const bundle = await Bundle.findById(productId).populate("portfolios");
-      if (!bundle) throw new Error("Bundle not found");
+    // ✨ NEW: Handle Cart Checkout
+    if (notes.cartCheckout === "true") {
+      const { 
+        planType = "monthly",
+        couponCode,
+        couponUsed,
+        originalTotal: noteOriginalTotal,
+        discountApplied: noteDiscountApplied,
+        finalTotal: noteFinalTotal,
+        itemCount,
+        cartId
+      } = notes;
+      
+      // Parse coupon-related amounts from notes
+      const originalTotal = parseFloat(noteOriginalTotal) || paidAmount;
+      const discountApplied = parseFloat(noteDiscountApplied) || 0;
+      const finalTotal = parseFloat(noteFinalTotal) || paidAmount;
 
-      const portfolios = bundle.portfolios || [];
-      if (portfolios.length > 0) {
-        const amountPer = paidAmount / portfolios.length;
+      // Validate payment amount matches expected final amount
+      if (Math.abs(paidAmount - finalTotal) > 0.01) { // Allow 1 paisa difference due to rounding
+        logger.error("Cart payment amount mismatch", {
+          userId: userId.toString(),
+          orderId,
+          paymentId,
+          paidAmount,
+          expectedFinalAmount: finalTotal,
+          originalTotal,
+          discountApplied
+        });
         
-        // Cancel old if renewal
-        if (isRenewal === "true" && existingSubscriptionId) {
-          await Subscription.updateMany(
-            { user: userId, productType: "Portfolio", productId: { $in: portfolios.map(p => p._id) }, status: "active" },
-            { status: "cancelled", cancelledAt: new Date(), cancelReason: "Renewed" },
-            { session }
-          );
+        await session.abortTransaction();
+        return res.status(400).json({ 
+          success: false, 
+          error: "Payment amount verification failed" 
+        });
+      }
+
+      // Process coupon usage if coupon was applied
+      if (couponUsed) {
+        try {
+          const coupon = await Coupon.findById(couponUsed);
+          if (coupon) {
+            await coupon.useCoupon(
+              userId,
+              orderId,
+              "Cart", // Product type for cart
+              cartId, // Cart ID as product ID
+              discountApplied
+            );
+            
+            logger.info('Coupon usage recorded for cart payment', {
+              couponCode: coupon.code,
+              userId: userId.toString(),
+              orderId,
+              paymentId,
+              cartId,
+              discountApplied
+            });
+          }
+        } catch (couponError) {
+          logger.error('Failed to record coupon usage for cart payment', {
+            error: couponError.message,
+            couponId: couponUsed,
+            orderId,
+            paymentId
+          });
+          // Don't fail payment verification due to coupon tracking error
         }
+      }
+
+      // Get cart and create subscriptions for each item
+      const cart = await Cart.findById(cartId);
+      if (!cart) {
+        await session.abortTransaction();
+        return res.status(404).json({ success: false, error: "Cart not found" });
+      }
+
+      for (const item of cart.items) {
+        const portfolio = await Portfolio.findById(item.portfolio);
+        if (!portfolio) {
+          logger.warn(`Portfolio ${item.portfolio} not found during cart payment verification`);
+          continue;
+        }
+
+        const plan = portfolio.subscriptionFee.find(fee => fee.type === planType);
+        if (!plan) {
+          logger.warn(`Plan ${planType} not found for portfolio ${item.portfolio}`);
+          continue;
+        }
+
+        // Calculate proportional amounts for this item
+        const itemOriginalAmount = plan.price * item.quantity;
+        const itemDiscountApplied = originalTotal > 0 ? (itemOriginalAmount / originalTotal) * discountApplied : 0;
+        const itemFinalAmount = itemOriginalAmount - itemDiscountApplied;
+
+        // Create subscription for this portfolio
+        const newSub = await Subscription.findOneAndUpdate(
+          { user: userId, productType: "Portfolio", productId: item.portfolio, type: "one_time" },
+          {
+            user: userId,
+            productType: "Portfolio",
+            productId: item.portfolio,
+            portfolio: item.portfolio,
+            type: "one_time",
+            status: "active",
+            amount: itemFinalAmount,
+            originalAmount: itemOriginalAmount,
+            discountApplied: itemDiscountApplied,
+            category: portfolio.PortfolioCategory?.toLowerCase() || "basic",
+            planType: planType,
+            expiresAt: calculateEndDate(planType),
+            paymentId,
+            orderId,
+            couponUsed: couponUsed || null,
+            isCartItem: true,
+            cartId: cartId
+          },
+          { upsert: true, new: true, session }
+        );
+        newSubscriptions.push(newSub);
+
+        // Create payment history for this item
+        await PaymentHistory.create([{
+          user: userId,
+          subscription: newSub._id,
+          portfolio: item.portfolio,
+          amount: itemFinalAmount,
+          paymentId: `${paymentId}_cart_${item.portfolio}`,
+          orderId,
+          signature,
+          status: "VERIFIED",
+          description: `Cart item payment - ${portfolio.name || portfolio.portfolioName} (${couponCode ? `Coupon: ${couponCode}` : 'No coupon'})`
+        }], { session });
+      }
+
+      // Clear the cart after successful payment
+      await Cart.findByIdAndUpdate(cartId, { items: [] }, { session });
+
+      responseData = {
+        success: true,
+        message: `Cart payment verified${couponCode ? ` with coupon ${couponCode}` : ""}`,
+        subscriptionsCreated: newSubscriptions.length,
+        originalTotal,
+        discountApplied,
+        finalTotal,
+        savings: discountApplied,
+        planType
+      };
+
+      // Add coupon details to response if coupon was used
+      if (couponCode) {
+        responseData.couponUsed = {
+          code: couponCode,
+          discountApplied,
+          savings: discountApplied
+        };
+      }
+
+    } else {
+      // ✨ EXISTING: Handle Single Product/Bundle Payment
+      const { 
+        productType, 
+        productId, 
+        planType = "monthly", 
+        isRenewal, 
+        existingSubscriptionId,
+        couponCode,
+        couponUsed,
+        originalAmount: noteOriginalAmount,
+        discountApplied: noteDiscountApplied,
+        finalAmount: noteFinalAmount
+      } = notes;
+      
+      // Parse coupon-related amounts from notes
+      const originalAmount = parseFloat(noteOriginalAmount) || paidAmount;
+      const discountApplied = parseFloat(noteDiscountApplied) || 0;
+      const finalAmount = parseFloat(noteFinalAmount) || paidAmount;
+
+      // Validate payment amount matches expected final amount
+      if (Math.abs(paidAmount - finalAmount) > 0.01) { // Allow 1 paisa difference due to rounding
+        logger.error("Payment amount mismatch", {
+          userId: userId.toString(),
+          orderId,
+          paymentId,
+          paidAmount,
+          expectedFinalAmount: finalAmount,
+          originalAmount,
+          discountApplied
+        });
         
-        // Create subscriptions for each portfolio
-        for (let i = 0; i < portfolios.length; i++) {
-          const port = portfolios[i];
-          const newSub = await Subscription.findOneAndUpdate(
-            { user: userId, productType: "Portfolio", productId: port._id, type: "one_time" },
+        await session.abortTransaction();
+        return res.status(400).json({ 
+          success: false, 
+          error: "Payment amount verification failed" 
+        });
+      }
+
+      // Process coupon usage if coupon was applied
+      if (couponUsed) {
+        try {
+          const coupon = await Coupon.findById(couponUsed);
+          if (coupon) {
+            await coupon.useCoupon(
+              userId, 
+              orderId, 
+              productType, 
+              productId, 
+              discountApplied
+            );
+            
+            logger.info('Coupon usage recorded successfully', {
+              couponCode: coupon.code,
+              couponId: coupon._id,
+              userId: userId.toString(),
+              orderId,
+              paymentId,
+              discountApplied,
+              productType,
+              productId: productId.toString()
+            });
+          } else {
+            logger.warn('Coupon not found during payment verification', {
+              couponId: couponUsed,
+              orderId,
+              paymentId
+            });
+          }
+        } catch (couponError) {
+          logger.error('Failed to record coupon usage', {
+            error: couponError.message,
+            stack: couponError.stack,
+            couponId: couponUsed,
+            orderId,
+            paymentId,
+            userId: userId.toString()
+          });
+          // Don't fail payment verification due to coupon tracking error
+        }
+      }
+
+      // Compute expiry and compensation
+      let expiryDate = calculateEndDate(planType);
+      let compensationDays = 0;
+      if (isRenewal === "true" && existingSubscriptionId) {
+        const existing = await Subscription.findById(existingSubscriptionId);
+        if (existing && existing.expiresAt > new Date()) {
+          const comp = calculateCompensatedEndDate(planType, existing.expiresAt);
+          expiryDate = comp.endDate;
+          compensationDays = comp.compensationDays;
+        }
+      }
+
+      if (productType === "Bundle") {
+        // Bundle processing logic
+        const bundle = await Bundle.findById(productId).populate("portfolios");
+        if (!bundle) throw new Error("Bundle not found");
+
+        const portfolios = bundle.portfolios || [];
+        if (portfolios.length > 0) {
+          const amountPer = finalAmount / portfolios.length; // Use final amount after discount
+          const originalAmountPer = originalAmount / portfolios.length;
+          const discountPer = discountApplied / portfolios.length;
+          
+          // Cancel old if renewal
+          if (isRenewal === "true" && existingSubscriptionId) {
+            await Subscription.updateMany(
+              { user: userId, productType: "Portfolio", productId: { $in: portfolios.map(p => p._id) }, status: "active" },
+              { status: "cancelled", cancelledAt: new Date(), cancelReason: "Renewed" },
+              { session }
+            );
+          }
+          
+          // Create subscriptions for each portfolio
+          for (let i = 0; i < portfolios.length; i++) {
+            const port = portfolios[i];
+            const newSub = await Subscription.findOneAndUpdate(
+              { user: userId, productType: "Portfolio", productId: port._id, type: "one_time" },
+              {
+                user: userId,
+                productType: "Portfolio",
+                productId: port._id,
+                portfolio: port._id,
+                type: "one_time",
+                status: "active",
+                amount: amountPer,
+                originalAmount: originalAmountPer,
+                discountApplied: discountPer,
+                category: bundle.category,
+                planType,
+                expiresAt: expiryDate,
+                paymentId,
+                orderId,
+                isRenewal: isRenewal === "true",
+                compensationDays,
+                previousSubscriptionId: existingSubscriptionId || null,
+                couponUsed: couponUsed || null
+              },
+              { upsert: true, new: true, session }
+            );
+            newSubscriptions.push(newSub);
+            
+            await PaymentHistory.create([{
+              user: userId,
+              subscription: null,
+              portfolio: port._id,
+              amount: amountPer,
+              paymentId: `${paymentId}_port_${i}`,
+              orderId,
+              signature,
+              status: "VERIFIED",
+              description: `Bundle payment - ${bundle.name} (${couponCode ? `Coupon: ${couponCode}` : 'No coupon'})`
+            }], { session });
+          }
+        } else {
+          // Bundle without portfolios
+          if (isRenewal === "true" && existingSubscriptionId) {
+            await Subscription.findByIdAndUpdate(
+              existingSubscriptionId,
+              { status: "cancelled", cancelledAt: new Date(), cancelReason: "Renewed" },
+              { session }
+            );
+          }
+          
+          const sub = await Subscription.findOneAndUpdate(
+            { user: userId, productType: "Bundle", productId, type: "one_time" },
             {
               user: userId,
-              productType: "Portfolio",
-              productId: port._id,
-              portfolio: port._id,
+              productType: "Bundle",
+              productId,
+              bundleId: productId,
               type: "one_time",
               status: "active",
-              amount: amountPer,
+              amount: finalAmount,
+              originalAmount: originalAmount,
+              discountApplied: discountApplied,
               category: bundle.category,
               planType,
               expiresAt: expiryDate,
@@ -1387,26 +2005,41 @@ exports.verifyPayment = async (req, res) => {
               orderId,
               isRenewal: isRenewal === "true",
               compensationDays,
-              previousSubscriptionId: existingSubscriptionId || null
+              previousSubscriptionId: existingSubscriptionId || null,
+              couponUsed: couponUsed || null
             },
             { upsert: true, new: true, session }
           );
-          newSubscriptions.push(newSub);
+          newSubscriptions.push(sub);
           
           await PaymentHistory.create([{
             user: userId,
-            subscription: null,
-            portfolio: port._id,
-            amount: amountPer,
-            paymentId: `${paymentId}_port_${i}`,
+            subscription: sub._id,
+            portfolio: null,
+            amount: finalAmount,
+            paymentId,
             orderId,
             signature,
             status: "VERIFIED",
-            description: `Bundle payment - ${bundle.name}`
+            description: `Bundle (${bundle.name}) payment (${couponCode ? `Coupon: ${couponCode}` : 'No coupon'})`
           }], { session });
         }
+
+        responseData = {
+          success: true,
+          message: `Bundle payment verified${isRenewal ? " (Renewal)" : ""}${couponCode ? ` with coupon ${couponCode}` : ""}`,
+          category: bundle.category,
+          isRenewal: isRenewal === "true",
+          compensationDays,
+          newExpiryDate: expiryDate,
+          originalAmount,
+          discountApplied,
+          finalAmount,
+          savings: discountApplied
+        };
+        
       } else {
-        // Bundle without portfolios
+        // Single portfolio
         if (isRenewal === "true" && existingSubscriptionId) {
           await Subscription.findByIdAndUpdate(
             existingSubscriptionId,
@@ -1415,104 +2048,67 @@ exports.verifyPayment = async (req, res) => {
           );
         }
         
-        const sub = await Subscription.findOneAndUpdate(
-          { user: userId, productType: "Bundle", productId, type: "one_time" },
+        const newSub = await Subscription.findOneAndUpdate(
+          { user: userId, productType, productId, type: "one_time" },
           {
             user: userId,
-            productType: "Bundle",
+            productType,
             productId,
-            bundleId: productId,
+            portfolio: productType === "Portfolio" ? productId : null,
             type: "one_time",
             status: "active",
-            amount: paidAmount,
-            category: bundle.category,
+            amount: finalAmount,
+            originalAmount: originalAmount,
+            discountApplied: discountApplied,
+            category: notes.category,
             planType,
             expiresAt: expiryDate,
             paymentId,
             orderId,
             isRenewal: isRenewal === "true",
             compensationDays,
-            previousSubscriptionId: existingSubscriptionId || null
+            previousSubscriptionId: existingSubscriptionId || null,
+            couponUsed: couponUsed || null
           },
           { upsert: true, new: true, session }
         );
-        newSubscriptions.push(sub);
+        newSubscriptions.push(newSub);
         
         await PaymentHistory.create([{
           user: userId,
-          subscription: sub._id,
-          portfolio: null,
-          amount: paidAmount,
+          subscription: newSub._id,
+          portfolio: productType === "Portfolio" ? productId : null,
+          amount: finalAmount,
           paymentId,
           orderId,
           signature,
           status: "VERIFIED",
-          description: `Bundle (${bundle.name}) payment`
+          description: `${productType} payment${isRenewal ? " (Renewal)" : ""} (${couponCode ? `Coupon: ${couponCode}` : 'No coupon'})`
         }], { session });
-      }
 
-      responseData = {
-        success: true,
-        message: `Bundle payment verified${isRenewal ? " (Renewal)" : ""}`,
-        category: bundle.category,
-        isRenewal: isRenewal === "true",
-        compensationDays,
-        newExpiryDate: expiryDate
-      };
-    } else {
-      // Single portfolio
-      if (isRenewal === "true" && existingSubscriptionId) {
-        await Subscription.findByIdAndUpdate(
-          existingSubscriptionId,
-          { status: "cancelled", cancelledAt: new Date(), cancelReason: "Renewed" },
-          { session }
-        );
-      }
-      
-      const newSub = await Subscription.findOneAndUpdate(
-        { user: userId, productType, productId, type: "one_time" },
-        {
-          user: userId,
-          productType,
-          productId,
-          portfolio: productType === "Portfolio" ? productId : null,
-          type: "one_time",
-          status: "active",
-          amount: paidAmount,
+        responseData = {
+          success: true,
+          message: `${productType} payment verified${isRenewal ? " (Renewal)" : ""}${couponCode ? ` with coupon ${couponCode}` : ""}`,
+          subscriptionId: newSub._id,
           category: notes.category,
-          planType,
-          expiresAt: expiryDate,
-          paymentId,
-          orderId,
           isRenewal: isRenewal === "true",
           compensationDays,
-          previousSubscriptionId: existingSubscriptionId || null
-        },
-        { upsert: true, new: true, session }
-      );
-      newSubscriptions.push(newSub);
-      
-      await PaymentHistory.create([{
-        user: userId,
-        subscription: newSub._id,
-        portfolio: productType === "Portfolio" ? productId : null,
-        amount: paidAmount,
-        paymentId,
-        orderId,
-        signature,
-        status: "VERIFIED",
-        description: `${productType} payment${isRenewal ? " (Renewal)" : ""}`
-      }], { session });
+          newExpiryDate: expiryDate,
+          originalAmount,
+          discountApplied,
+          finalAmount,
+          savings: discountApplied
+        };
+      }
 
-      responseData = {
-        success: true,
-        message: `${productType} payment verified${isRenewal ? " (Renewal)" : ""}`,
-        subscriptionId: newSub._id,
-        category: notes.category,
-        isRenewal: isRenewal === "true",
-        compensationDays,
-        newExpiryDate: expiryDate
-      };
+      // Add coupon details to response if coupon was used
+      if (couponCode) {
+        responseData.couponUsed = {
+          code: couponCode,
+          discountApplied,
+          savings: discountApplied
+        };
+      }
     }
 
     await session.commitTransaction();
@@ -1524,12 +2120,20 @@ exports.verifyPayment = async (req, res) => {
           subscriptionId: newSubscriptions[0]._id,
           paymentId,
           orderId,
-          subscriptionCount: newSubscriptions.length
+          subscriptionCount: newSubscriptions.length,
+          couponCode: notes.couponCode || 'none',
+          discountApplied: notes.discountApplied || 0,
+          isCartCheckout: notes.cartCheckout === "true"
         });
         
         const bill = await generateAndSendBill(newSubscriptions[0]._id, {
           paymentId,
-          orderId
+          orderId,
+          originalAmount: parseFloat(notes.originalAmount || notes.originalTotal) || 0,
+          discountApplied: parseFloat(notes.discountApplied) || 0,
+          finalAmount: parseFloat(notes.finalAmount || notes.finalTotal) || 0,
+          couponCode: notes.couponCode,
+          isCartCheckout: notes.cartCheckout === "true"
         });
         
         logger.info('Bill generated and sent successfully', {
@@ -1537,7 +2141,8 @@ exports.verifyPayment = async (req, res) => {
           billId: bill._id,
           billNumber: bill.billNumber,
           paymentId,
-          orderId
+          orderId,
+          couponCode: notes.couponCode || 'none'
         });
         
         // Add bill info to response
@@ -1562,22 +2167,61 @@ exports.verifyPayment = async (req, res) => {
       responseData.billError = billError.message;
     }
     
-    // Enhanced Telegram integration for both portfolios and bundles
-    const telegramInvites = await handleTelegramIntegration(
-      req.user, 
-      productType, 
-      productId, 
-      newSubscriptions[0]
-    );
-    
-    // Add Telegram links to response
-    if (telegramInvites && telegramInvites.length > 0) {
-      responseData.telegramInviteLinks = telegramInvites;
-      responseData.telegramMessage = `You have access to ${telegramInvites.length} Telegram group${telegramInvites.length > 1 ? 's' : ''}. Check your email for invite links.`;
+    // Enhanced Telegram integration for portfolios (not applicable for cart checkout)
+    if (notes.cartCheckout !== "true") {
+      const telegramInvites = await handleTelegramIntegration(
+        req.user, 
+        notes.productType, 
+        notes.productId, 
+        newSubscriptions[0]
+      );
+      
+      // Add Telegram links to response
+      if (telegramInvites && telegramInvites.length > 0) {
+        responseData.telegramInviteLinks = telegramInvites;
+        responseData.telegramMessage = `You have access to ${telegramInvites.length} Telegram group${telegramInvites.length > 1 ? 's' : ''}. Check your email for invite links.`;
+      }
+    } else {
+      // For cart checkout, handle Telegram for each portfolio subscription
+      const allTelegramInvites = [];
+      for (const subscription of newSubscriptions) {
+        try {
+          const telegramInvites = await handleTelegramIntegration(
+            req.user, 
+            "Portfolio", 
+            subscription.productId, 
+            subscription
+          );
+          allTelegramInvites.push(...telegramInvites);
+        } catch (error) {
+          logger.error('Telegram integration error for cart item', {
+            subscriptionId: subscription._id,
+            portfolioId: subscription.productId,
+            error: error.message
+          });
+        }
+      }
+      
+      if (allTelegramInvites.length > 0) {
+        responseData.telegramInviteLinks = allTelegramInvites;
+        responseData.telegramMessage = `You have access to ${allTelegramInvites.length} Telegram group${allTelegramInvites.length > 1 ? 's' : ''}. Check your email for invite links.`;
+      }
     }
 
     // Update user premium status
     await updateUserPremiumStatus(req.user._id);
+    
+    logger.info('Payment verification completed successfully with coupon support', {
+      userId: userId.toString(),
+      paymentId,
+      orderId,
+      originalAmount: notes.originalAmount || notes.originalTotal || 0,
+      discountApplied: notes.discountApplied || 0,
+      finalAmount: notes.finalAmount || notes.finalTotal || 0,
+      couponCode: notes.couponCode || 'none',
+      isCartCheckout: notes.cartCheckout === "true",
+      subscriptionsCreated: newSubscriptions.length
+    });
     
     return res.json(responseData);
     
@@ -1588,7 +2232,8 @@ exports.verifyPayment = async (req, res) => {
       error: error.message,
       stack: error.stack,
       paymentId: req.body.paymentId,
-      orderId: req.body.orderId
+      orderId: req.body.orderId,
+      userId: req.user?._id?.toString()
     });
     
     if (error.code === 11000) {
@@ -1603,6 +2248,8 @@ exports.verifyPayment = async (req, res) => {
     session.endSession();
   }
 };
+
+
 
 async function sendTelegramInviteEmail(user, product, inviteLink, expiresAt) {
   try {
@@ -1677,29 +2324,76 @@ exports.verifyEmandate = async (req, res) => {
     const status = rSub.status;
     const isRenewal = rSub.notes.isRenewal === "true";
     const existingId = rSub.notes.existingSubscriptionId;
+    
+    // Extract coupon information from Razorpay notes
+    const couponCode = rSub.notes.couponCode;
+    const couponUsed = rSub.notes.couponUsed;
+    const originalYearlyAmount = parseFloat(rSub.notes.originalYearlyAmount) || 0;
+    const discountApplied = parseFloat(rSub.notes.discountApplied) || 0;
+    const finalYearlyAmount = parseFloat(rSub.notes.finalYearlyAmount) || 0;
+    
     let activatedCount = 0;
     let telegramInviteLinks = [];
 
     if (["authenticated", "active"].includes(status)) {
       const session = await mongoose.startSession();
-      await session.withTransaction(async () => {
-        // Cancel old if renewal
-        if (isRenewal && existingId) {
-          await Subscription.findByIdAndUpdate(
-            existingId,
-            { status: "cancelled", cancelledAt: new Date(), cancelReason: "Renewed via eMandate" },
+      
+      try {
+        await session.withTransaction(async () => {
+          // Cancel old if renewal
+          if (isRenewal && existingId) {
+            await Subscription.findByIdAndUpdate(
+              existingId,
+              { status: "cancelled", cancelledAt: new Date(), cancelReason: "Renewed via eMandate" },
+              { session }
+            );
+          }
+
+          const update = await Subscription.updateMany(
+            { razorpaySubscriptionId: subscription_id, user: userId },
+            { status: "active", lastPaymentAt: new Date() },
             { session }
           );
-        }
-
-        const update = await Subscription.updateMany(
-          { razorpaySubscriptionId: subscription_id, user: userId },
-          { status: "active", lastPaymentAt: new Date() },
-          { session }
-        );
-        activatedCount = update.modifiedCount;
-      });
-      await session.endSession();
+          activatedCount = update.modifiedCount;
+          
+          // Process coupon usage if coupon was applied to eMandate
+          if (couponUsed) {
+            try {
+              const coupon = await Coupon.findById(couponUsed);
+              if (coupon) {
+                await coupon.useCoupon(
+                  userId,
+                  subscription_id, // Use subscription ID as order ID for eMandate
+                  rSub.notes.product_type,
+                  rSub.notes.product_id,
+                  discountApplied
+                );
+                
+                logger.info('Coupon usage recorded for eMandate activation', {
+                  couponCode: coupon.code,
+                  couponId: coupon._id,
+                  userId: userId.toString(),
+                  subscriptionId: subscription_id,
+                  discountApplied,
+                  productType: rSub.notes.product_type,
+                  productId: rSub.notes.product_id
+                });
+              }
+            } catch (couponError) {
+              logger.error('Failed to record coupon usage for eMandate', {
+                error: couponError.message,
+                stack: couponError.stack,
+                couponId: couponUsed,
+                subscriptionId: subscription_id,
+                userId: userId.toString()
+              });
+              // Don't fail eMandate verification due to coupon tracking error
+            }
+          }
+        });
+      } finally {
+        await session.endSession();
+      }
 
       // Generate Telegram invites for portfolio subscriptions
       for (const sub of existingSubs) {
@@ -1752,21 +2446,29 @@ exports.verifyEmandate = async (req, res) => {
       let billsGenerated = 0;
       for (const sub of existingSubs) {
         try {
-          logger.info('Starting eMandate bill generation', {
+          logger.info('Starting eMandate bill generation with coupon info', {
             subscriptionId: sub._id,
-            razorpaySubscriptionId: subscription_id
+            razorpaySubscriptionId: subscription_id,
+            couponCode: couponCode || 'none',
+            discountApplied
           });
           
           const bill = await generateAndSendBill(sub._id, {
             paymentId: null, // eMandate doesn't have immediate payment ID
-            orderId: null
+            orderId: null,
+            subscriptionId: subscription_id,
+            originalAmount: originalYearlyAmount,
+            discountApplied,
+            finalAmount: finalYearlyAmount,
+            couponCode
           });
           
-          logger.info('Bill generated for eMandate subscription', {
+          logger.info('Bill generated for eMandate subscription with coupon info', {
             subscriptionId: sub._id,
             billId: bill._id,
             billNumber: bill.billNumber,
-            razorpaySubscriptionId: subscription_id
+            razorpaySubscriptionId: subscription_id,
+            couponCode: couponCode || 'none'
           });
           
           billsGenerated++;
@@ -1782,7 +2484,8 @@ exports.verifyEmandate = async (req, res) => {
       
       logger.info(`Generated ${billsGenerated} bills for eMandate activation`, {
         razorpaySubscriptionId: subscription_id,
-        totalSubscriptions: existingSubs.length
+        totalSubscriptions: existingSubs.length,
+        couponCode: couponCode || 'none'
       });
 
       // Renewal emails
@@ -1797,15 +2500,28 @@ exports.verifyEmandate = async (req, res) => {
 
       await updateUserPremiumStatus(userId);
       
-      return res.json({
+      const responseData = {
         success: true,
-        message: `eMandate ${status}. Activated ${activatedCount} subscriptions${isRenewal ? " (Renewal)" : ""}`,
+        message: `eMandate ${status}. Activated ${activatedCount} subscriptions${isRenewal ? " (Renewal)" : ""}${couponCode ? ` with coupon ${couponCode}` : ""}`,
         subscriptionStatus: status,
         activatedSubscriptions: activatedCount,
         isRenewal,
         telegramInviteLinks,
         requiresAction: ["pending", "created"].includes(status)
-      });
+      };
+
+      // Add coupon information to response
+      if (couponCode) {
+        responseData.couponUsed = {
+          code: couponCode,
+          originalYearlyAmount,
+          discountApplied,
+          finalYearlyAmount,
+          savings: discountApplied
+        };
+      }
+
+      return res.json(responseData);
     }
 
     // Cancelled/expired
@@ -1847,6 +2563,7 @@ exports.verifyEmandate = async (req, res) => {
             <h2 style="color:#4a77e5;">Action Required: eMandate Subscription Pending</h2>
             <p>Dear ${user.fullName || user.username},</p>
             <p>Your eMandate subscription is currently pending authentication. Please complete the process to activate your subscription.</p>
+            ${couponCode ? `<p><strong>Coupon Applied:</strong> ${couponCode} (₹${discountApplied} discount)</p>` : ''}
             <p>Subscription ID: <strong>${subscription_id}</strong></p>
             <p>To complete the authentication, please visit:</p>
             <p><a href="${rSub.short_url}" style="color:#4a77e5;">Complete Authentication</a></p>  
@@ -1864,24 +2581,40 @@ exports.verifyEmandate = async (req, res) => {
           metadata: {
             subscriptionId: subscription_id,
             authenticationUrl: rSub.short_url,
-            status
+            status,
+            couponCode: couponCode || null,
+            discountApplied
           }
         });
         
         logger.info(`eMandate pending email queued for ${user.email}`, {
           userId: user._id,
           subscriptionId: subscription_id,
-          status
+          status,
+          couponCode: couponCode || 'none'
         });
       }
 
-      return res.json({
+      const responseData = {
         success: false,
         message: `Subscription in ${status} state.`,
         subscriptionStatus: status,
         requiresAction: true,
         authenticationUrl: rSub.short_url
-      });
+      };
+
+      // Add coupon information to response if available
+      if (couponCode) {
+        responseData.couponWillBeApplied = {
+          code: couponCode,
+          originalYearlyAmount,
+          discountApplied,
+          finalYearlyAmount,
+          savings: discountApplied
+        };
+      }
+
+      return res.json(responseData);
     }
 
     // Unknown state
@@ -1894,7 +2627,8 @@ exports.verifyEmandate = async (req, res) => {
     logger.error("Error in verifyEmandate:", {
       error: error.message,
       stack: error.stack,
-      subscription_id: req.body.subscription_id
+      subscription_id: req.body.subscription_id,
+      userId: req.user?._id?.toString()
     });
     
     return res.status(500).json({ 
@@ -1903,6 +2637,7 @@ exports.verifyEmandate = async (req, res) => {
     });
   }
 };
+
 /**
  * Get user subscriptions
  * ✨ ENHANCED: Shows renewal eligibility information
@@ -2540,7 +3275,7 @@ async function sendPaymentFailureEmail(user, subscriptionId, errorCode, errorDes
  */
 exports.checkoutCart = async (req, res) => {
   try {
-    const { planType = "monthly" } = req.body;
+    const { planType = "monthly", couponCode } = req.body;
     const cart = await Cart.findOne({ user: req.user._id });
     
     if (!cart?.items?.length) {
@@ -2571,8 +3306,10 @@ exports.checkoutCart = async (req, res) => {
       });
     }
 
-    // Calculate total amount
-    let total = 0;
+    // Calculate original total amount
+    let originalTotal = 0;
+    const cartItems = [];
+    
     for (const item of cart.items) {
       const portfolio = await Portfolio.findById(item.portfolio);
       if (!portfolio) {
@@ -2584,43 +3321,238 @@ exports.checkoutCart = async (req, res) => {
         throw new Error(`${planType} plan not found for portfolio`);
       }
       
-      total += plan.price * item.quantity;
+      const itemTotal = plan.price * item.quantity;
+      originalTotal += itemTotal;
+      
+      cartItems.push({
+        portfolioId: item.portfolio,
+        portfolioName: portfolio.name || portfolio.portfolioName,
+        quantity: item.quantity,
+        unitPrice: plan.price,
+        totalPrice: itemTotal
+      });
     }
 
-    if (total <= 0) {
+    if (originalTotal <= 0) {
       return res.status(400).json({ 
         success: false, 
         error: "Invalid cart amount" 
       });
     }
+
+    // ✨ NEW: Apply coupon if provided
+    let finalTotal = originalTotal;
+    let discountApplied = 0;
+    let couponUsed = null;
+    let couponDetails = null;
+
+    if (couponCode) {
+      try {
+        const coupon = await Coupon.findOne({ code: couponCode.toUpperCase() });
+        
+        if (!coupon) {
+          return res.status(404).json({
+            success: false,
+            error: 'Invalid coupon code'
+          });
+        }
+
+        // Check if coupon is valid (active and not expired)
+        if (!coupon.isValid) {
+          let reason = 'Coupon is not valid';
+          if (coupon.status !== 'active') {
+            reason = 'Coupon is inactive';
+          } else if (coupon.isExpired) {
+            reason = 'Coupon has expired';
+          } else {
+            reason = 'Coupon is not yet active';
+          }
+          
+          return res.status(400).json({
+            success: false,
+            error: reason
+          });
+        }
+
+        // Check usage limit
+        if (coupon.usageLimit !== -1 && coupon.usedCount >= coupon.usageLimit) {
+          return res.status(400).json({
+            success: false,
+            error: 'Coupon usage limit exceeded'
+          });
+        }
+
+        // Check if user can use this coupon
+        const userCheck = coupon.canUserUseCoupon(req.user._id);
+        if (!userCheck.canUse) {
+          return res.status(400).json({
+            success: false,
+            error: userCheck.reason
+          });
+        }
+
+        // Check if coupon applies to cart items
+        // For cart, we need to check if coupon applies to all items or has applyToAll set
+        let canApplyToCart = false;
+        
+        if (coupon.applicableProducts.applyToAll || 
+            (coupon.applicableProducts.portfolios.length === 0 && 
+             coupon.applicableProducts.bundles.length === 0)) {
+          canApplyToCart = true;
+        } else {
+          // Check if all portfolio items in cart are covered by the coupon
+          const cartPortfolioIds = cart.items.map(item => item.portfolio.toString());
+          const applicablePortfolioIds = coupon.applicableProducts.portfolios.map(id => id.toString());
+          
+          canApplyToCart = cartPortfolioIds.every(portfolioId => 
+            applicablePortfolioIds.includes(portfolioId)
+          );
+        }
+
+        if (!canApplyToCart) {
+          return res.status(400).json({
+            success: false,
+            error: 'Coupon is not applicable to one or more items in your cart'
+          });
+        }
+
+        // Check for new users only restriction
+        if (coupon.userRestrictions.newUsersOnly) {
+          const hasAnySubscription = await Subscription.findOne({ user: req.user._id });
+          if (hasAnySubscription) {
+            return res.status(400).json({
+              success: false,
+              error: 'This coupon is only for new users'
+            });
+          }
+        }
+
+        // Calculate discount
+        const discountResult = coupon.calculateDiscount(originalTotal);
+        
+        if (discountResult.reason) {
+          return res.status(400).json({
+            success: false,
+            error: discountResult.reason
+          });
+        }
+
+        // Apply discount
+        finalTotal = discountResult.finalAmount;
+        discountApplied = discountResult.discount;
+        couponUsed = coupon._id;
+        couponDetails = {
+          code: coupon.code,
+          title: coupon.title,
+          description: coupon.description,
+          discountType: coupon.discountType,
+          discountValue: coupon.discountValue
+        };
+
+        logger.info('Coupon applied successfully in cart checkout', {
+          userId: req.user._id.toString(),
+          couponCode: coupon.code,
+          originalTotal,
+          discountApplied,
+          finalTotal,
+          cartItemsCount: cart.items.length
+        });
+
+      } catch (couponError) {
+        logger.error('Error processing coupon in cart checkout', {
+          error: couponError.message,
+          stack: couponError.stack,
+          userId: req.user._id.toString(),
+          couponCode
+        });
+        
+        return res.status(500).json({
+          success: false,
+          error: 'Failed to process coupon. Please try again.'
+        });
+      }
+    }
+
+    // Validate final total
+    if (finalTotal <= 0) {
+      return res.status(400).json({
+        success: false,
+        error: 'Invalid final amount after discount'
+      });
+    }
     
     const razorpay = await getRazorpayInstance();
+    const receipt = generateShortReceipt("cart", req.user._id);
+    
     const order = await razorpay.orders.create({
-      amount: Math.round(total * 100),
+      amount: Math.round(finalTotal * 100), // Use final total after discount
       currency: "INR",
-      receipt: generateShortReceipt("cart", req.user._id),
+      receipt,
       notes: { 
         userId: req.user._id.toString(), 
         cartCheckout: true, 
-        planType 
+        planType,
+        // Coupon related notes
+        couponCode: couponCode || null,
+        couponUsed: couponUsed?.toString() || null,
+        originalTotal: originalTotal.toString(),
+        discountApplied: discountApplied.toString(),
+        finalTotal: finalTotal.toString(),
+        // Cart items info for verification
+        itemCount: cart.items.length.toString(),
+        cartId: cart._id.toString()
       }
     });
 
-    res.status(201).json({
+    const responseData = {
       success: true,
       orderId: order.id,
-      amount: order.amount,
+      amount: order.amount, // This is in paisa (finalTotal * 100)
       currency: order.currency,
-      planType
+      planType,
+      // Pricing breakdown
+      originalTotal,
+      discountApplied,
+      finalTotal,
+      savings: discountApplied,
+      // Cart details
+      itemCount: cart.items.length,
+      items: cartItems
+    };
+
+    // Add coupon information to response
+    if (couponDetails) {
+      responseData.couponApplied = couponDetails;
+      responseData.message = `Coupon "${couponDetails.code}" applied successfully! You saved ₹${discountApplied} on your cart total.`;
+    }
+
+    logger.info('Cart checkout order created successfully with coupon support', {
+      userId: req.user._id.toString(),
+      orderId: order.id,
+      originalTotal,
+      finalTotal,
+      discountApplied,
+      couponCode: couponCode || 'none',
+      itemCount: cart.items.length
     });
+
+    res.status(201).json(responseData);
+    
   } catch (error) {
-    logger.error("Cart checkout error", error);
+    logger.error("Cart checkout error", {
+      error: error.message,
+      stack: error.stack,
+      userId: req.user._id?.toString(),
+      couponCode: req.body.couponCode
+    });
+    
     res.status(500).json({ 
       success: false, 
       error: error.message || "Cart checkout failed" 
     });
   }
 };
+
 
 /**
  * Get payment history

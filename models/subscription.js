@@ -61,6 +61,23 @@ const SubscriptionSchema = new Schema({
     required: true,
     index: true
   },
+
+
+  couponUsed: {
+  type: Schema.Types.ObjectId,
+  ref: 'Coupon',
+  default: null
+},
+discountApplied: {
+  type: Number,
+  default: 0,
+  min: 0
+},
+originalAmount: {
+  type: Number,
+  default: 0,
+  min: 0
+},
   lastPaymentAt: {
     type: Date,
     default: Date.now

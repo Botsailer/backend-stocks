@@ -732,9 +732,12 @@ dbAdapter.connect()
     // Routes
     app.use('/auth', authRoutes);
 app.use('/admin', require('./routes/admin'));
+//app.use('/digio', require('./routes/digioRoutes'));
 app.use('/api/user', require('./routes/userRoute'));
+
 app.use('/api/subscriptions', require('./routes/Subscription'));
 app.use('/api/admin/subscriptions', require('./routes/adminSubscription'));
+app.use('/api/admin/coupons', require('./routes/couponRoute'));
 app.use('/api/stock-symbols', require('./routes/stocksymbol'));
 app.use('/api/faqs', require('./routes/faqRoute'));
 app.use('/api/tips', require('./routes/tips'));                    
@@ -879,61 +882,6 @@ app.use('/api', require('./routes/Portfolio'));
           res.status(500).json({ error: 'Failed to send contact us message' });
         });
     });
-
-    /**
-     * @swagger
-     * /health:
-     *   get:
-     *     summary: System health check
-     *     description: |
-     *       Returns the overall health status of the application including database connectivity,
-     *       cron job status, and log cleanup information.
-     *     tags: [System]
-     *     responses:
-     *       200:
-     *         description: System health status
-     *         content:
-     *           application/json:
-     *             schema:
-     *               type: object
-     *               properties:
-     *                 status:
-     *                   type: string
-     *                   example: "ok"
-     *                   enum: [ok, degraded, error]
-     *                 cronStatus:
-     *                   type: object
-     *                   description: Status of all scheduled jobs
-     *                 dbStatus:
-     *                   type: string
-     *                   example: "connected"
-     *                   enum: [connected, disconnected]
-     *                 logCleanup:
-     *                   type: object
-     *                   properties:
-     *                     enabled:
-     *                       type: boolean
-     *                       example: true
-     *                     retention:
-     *                       type: string
-     *                       example: "14 days"
-     *                     schedule:
-     *                       type: string
-     *                       example: "Daily at 2:00 AM IST"
-     */
-    app.get('/health', (req, res) => {
-      res.json({
-        status: 'ok',
-        cronStatus: cronScheduler.getStatus(),
-        dbStatus: mongoose.connection.readyState === 1 ? 'connected' : 'disconnected',
-        logCleanup: {
-          enabled: true,
-          retention: '14 days',
-          schedule: 'Daily at 2:00 AM IST'
-        }
-      });
-    });
-
 
 
     /**

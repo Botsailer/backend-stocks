@@ -15,7 +15,6 @@ const CACHE_TTL = 5 * 60 * 1000; // 5 minutes
  * @returns {Promise<any>} Configuration value
  */
 async function getConfig(key, defaultValue = null) {
-  // Refresh cache if expired
   const now = Date.now();
   if (now - cacheTime > CACHE_TTL) {
     await refreshCache();
@@ -39,8 +38,8 @@ async function getConfig(key, defaultValue = null) {
     return process.env[key];
   }
   
-  // Return default value
-  return defaultValue;
+
+  return   defaultValue;
 }
 
 /**
