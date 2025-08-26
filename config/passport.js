@@ -33,13 +33,18 @@ module.exports = (passport) => {
     },
     async (payload, done) => {
       try {
-        const user = await db.findUser({ _id: payload.uid });
+        console.log('[JWT Strategy] Payload:', payload);
+        const user = await db.findUser({ _id: payload.uid || payload.id });
+        console.log('[JWT Strategy] User found:', !!user);
         if (!user) return done(null, false);
         // Enforce changedPasswordAt & tokenVersion
-        if (user.changedPasswordAt.getTime() > payload.iat*1000) return done(null, false);
-        if (payload.tokenVersion !== user.tokenVersion)          return done(null, false);
+        if (user.changedPasswordAt && user.changedPasswordAt.getTime() > payload.iat*1000) return done(null, false);
+        if (payload.tokenVersion && payload.tokenVersion !== user.tokenVersion) return done(null, false);
         return done(null, user);
-      } catch (err) { return done(err); }
+      } catch (err) { 
+        console.error('[JWT Strategy] Error:', err);
+        return done(err); 
+      }
     }
   ));
 

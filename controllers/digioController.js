@@ -67,13 +67,26 @@ async function digioRequest(method, url, data = {}, headers = {}) {
  */
 exports.uploadDocument = async (req, res) => {
   try {
-    const userId = req.user?.id;
+    console.log('[uploadDocument] Request received:', {
+      user: req.user,
+      body: req.body,
+      headers: req.headers.authorization
+    });
+    
+    const userId = req.user?.id || req.user?._id;
     const { fileUrl, fileName, signerEmail, signerName, signerPhone, reason } = req.body;
     
-    if (!userId || !fileUrl || !signerEmail || !signerName) {
+    if (!userId) {
+      return res.status(401).json({
+        success: false,
+        error: "Authentication required - user not found"
+      });
+    }
+    
+    if (!fileUrl || !signerEmail || !signerName) {
       return res.status(400).json({
         success: false,
-        error: "userId, fileUrl, signerEmail, and signerName are required"
+        error: "fileUrl, signerEmail, and signerName are required"
       });
     }
     
