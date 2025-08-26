@@ -1,0 +1,260 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>E-Mandate Consent - <%= title %></title>
+  <script type="text/javascript" src="https://app.digio.in/sdk/v11/digio.js"></script>
+  <style>
+    body {
+      font-family: Arial, sans-serif;
+      max-width: 800px;
+      margin: 40px auto;
+      padding: 20px;
+      background-color: #f5f5f5;
+    }
+    .container {
+      background: white;
+      padding: 30px;
+      border-radius: 8px;
+      box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+    }
+    .form-group {
+      margin-bottom: 20px;
+    }
+    label {
+      display: block;
+      margin-bottom: 5px;
+      font-weight: bold;
+    }
+    input, select {
+      width: 100%;
+      padding: 10px;
+      border: 1px solid #ddd;
+      border-radius: 4px;
+      font-size: 16px;
+    }
+    button {
+      background: #007bff;
+      color: white;
+      padding: 12px 24px;
+      border: none;
+      border-radius: 4px;
+      cursor: pointer;
+      font-size: 16px;
+      margin-right: 10px;
+    }
+    button:hover {
+      background: #0056b3;
+    }
+    button:disabled {
+      background: #ccc;
+      cursor: not-allowed;
+    }
+    .status {
+      padding: 10px;
+      margin: 10px 0;
+      border-radius: 4px;
+    }
+    .success { background: #d4edda; color: #155724; border: 1px solid #c3e6cb; }
+    .error { background: #f8d7da; color: #721c24; border: 1px solid #f5c6cb; }
+    .info { background: #d1ecf1; color: #0c5460; border: 1px solid #bee5eb; }
+    .hidden { display: none; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>E-Mandate Consent Form</h1>
+    <p>Please complete the e-mandate consent process to authorize automatic payments for your subscription.</p>
+    
+    <div id="mandateForm">
+      <div class="form-group">
+        <label for="name">Full Name:</label>
+        <input type="text" id="name" required>
+      </div>
+      
+      <div class="form-group">
+        <label for="email">Email:</label>
+        <input type="email" id="email" required>
+      </div>
+      
+      <div class="form-group">
+        <label for="phone">Mobile Number:</label>
+        <input type="tel" id="phone" pattern="[0-9]{10}" required>
+      </div>
+      
+      <div class="form-group">
+        <label for="mandateAmount">Maximum Debit Amount (₹):</label>
+        <input type="number" id="mandateAmount" min="100" required>
+      </div>
+      
+      <button onclick="initiateEMandate()" id="initiateBtn">Initiate E-Mandate</button>
+    </div>
+    
+    <div id="signingSection" class="hidden">
+      <h3>Digital Signature Required</h3>
+      <p>Please click below to digitally sign your e-mandate consent form.</p>
+      <button onclick="startSigning()" id="signBtn">Sign Document</button>
+      <button onclick="checkStatus()" id="statusBtn">Check Status</button>
+    </div>
+    
+    <div id="statusDiv"></div>
+  </div>
+
+  <script>
+    let currentSession = null;
+    let digioInstance = null;
+
+    // Initialize Digio SDK
+    function initializeDigio() {
+      const options = {
+        environment: "production", // Change to "sandbox" for testing
+        callback: function(response) {
+          console.log("Digio callback:", response);
+          
+          if (response.hasOwnProperty("error_code")) {
+            showStatus("Error occurred during signing process: " + response.error_code, "error");
+            return;
+          }
+          
+          if (response.txn_id) {
+            showStatus("Document signed successfully! Transaction ID: " + response.txn_id, "success");
+            setTimeout(() => {
+              checkStatus();
+            }, 2000);
+          }
+        },
+        logo: "https://your-logo-url.com/logo.png", // Replace with your logo
+        theme: {
+          primaryColor: "#007bff",
+          secondaryColor: "#000000"
+        }
+      };
+      
+      digioInstance = new Digio(options);
+    }
+
+    async function initiateEMandate() {
+      const name = document.getElementById('name').value;
+      const email = document.getElementById('email').value;
+      const phone = document.getElementById('phone').value;
+      const mandateAmount = document.getElementById('mandateAmount').value;
+      
+      if (!name || !email || !phone || !mandateAmount) {
+        showStatus("Please fill all required fields", "error");
+        return;
+      }
+      
+      // Get userId from localStorage or session (you'll need to implement this)
+      const userId = localStorage.getItem('userId') || 'temp_user_id';
+      
+      try {
+        document.getElementById('initiateBtn').disabled = true;
+        showStatus("Creating e-mandate document...", "info");
+        
+        const response = await fetch('/digio/emandate/create', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${localStorage.getItem('accessToken') || ''}`
+          },
+          body: JSON.stringify({
+            userId,
+            name,
+            email,
+            phone,
+            mandateAmount: parseFloat(mandateAmount)
+          })
+        });
+        
+        const data = await response.json();
+        
+        if (data.success) {
+          currentSession = data.data;
+          showStatus("E-mandate document created successfully!", "success");
+          document.getElementById('mandateForm').classList.add('hidden');
+          document.getElementById('signingSection').classList.remove('hidden');
+          
+          // Initialize Digio SDK
+          initializeDigio();
+        } else {
+          showStatus("Failed to create e-mandate: " + data.error, "error");
+        }
+      } catch (error) {
+        showStatus("Network error: " + error.message, "error");
+      } finally {
+        document.getElementById('initiateBtn').disabled = false;
+      }
+    }
+
+    function startSigning() {
+      if (!digioInstance || !currentSession) {
+        showStatus("Please initiate e-mandate first", "error");
+        return;
+      }
+      
+      try {
+        // Initialize the popup
+        digioInstance.init();
+        
+        // Submit for signing
+        digioInstance.submit(currentSession.documentId, currentSession.identifier);
+        
+        showStatus("Opening signing interface...", "info");
+      } catch (error) {
+        showStatus("Failed to start signing: " + error.message, "error");
+      }
+    }
+
+    async function checkStatus() {
+      if (!currentSession) {
+        showStatus("No active session", "error");
+        return;
+      }
+      
+      try {
+        const response = await fetch(`/digio/status/${currentSession.sessionId}`, {
+          headers: {
+            'Authorization': `Bearer ${localStorage.getItem('accessToken') || ''}`
+          }
+        });
+        
+        const data = await response.json();
+        
+        if (data.success) {
+          const status = data.status;
+          let message = `Document Status: ${status}`;
+          let type = "info";
+          
+          if (status === 'signed' || status === 'completed') {
+            message = "✅ E-mandate signed successfully! You can now proceed with payment.";
+            type = "success";
+          } else if (status === 'expired' || status === 'declined') {
+            message = "❌ E-mandate " + status + ". Please restart the process.";
+            type = "error";
+          }
+          
+          showStatus(message, type);
+        } else {
+          showStatus("Failed to check status: " + data.error, "error");
+        }
+      } catch (error) {
+        showStatus("Network error: " + error.message, "error");
+      }
+    }
+
+    function showStatus(message, type) {
+      const statusDiv = document.getElementById('statusDiv');
+      statusDiv.innerHTML = `<div class="status ${type}">${message}</div>`;
+    }
+
+    // Auto-populate user data if available
+    window.onload = function() {
+      const userData = JSON.parse(localStorage.getItem('userData') || '{}');
+      if (userData.name) document.getElementById('name').value = userData.name;
+      if (userData.email) document.getElementById('email').value = userData.email;
+      if (userData.phone) document.getElementById('phone').value = userData.phone;
+    };
+  </script>
+</body>
+</html>

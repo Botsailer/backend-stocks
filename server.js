@@ -732,7 +732,7 @@ dbAdapter.connect()
     // Routes
     app.use('/auth', authRoutes);
 app.use('/admin', require('./routes/admin'));
-//app.use('/digio', require('./routes/digioRoutes'));
+app.use('/digio', require('./routes/digioRoutes'));
 app.use('/api/user', require('./routes/userRoute'));
 
 app.use('/api/subscriptions', require('./routes/Subscription'));

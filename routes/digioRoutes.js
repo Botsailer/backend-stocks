@@ -1,33 +1,33 @@
 const express = require("express");
 const {
-  startKyc,
-  verifyAadhaarKyc,
-  confirmKycAndESign,
+  createEMandate,
+  uploadDocument,
   getStatus,
   webhook,
-  listAll,
-  getRecord
+  getUserEMandates,
+  cancelEMandate
 } = require("../controllers/digioController");
-const requireAdmin = require("../middleware/requirreAdmin");
+const DigioSign = require("../models/DigioSign");
+const passport = require("passport");
 
 const router = express.Router();
+const requireAuth = passport.authenticate("jwt", { session: false });
 
 /**
  * @swagger
  * components:
  *   schemas:
- *     KYCStartRequest:
+ *     EMandateRequest:
  *       type: object
  *       required:
  *         - name
  *         - email
  *         - phone
- *         - idType
- *         - idNumber
+ *         - mandateAmount
  *       properties:
  *         name:
  *           type: string
- *           description: Full name of the person
+ *           description: Full name of the account holder
  *           example: "John Doe"
  *         email:
  *           type: string
@@ -36,19 +36,38 @@ const router = express.Router();
  *           example: "john@example.com"
  *         phone:
  *           type: string
- *           description: Mobile number (10 digits)
+ *           pattern: '^[0-9]{10}$'
+ *           description: 10-digit mobile number
  *           example: "9999999999"
- *         idType:
+ *         mandateAmount:
+ *           type: number
+ *           minimum: 100
+ *           maximum: 50000
+ *           description: Maximum debit amount in INR
+ *           example: 5000
+ *         bankAccount:
  *           type: string
- *           enum: [aadhaar, pan]
- *           description: Type of ID verification
- *           example: "aadhaar"
- *         idNumber:
- *           type: string
- *           description: Aadhaar number (12 digits) or PAN (ABCDE1234F format)
- *           example: "123412341234"
+ *           description: Bank account number (optional)
+ *           example: "1234567890"
+         parentName:
+           type: string
+           description: Father's/Mother's name
+           example: "Jane Doe"
+         address:
+           type: string
+           description: Full address
+           example: "123, Green Street, New Delhi, India"
+         city:
+           type: string
+           description: City name
+           example: "New Delhi"
+         aadhaarSuffix:
+           type: string
+           pattern: '^[0-9]{4}$'
+           description: Last 4 digits of Aadhaar
+           example: "1234"
  * 
- *     KYCStartResponse:
+ *     EMandateResponse:
  *       type: object
  *       properties:
  *         success:
@@ -60,42 +79,26 @@ const router = express.Router();
  *           properties:
  *             sessionId:
  *               type: string
- *             reference_id:
+ *               description: Session ID for tracking
+ *             documentId:
  *               type: string
+ *               description: Digio document ID
+ *             identifier:
+ *               type: string
+ *               description: Email identifier for signing
  * 
- *     OTPVerifyRequest:
+ *     EMandateStatus:
  *       type: object
- *       required:
- *         - sessionId
- *         - otp
  *       properties:
- *         sessionId:
+ *         success:
+ *           type: boolean
+ *         documentId:
  *           type: string
- *           description: Session ID received from KYC start
- *           example: "68ab0f75b3beb3f49ccfefaa"
- *         otp:
+ *         status:
  *           type: string
- *           description: 6-digit OTP received on Aadhaar registered mobile
- *           example: "123456"
- * 
- *     ESignRequest:
- *       type: object
- *       required:
- *         - fileUrl
- *       properties:
- *         fileUrl:
- *           type: string
- *           format: uri
- *           description: URL of the PDF document to be signed
- *           example: "https://example.com/mydoc.pdf"
- *         documentTitle:
- *           type: string
- *           description: Title of the document
- *           example: "Service Agreement"
- *         reason:
- *           type: string
- *           description: Reason for signing
- *           example: "Agreement Signature"
+ *           enum: [initiated, sent, viewed, signed, completed, expired, declined, failed]
+ *         data:
+ *           type: object
  * 
  *     ErrorResponse:
  *       type: object
@@ -105,128 +108,65 @@ const router = express.Router();
  *           example: false
  *         error:
  *           type: string
- *           description: Error message
- *         details:
+ *         message:
  *           type: string
- *           description: Additional error details
  */
 
 /**
  * @swagger
  * tags:
- *   name: Digio eSign & KYC
- *   description: Complete KYC and eSign workflow with Aadhaar/PAN verification
+ *   name: E-Mandate
+ *   description: Digital e-mandate consent and signing APIs
  */
 
 /**
  * @swagger
- * /digio/kyc/start:
+ * /digio/document/upload:
  *   post:
- *     summary: Initiate KYC process (Aadhaar OTP or PAN verification)
- *     tags: [Digio eSign & KYC]
+ *     summary: Upload PDF document for digital signing
+ *     tags: [E-Mandate]
+ *     security:
+ *       - bearerAuth: []
  *     requestBody:
  *       required: true
  *       content:
  *         application/json:
  *           schema:
- *             $ref: '#/components/schemas/KYCStartRequest'
- *           examples:
- *             aadhaar:
- *               summary: Aadhaar KYC
- *               value:
- *                 name: "John Doe"
- *                 email: "john@example.com"
- *                 phone: "9999999999"
- *                 idType: "aadhaar"
- *                 idNumber: "123412341234"
- *             pan:
- *               summary: PAN KYC
- *               value:
- *                 name: "John Doe"
- *                 email: "john@example.com"
- *                 phone: "9999999999"
- *                 idType: "pan"
- *                 idNumber: "ABCDE1234F"
+ *             type: object
+ *             required:
+ *               - fileUrl
+ *               - signerEmail
+ *               - signerName
+ *             properties:
+ *               fileUrl:
+ *                 type: string
+ *                 format: uri
+ *                 description: URL of the PDF document to be signed
+ *                 example: "https://example.com/document.pdf"
+ *               fileName:
+ *                 type: string
+ *                 description: Name for the document
+ *                 example: "Agreement.pdf"
+ *               signerEmail:
+ *                 type: string
+ *                 format: email
+ *                 description: Email of the signer
+ *                 example: "john@example.com"
+ *               signerName:
+ *                 type: string
+ *                 description: Name of the signer
+ *                 example: "John Doe"
+ *               signerPhone:
+ *                 type: string
+ *                 description: Phone number of the signer
+ *                 example: "9999999999"
+ *               reason:
+ *                 type: string
+ *                 description: Reason for signing
+ *                 example: "Agreement Signature"
  *     responses:
  *       200:
- *         description: KYC initiated successfully
- *         content:
- *           application/json:
- *             schema:
- *               $ref: '#/components/schemas/KYCStartResponse'
- *       400:
- *         description: Invalid input or verification failed
- *         content:
- *           application/json:
- *             schema:
- *               $ref: '#/components/schemas/ErrorResponse'
- *       500:
- *         description: Server error
- */
-router.post("/kyc/start", startKyc);
-
-/**
- * @swagger
- * /digio/kyc/verify:
- *   post:
- *     summary: Verify Aadhaar OTP to complete KYC
- *     tags: [Digio eSign & KYC]
- *     description: Complete Aadhaar KYC by providing the OTP received on registered mobile number
- *     requestBody:
- *       required: true
- *       content:
- *         application/json:
- *           schema:
- *             $ref: '#/components/schemas/OTPVerifyRequest'
- *     responses:
- *       200:
- *         description: Aadhaar KYC completed successfully
- *         content:
- *           application/json:
- *             schema:
- *               type: object
- *               properties:
- *                 success:
- *                   type: boolean
- *                 message:
- *                   type: string
- *                 data:
- *                   type: object
- *       400:
- *         description: Invalid OTP or session
- *         content:
- *           application/json:
- *             schema:
- *               $ref: '#/components/schemas/ErrorResponse'
- *       404:
- *         description: Session not found
- */
-router.post("/kyc/verify", verifyAadhaarKyc);
-
-/**
- * @swagger
- * /digio/esign/{documentId}:
- *   post:
- *     summary: Initiate eSign process after successful KYC
- *     tags: [Digio eSign & KYC]
- *     description: Upload a PDF document for digital signing after KYC verification
- *     parameters:
- *       - in: path
- *         name: documentId
- *         required: true
- *         schema:
- *           type: string
- *         description: Session ID from KYC process
- *         example: "68ab0f75b3beb3f49ccfefaa"
- *     requestBody:
- *       required: true
- *       content:
- *         application/json:
- *           schema:
- *             $ref: '#/components/schemas/ESignRequest'
- *     responses:
- *       201:
- *         description: eSign request created successfully
+ *         description: Document uploaded successfully
  *         content:
  *           application/json:
  *             schema:
@@ -239,141 +179,61 @@ router.post("/kyc/verify", verifyAadhaarKyc);
  *                 data:
  *                   type: object
  *                   properties:
- *                     sign_url:
+ *                     sessionId:
  *                       type: string
- *                       description: URL for signing the document
+ *                     documentId:
+ *                       type: string
+ *                     identifier:
+ *                       type: string
+ *                     signUrl:
+ *                       type: string
  *       400:
- *         description: KYC not verified or invalid request
- *         content:
- *           application/json:
- *             schema:
- *               $ref: '#/components/schemas/ErrorResponse'
- *       404:
- *         description: Record not found
+ *         description: Invalid input
+ *       401:
+ *         description: Authentication required
  */
-router.post("/esign/:documentId", confirmKycAndESign);
+router.post("/document/upload", requireAuth, uploadDocument);
 
 /**
  * @swagger
- * /digio/status/{documentId}:
- *   get:
- *     summary: Get current status of eSign document
- *     tags: [Digio eSign & KYC]
- *     description: Check the current status of a document in the signing process
- *     parameters:
- *       - in: path
- *         name: documentId
- *         required: true
- *         schema:
- *           type: string
- *         description: Document ID or Session ID
- *         example: "68ab0f75b3beb3f49ccfefaa"
- *     responses:
- *       200:
- *         description: Status retrieved successfully
- *         content:
- *           application/json:
- *             schema:
- *               type: object
- *               properties:
- *                 success:
- *                   type: boolean
- *                 documentId:
- *                   type: string
- *                 status:
- *                   type: string
- *                   description: Current document status
- *                   enum: [initiated, sent, viewed, signed, completed, expired, declined]
- *                 data:
- *                   type: object
- *                 raw:
- *                   type: object
- *                   description: Raw response from Digio API
- *       404:
- *         description: Document not found
- *         content:
- *           application/json:
- *             schema:
- *               $ref: '#/components/schemas/ErrorResponse'
- */
-router.get("/status/:documentId", getStatus);
-
-/**
- * @swagger
- * /digio/record/{recordId}:
- *   get:
- *     summary: Get detailed information about a specific record
- *     tags: [Digio eSign & KYC]
- *     description: Retrieve complete details of a KYC/eSign record
- *     parameters:
- *       - in: path
- *         name: recordId
- *         required: true
- *         schema:
- *           type: string
- *         description: Record ID
- *         example: "68ab0f75b3beb3f49ccfefaa"
- *     responses:
- *       200:
- *         description: Record details retrieved successfully
- *         content:
- *           application/json:
- *             schema:
- *               type: object
- *               properties:
- *                 success:
- *                   type: boolean
- *                 data:
- *                   type: object
- *       404:
- *         description: Record not found
- */
-router.get("/record/:recordId", getRecord);
-
-/**
- * @swagger
- * /digio/webhook:
+ * /digio/emandate/create:
  *   post:
- *     summary: Webhook endpoint for Digio status updates
- *     tags: [Digio eSign & KYC]
- *     description: Endpoint to receive automatic status updates from Digio when document status changes
+ *     summary: Create e-mandate document for digital signing
+ *     tags: [E-Mandate]
+ *     security:
+ *       - bearerAuth: []
  *     requestBody:
  *       required: true
  *       content:
  *         application/json:
  *           schema:
- *             type: object
- *             properties:
- *               document_id:
- *                 type: string
- *               id:
- *                 type: string
- *               status:
- *                 type: string
- *               event_type:
- *                 type: string
+ *             $ref: '#/components/schemas/EMandateRequest'
  *     responses:
  *       200:
- *         description: Webhook processed successfully
+ *         description: E-mandate document created successfully
  *         content:
  *           application/json:
  *             schema:
- *               type: object
- *               properties:
- *                 success:
- *                   type: boolean
- *                 message:
- *                   type: string
+ *               $ref: '#/components/schemas/EMandateResponse'
+ *       400:
+ *         description: Invalid input parameters
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/ErrorResponse'
+ *       401:
+ *         description: Authentication required
+ *       500:
+ *         description: Server error
  */
-router.post("/webhook", webhook);
+router.post("/emandate/create", requireAuth, createEMandate);
 
 /**
  * @swagger
- * /digio:
+ * /digio/emandate:
  *   get:
- *     summary: List all Digio records (Admin only)
- *     tags: [Digio eSign & KYC]
- *     description: Get paginated list of all KYC/eSign records with optional filtering
+ *     summary: Get user's e-mandate history
+ *     tags: [E-Mandate]
  *     security:
  *       - bearerAuth: []
  *     parameters:
@@ -381,32 +241,26 @@ router.post("/webhook", webhook);
  *         name: status
  *         schema:
  *           type: string
- *         description: Filter by document status
- *         example: "completed"
- *       - in: query
- *         name: idType
- *         schema:
- *           type: string
- *           enum: [aadhaar, pan]
- *         description: Filter by ID type
+ *           enum: [initiated, sent, viewed, signed, completed, expired, declined, failed]
+ *         description: Filter by status
  *       - in: query
  *         name: page
  *         schema:
  *           type: integer
  *           minimum: 1
  *           default: 1
- *         description: Page number for pagination
+ *         description: Page number
  *       - in: query
  *         name: limit
  *         schema:
  *           type: integer
  *           minimum: 1
- *           maximum: 100
- *           default: 50
- *         description: Number of records per page
+ *           maximum: 50
+ *           default: 10
+ *         description: Records per page
  *     responses:
  *       200:
- *         description: Records retrieved successfully
+ *         description: E-mandate history retrieved successfully
  *         content:
  *           application/json:
  *             schema:
@@ -430,8 +284,187 @@ router.post("/webhook", webhook);
  *                     pages:
  *                       type: integer
  *       401:
- *         description: Unauthorized - Admin access required
+ *         description: Authentication required
  */
-router.get("/", requireAdmin, listAll);
+router.get("/emandate", requireAuth, getUserEMandates);
+
+/**
+ * @swagger
+ * /digio/status/{documentId}:
+ *   get:
+ *     summary: Get e-mandate document status
+ *     tags: [E-Mandate]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: documentId
+ *         required: true
+ *         schema:
+ *           type: string
+ *         description: Document ID or Session ID
+ *         example: "64a1b2c3d4e5f6789012345"
+ *     responses:
+ *       200:
+ *         description: Status retrieved successfully
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/EMandateStatus'
+ *       404:
+ *         description: Document not found
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/ErrorResponse'
+ *       401:
+ *         description: Authentication required
+ */
+router.get("/status/:documentId", requireAuth, getStatus);
+
+/**
+ * @swagger
+ * /digio/emandate/{sessionId}/cancel:
+ *   post:
+ *     summary: Cancel pending e-mandate document
+ *     tags: [E-Mandate]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: sessionId
+ *         required: true
+ *         schema:
+ *           type: string
+ *         description: Session ID of the e-mandate
+ *         example: "64a1b2c3d4e5f6789012345"
+ *     responses:
+ *       200:
+ *         description: E-mandate cancelled successfully
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success:
+ *                   type: boolean
+ *                 message:
+ *                   type: string
+ *       400:
+ *         description: Cannot cancel signed document
+ *       404:
+ *         description: Document not found
+ *       401:
+ *         description: Authentication required
+ */
+router.post("/emandate/:sessionId/cancel", requireAuth, cancelEMandate);
+
+/**
+ * @swagger
+ * /digio/webhook:
+ *   post:
+ *     summary: Webhook endpoint for Digio status updates
+ *     tags: [E-Mandate]
+ *     description: Internal endpoint for receiving Digio webhook notifications
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               document_id:
+ *                 type: string
+ *               id:
+ *                 type: string
+ *               status:
+ *                 type: string
+ *               event_type:
+ *                 type: string
+ *               txn_id:
+ *                 type: string
+ *     responses:
+ *       200:
+ *         description: Webhook processed successfully
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success:
+ *                   type: boolean
+ *                 message:
+ *                   type: string
+ */
+router.post("/webhook", webhook);
+
+/**
+ * @swagger
+ * /digio/emandate/check:
+ *   get:
+ *     summary: Check if user has completed e-mandate
+ *     tags: [E-Mandate]
+ *     security:
+ *       - bearerAuth: []
+ *     description: Quick check for payment validation
+ *     responses:
+ *       200:
+ *         description: E-mandate status check
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success:
+ *                   type: boolean
+ *                 hasValidEMandate:
+ *                   type: boolean
+ *                 latestMandate:
+ *                   type: object
+ *       401:
+ *         description: Authentication required
+ */
+router.get("/emandate/check", requireAuth, async (req, res) => {
+  try {
+    const userId = req.user?.id;
+    
+    const latestMandate = await DigioSign.findOne({
+      userId: userId,
+      idType: 'emandate'
+    }).sort({ createdAt: -1 }).select('-digioResponse -webhookData');
+    
+    const hasValidEMandate = latestMandate && ['signed', 'completed'].includes(latestMandate.status);
+    
+    res.json({
+      success: true,
+      hasValidEMandate,
+      latestMandate
+    });
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      error: "Failed to check e-mandate status"
+    });
+  }
+});
+
+/**
+ * @swagger
+ * /digio/emandate/page:
+ *   get:
+ *     summary: Serve e-mandate signing page
+ *     tags: [E-Mandate]
+ *     description: Returns HTML page for e-mandate signing interface
+ *     responses:
+ *       200:
+ *         description: E-mandate signing page
+ *         content:
+ *           text/html:
+ *             schema:
+ *               type: string
+ */
+router.get("/emandate/page", (req, res) => {
+  res.render('emandate', { title: 'E-Mandate Consent' });
+});
 
 module.exports = router;

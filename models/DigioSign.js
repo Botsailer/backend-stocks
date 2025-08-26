@@ -1,70 +1,75 @@
-// const mongoose = require("mongoose");
+const mongoose = require("mongoose");
 
-// const digioSignSchema = new mongoose.Schema({
-//   // Document identifiers
-//   documentId: { type: String },             // Set after initiating eSign
+const digioSignSchema = new mongoose.Schema({
+  // User reference
+  userId: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
   
-//   // User information
-//   name:       { type: String, required: true },
-//   email:      { type: String, required: true },
-//   phone:      { type: String, required: true },
+  // Document identifiers
+  documentId: { type: String },
   
-//   // KYC information
-//   idType:     { type: String, enum: ["aadhaar","pan"], required: true },
-//   idNumber:   { type: String, required: true },
-//   kycRequestId: { type: String },           // Holds OTP session/request ID for Aadhaar
-//   kycVerified:  { type: Boolean, default: false },
+  // User information
+  name: { type: String, required: true },
+  email: { type: String, required: true },
+  phone: { type: String, required: true },
   
-//   // Status tracking
-//   status:       { 
-//     type: String, 
-//     default: "pending",
-//     enum: ["pending", "kyc_initiated", "kyc_verified", "kyc_failed", "esign_initiated", "esign_sent", "esign_viewed", "esign_signed", "completed", "expired", "declined", "failed"]
-//   },
+  // E-mandate specific fields
+  mandateAmount: { type: Number },
+  bankAccount: { type: String },
   
-//   // API responses and webhook data
-//   digioResponse: {
-//     type: Object,
-//     default: {}
-//   },
-//   webhookData: Object,
+  // KYC information (for compatibility)
+  idType: { type: String, enum: ["aadhaar", "pan", "emandate", "document"], required: true },
+  idNumber: { type: String, required: true },
+  kycRequestId: { type: String },
+  kycVerified: { type: Boolean, default: false },
   
-//   // Additional tracking fields (optional but helpful)
-//   lastWebhookAt: { type: Date },
-//   kycCompletedAt: { type: Date },
-//   esignCompletedAt: { type: Date },
-//   signedDocumentUrl: { type: String },      // URL of the signed document
+  // Status tracking
+  status: { 
+    type: String, 
+    default: "initiated",
+    enum: ["initiated", "sent", "viewed", "signed", "completed", "expired", "declined", "failed"]
+  },
   
-//   // Error tracking
-//   lastError: { type: String },
-//   errorCount: { type: Number, default: 0 },
+  // API responses and webhook data
+  digioResponse: {
+    type: Object,
+    default: {}
+  },
+  webhookData: Object,
   
-//   // Metadata
-//   ipAddress: { type: String },
-//   userAgent: { type: String }
-// }, { 
-//   timestamps: true,
-//   toJSON: { 
-//     transform: function(doc, ret) {
-//       // Remove sensitive data from JSON output
-//       delete ret.digioResponse;
-//       delete ret.webhookData;
-//       return ret;
-//     }
-//   }
-// });
+  // Tracking fields
+  lastWebhookAt: { type: Date },
+  signedAt: { type: Date },
+  signedDocumentUrl: { type: String },
+  
+  // Error tracking
+  lastError: { type: String },
+  errorCount: { type: Number, default: 0 },
+  
+  // Metadata
+  ipAddress: { type: String },
+  userAgent: { type: String }
+}, { 
+  timestamps: true,
+  toJSON: { 
+    transform: function(doc, ret) {
+      // Remove sensitive data from JSON output
+      delete ret.digioResponse;
+      delete ret.webhookData;
+      return ret;
+    }
+  }
+});
 
-// // Indexes for better query performance
-// digioSignSchema.index({ documentId: 1 });
-// digioSignSchema.index({ email: 1 });
-// digioSignSchema.index({ phone: 1 });
-// digioSignSchema.index({ idNumber: 1 });
-// digioSignSchema.index({ status: 1 });
-// digioSignSchema.index({ createdAt: -1 });
+// Indexes for better query performance
+digioSignSchema.index({ documentId: 1 });
+digioSignSchema.index({ userId: 1 });
+digioSignSchema.index({ email: 1 });
+digioSignSchema.index({ status: 1 });
+digioSignSchema.index({ createdAt: -1 });
 
-// // Virtual for display purposes
-// digioSignSchema.virtual('isCompleted').get(function() {
-//   return ['completed', 'esign_signed'].includes(this.status);
-// });
+// Virtual for display purposes
+digioSignSchema.virtual('isCompleted').get(function() {
+  return ['completed', 'signed'].includes(this.status);
+});
 
-// module.exports = mongoose.model("DigioSign", digioSignSchema);
+module.exports = mongoose.model("DigioSign", digioSignSchema);
