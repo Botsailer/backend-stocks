@@ -90,7 +90,7 @@ exports.uploadDocument = async (req, res) => {
       });
     }
     
-    const DIGIO_API_BASE = await getConfig("DIGIO_API_BASE", "https://ext.digio.in:444");
+    const DIGIO_API_BASE = await getConfig("DIGIO_API_BASE", "https://ext-gateway.digio.in");
     
     const documentPayload = {
       file_url: fileUrl,
@@ -209,7 +209,7 @@ exports.createEMandate = async (req, res) => {
       });
     }
 
-    const DIGIO_API_BASE = await getConfig("DIGIO_API_BASE", "https://app.digio.in");
+    const DIGIO_API_BASE = await getConfig("DIGIO_API_BASE", "https://ext-gateway.digio.in");
     
     // Create record for tracking
     const record = await DigioSign.create({ 
@@ -308,7 +308,7 @@ exports.getStatus = async (req, res) => {
       });
     }
 
-    const DIGIO_API_BASE = await getConfig("DIGIO_API_BASE", "https://app.digio.in");
+    const DIGIO_API_BASE = await getConfig("DIGIO_API_BASE", "https://ext-gateway.digio.in");
     
     try {
       const statusData = await digioRequest(
