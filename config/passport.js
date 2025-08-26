@@ -29,17 +29,26 @@ module.exports = (passport) => {
   // JWT
   passport.use(new JwtStrategy({
       jwtFromRequest: ExtractJwt.fromAuthHeaderAsBearerToken(),
-      secretOrKey:    process.env.ACCESS_TOKEN_SECRET
+      secretOrKey: process.env.ACCESS_TOKEN_SECRET || 'fallback-secret'
     },
     async (payload, done) => {
       try {
         console.log('[JWT Strategy] Payload:', payload);
-        const user = await db.findUser({ _id: payload.uid || payload.id });
+        console.log('[JWT Strategy] Secret:', process.env.ACCESS_TOKEN_SECRET ? 'SET' : 'NOT SET');
+        const userId = payload.uid || payload.id || payload.sub;
+        console.log('[JWT Strategy] Looking for user ID:', userId);
+        const user = await db.findUser({ _id: userId });
         console.log('[JWT Strategy] User found:', !!user);
         if (!user) return done(null, false);
         // Enforce changedPasswordAt & tokenVersion
-        if (user.changedPasswordAt && user.changedPasswordAt.getTime() > payload.iat*1000) return done(null, false);
-        if (payload.tokenVersion && payload.tokenVersion !== user.tokenVersion) return done(null, false);
+        if (user.changedPasswordAt && user.changedPasswordAt.getTime() > payload.iat*1000) {
+          console.log('[JWT Strategy] Token expired due to password change');
+          return done(null, false);
+        }
+        if (payload.tokenVersion !== undefined && payload.tokenVersion !== user.tokenVersion) {
+          console.log('[JWT Strategy] Token version mismatch:', payload.tokenVersion, 'vs', user.tokenVersion);
+          return done(null, false);
+        }
         return done(null, user);
       } catch (err) { 
         console.error('[JWT Strategy] Error:', err);

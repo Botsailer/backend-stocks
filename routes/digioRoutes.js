@@ -11,7 +11,16 @@ const DigioSign = require("../models/DigioSign");
 const passport = require("passport");
 
 const router = express.Router();
-const requireAuth = passport.authenticate("jwt", { session: false });
+const requireAuth = (req, res, next) => {
+  console.log('[Auth Middleware] Headers:', req.headers.authorization);
+  passport.authenticate("jwt", { session: false }, (err, user, info) => {
+    console.log('[Auth Middleware] Result:', { err, user: !!user, info });
+    if (err) return next(err);
+    if (!user) return res.status(401).json({ success: false, error: 'Unauthorized', info });
+    req.user = user;
+    next();
+  })(req, res, next);
+};
 
 /**
  * @swagger
