@@ -49,23 +49,23 @@ const requireAuth = passport.authenticate("jwt", { session: false });
  *           type: string
  *           description: Bank account number (optional)
  *           example: "1234567890"
-         parentName:
-           type: string
-           description: Father's/Mother's name
-           example: "Jane Doe"
-         address:
-           type: string
-           description: Full address
-           example: "123, Green Street, New Delhi, India"
-         city:
-           type: string
-           description: City name
-           example: "New Delhi"
-         aadhaarSuffix:
-           type: string
-           pattern: '^[0-9]{4}$'
-           description: Last 4 digits of Aadhaar
-           example: "1234"
+ *         parentName:
+ *           type: string
+ *           description: Father's/Mother's name
+ *           example: "Jane Doe"
+ *         address:
+ *           type: string
+ *           description: Full address
+ *           example: "123, Green Street, New Delhi, India"
+ *         city:
+ *           type: string
+ *           description: City name
+ *           example: "New Delhi"
+ *         aadhaarSuffix:
+ *           type: string
+ *           pattern: '^[0-9]{4}$'
+ *           description: Last 4 digits of Aadhaar
+ *           example: "1234"
  * 
  *     EMandateResponse:
  *       type: object

@@ -15,10 +15,10 @@ async function createTransporter() {
       pass: config.pass
     },
     connectionTimeout: 10000,
-    // tls: {
-    //   rejectUnauthorized: false
-    // },
-    debug: true
+    tls: {
+      rejectUnauthorized: false
+    },
+    debug: false
   });
 }
 
