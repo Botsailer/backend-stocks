@@ -90,7 +90,7 @@ exports.uploadDocument = async (req, res) => {
       });
     }
     
-    const DIGIO_API_BASE = await getConfig("DIGIO_API_BASE", "https://app.digio.in");
+    const DIGIO_API_BASE = await getConfig("DIGIO_API_BASE", "https://ext.digio.in:444");
     
     const documentPayload = {
       file_url: fileUrl,
@@ -107,6 +107,9 @@ exports.uploadDocument = async (req, res) => {
       send_sign_link: false,
       embedded_signing: true
     };
+    
+    console.log(`[DIGIO] API Base: ${DIGIO_API_BASE}`);
+    console.log(`[DIGIO] Document payload:`, documentPayload);
     
     const docResponse = await digioRequest(
       "post",
