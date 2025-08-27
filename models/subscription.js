@@ -73,17 +73,25 @@ discountApplied: {
   default: 0,
   min: 0
 },
-originalAmount: {
-  type: Number,
-  default: 0,
-  min: 0
-},
+  originalAmount: {
+    type: Number,
+    default: 0,
+    min: 0
+  },
+  gstAmount: {
+    type: Number,
+    default: 0,
+    min: 0
+  },
+  gstInclusiveAmount: {
+    type: Number,
+    default: 0,
+    min: 0
+  },
   lastPaymentAt: {
     type: Date,
     default: Date.now
-  },
-  
-  // Payment references
+  },  // Payment references
   paymentId: String,
   orderId: String,
   razorpaySubscriptionId: String,

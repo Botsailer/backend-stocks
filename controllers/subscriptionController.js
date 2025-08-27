@@ -1190,20 +1190,27 @@ exports.createEmandate = async (req, res) => {
 
     const monthlyAmount = Math.round(finalYearlyAmount / 12);
     
-    // Validate monthly amount after discount
-    if (monthlyAmount < 10) {
-      logger.error("EMandate creation failed: Monthly amount too low after discount", {
+    // Apply 18% GST for eMandate
+    const gstRate = 0.18;
+    const gstAmount = Math.round(monthlyAmount * gstRate);
+    const gstInclusiveMonthlyAmount = monthlyAmount + gstAmount;
+    
+    // Validate GST-inclusive monthly amount after discount
+    if (gstInclusiveMonthlyAmount < 10) {
+      logger.error("EMandate creation failed: GST-inclusive monthly amount too low after discount", {
         userId: userId.toString(),
         originalYearlyAmount,
         finalYearlyAmount,
         monthlyAmount,
+        gstAmount,
+        gstInclusiveMonthlyAmount,
         discountApplied,
         productType,
         productId: productId.toString()
       });
       return res.status(400).json({
         success: false,
-        error: `Monthly amount (₹${monthlyAmount}) is too low after discount. Minimum ₹10 required.`,
+        error: `GST-inclusive monthly amount (₹${gstInclusiveMonthlyAmount}) is too low after discount. Minimum ₹10 required.`,
         code: "AMOUNT_TOO_LOW"
       });
     }
@@ -1256,7 +1263,7 @@ exports.createEmandate = async (req, res) => {
     // Create subscription plan with enhanced error handling
     let plan;
     try {
-      plan = await createSubscriptionPlan(monthlyAmount * 100);
+      plan = await createSubscriptionPlan(gstInclusiveMonthlyAmount * 100);
       
       if (!plan || !plan.id) {
         throw new Error("Failed to create subscription plan");
@@ -1266,13 +1273,15 @@ exports.createEmandate = async (req, res) => {
         userId: userId.toString(),
         planId: plan.id,
         monthlyAmount,
+        gstAmount,
+        gstInclusiveMonthlyAmount,
         planAmount: plan.item.amount
       });
       
     } catch (error) {
       logger.error("EMandate creation failed: Plan creation error", {
         userId: userId.toString(),
-        monthlyAmount,
+        gstInclusiveMonthlyAmount,
         error: error.message,
         stack: error.stack
       });
@@ -1335,7 +1344,11 @@ exports.createEmandate = async (req, res) => {
         couponUsed: couponUsed?.toString() || null,
         originalYearlyAmount: originalYearlyAmount.toString(),
         discountApplied: discountApplied.toString(),
-        finalYearlyAmount: finalYearlyAmount.toString()
+        finalYearlyAmount: finalYearlyAmount.toString(),
+        // GST related notes
+        gstRate: gstRate.toString(),
+        gstAmount: gstAmount.toString(),
+        gstInclusiveMonthlyAmount: gstInclusiveMonthlyAmount.toString()
       }
     };
 
@@ -1347,6 +1360,8 @@ exports.createEmandate = async (req, res) => {
       startAt,
       expireBy,
       monthlyAmount,
+      gstAmount,
+      gstInclusiveMonthlyAmount,
       originalYearlyAmount,
       finalYearlyAmount,
       discountApplied
@@ -1415,6 +1430,7 @@ exports.createEmandate = async (req, res) => {
           }
           
           for (const portfolio of product.portfolios) {
+            const gstInclusiveAmountPerPortfolio = Math.round(gstInclusiveMonthlyAmount / product.portfolios.length);
             const dbSubscription = await Subscription.findOneAndUpdate(
               { 
                 user: userId, 
@@ -1429,9 +1445,11 @@ exports.createEmandate = async (req, res) => {
                 portfolio: portfolio._id,
                 type: "recurring",
                 status: "pending",
-                amount: Math.round(monthlyAmount / product.portfolios.length),
+                amount: gstInclusiveAmountPerPortfolio,
                 originalAmount: Math.round(originalYearlyAmount / product.portfolios.length / 12),
                 discountApplied: Math.round(discountApplied / product.portfolios.length / 12),
+                gstAmount: Math.round(gstAmount / product.portfolios.length),
+                gstInclusiveAmount: gstInclusiveAmountPerPortfolio,
                 category: portfolio.PortfolioCategory ? portfolio.PortfolioCategory.toLowerCase() : category,
                 planType: "yearly",
                 expiresAt: commitmentEndDate,
@@ -1454,7 +1472,9 @@ exports.createEmandate = async (req, res) => {
             portfolioCount: product.portfolios.length,
             razorpaySubscriptionId: razorpaySubscription.id,
             couponCode: couponCode || 'none',
-            discountApplied
+            discountApplied,
+            gstAmount,
+            gstInclusiveMonthlyAmount
           });
           
         } else {
@@ -1472,9 +1492,11 @@ exports.createEmandate = async (req, res) => {
               portfolio: productType === "Portfolio" ? productId : null,
               type: "recurring",
               status: "pending",
-              amount: monthlyAmount,
+              amount: gstInclusiveMonthlyAmount,
               originalAmount: Math.round(originalYearlyAmount / 12),
               discountApplied: Math.round(discountApplied / 12),
+              gstAmount: gstAmount,
+              gstInclusiveAmount: gstInclusiveMonthlyAmount,
               category,
               planType: "yearly",
               expiresAt: commitmentEndDate,
@@ -1496,7 +1518,9 @@ exports.createEmandate = async (req, res) => {
             subscriptionId: dbSubscription._id.toString(),
             razorpaySubscriptionId: razorpaySubscription.id,
             couponCode: couponCode || 'none',
-            discountApplied
+            discountApplied,
+            gstAmount,
+            gstInclusiveMonthlyAmount
           });
         }
       });
@@ -1534,7 +1558,9 @@ exports.createEmandate = async (req, res) => {
       success: true, 
       subscriptionId: razorpaySubscription.id, 
       setupUrl: razorpaySubscription.short_url,
-      amount: monthlyAmount,
+      amount: gstInclusiveMonthlyAmount,
+      gstAmount: gstAmount,
+      gstInclusiveAmount: gstInclusiveMonthlyAmount,
       originalYearlyAmount,
       finalYearlyAmount,
       discountApplied,
@@ -1569,6 +1595,8 @@ exports.createEmandate = async (req, res) => {
       productType,
       productId: productId.toString(),
       monthlyAmount,
+      gstAmount,
+      gstInclusiveMonthlyAmount,
       originalYearlyAmount,
       finalYearlyAmount,
       discountApplied,

@@ -100,9 +100,32 @@ async function generateBill(subscriptionId, paymentDetails = {}) {
       throw new Error('Invalid subscription product type or missing product data');
     }
 
-    // Calculate tax
-    const taxAmount = Math.round((subtotal * TAX_RATE) / 100);
-    const totalAmount = subtotal + taxAmount;
+    // Calculate tax - only if amount is not already GST-inclusive
+    let taxAmount = 0;
+    let totalAmount = subtotal;
+    
+    // Check if subscription has GST fields (eMandate subscriptions)
+    if (subscription.gstAmount && subscription.gstInclusiveAmount) {
+      // Amount is already GST-inclusive
+      taxAmount = subscription.gstAmount;
+      totalAmount = subscription.gstInclusiveAmount;
+      logger.info('Using pre-calculated GST for bill', {
+        subscriptionId: subscription._id,
+        gstAmount: taxAmount,
+        gstInclusiveAmount: totalAmount
+      });
+    } else {
+      // Calculate tax for non-eMandate subscriptions
+      taxAmount = Math.round((subtotal * TAX_RATE) / 100);
+      totalAmount = subtotal + taxAmount;
+      logger.info('Calculated tax for bill', {
+        subscriptionId: subscription._id,
+        subtotal,
+        taxRate: TAX_RATE,
+        taxAmount,
+        totalAmount
+      });
+    }
 
     // Create bill
     const billData = {
