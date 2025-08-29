@@ -27,6 +27,14 @@ const userSchema = new mongoose.Schema({
     panUpdatedByUser: { type: Boolean, default: false },
   panUpdatedAt: { type: Date, default: null },
   
+  // PAN verification metadata
+  panVerified: { type: Boolean, default: false },
+  panVerificationStatus: { type: String, enum: ['unverified', 'verified', 'failed'], default: 'unverified' },
+  panVerifiedName: { type: String, default: null },
+  panVerifiedDob: { type: String, default: null }, // DD/MM/YYYY
+  panLastVerifiedAt: { type: Date, default: null },
+  panVerificationData: { type: Object, default: null },
+  
   // NEW for token invalidation
   changedPasswordAt: { type: Date, default: Date.now },
   tokenVersion:      { type: Number, default: 0 },

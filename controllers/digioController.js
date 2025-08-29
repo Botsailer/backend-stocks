@@ -515,3 +515,97 @@ exports.cancelEMandate = async (req, res) => {
     });
   }
 };
+
+/**
+ * Verify PAN details using Digio KYC API
+ */
+exports.verifyPAN = async (req, res) => {
+  try {
+    const { id_no, name, dob } = req.body;
+
+    // 1. Input Validation
+    if (!id_no || !name || !dob) {
+      return res.status(400).json({
+        code: 'MISSING_PARAMETERS',
+        message: 'id_no, name, and dob are required.'
+      });
+    }
+
+    const idNoUpper = id_no.toUpperCase();
+    if (!/^[A-Z]{5}[0-9]{4}[A-Z]$/.test(idNoUpper)) {
+      return res.status(400).json({
+        code: 'INVALID_PAN_FORMAT',
+        message: 'The provided PAN number has an invalid format.'
+      });
+    }
+
+    if (!/^\d{2}\/\d{2}\/\d{4}$/.test(dob)) {
+      return res.status(400).json({
+        code: 'INVALID_DOB_FORMAT',
+        message: 'The date of birth format must be DD/MM/YYYY.'
+      });
+    }
+
+    // 2. Get configuration
+    const DIGIO_PAN_BASE_URL = await getConfig("DIGIO_BASE_URL", "https://api.digio.in");
+    const DIGIO_PAN_ENDPOINT = await getConfig("DIGIO_PAN_ENDPOINT", "/v3/client/kyc/fetch_id_data/PAN");
+
+    // 3. Prepare request payload
+    const payload = {
+      id_no: idNoUpper,
+      name,
+      dob,
+      unique_request_id: `REQ_${Date.now()}`
+    };
+
+    const fullApiUrl = `${DIGIO_PAN_BASE_URL}${DIGIO_PAN_ENDPOINT}`;
+    console.log(`[PAN_VERIFY] Attempting to verify PAN at: ${fullApiUrl}`);
+
+    // 4. Make API Call using existing helper
+    const responseData = await digioRequest("post", fullApiUrl, payload, {
+      timeout: 15000
+    });
+
+    
+    return res.status(200).json({
+      success: true,
+      message: 'PAN details retrieved successfully.',
+      data: responseData
+    });
+
+  } catch (error) {
+    console.error('[PAN_VERIFY] Digio API Error:', {
+      message: error.message,
+      response: error.response?.data,
+      status: error.response?.status
+    });
+
+    const status = error.response?.status || 500;
+    const errorData = error.response?.data;
+
+    // Specific handling for the "Not Configured" error
+    if (status === 500 && errorData?.code === 'SYSTEM_ERROR' && errorData?.message === 'Credentials not configured for this Id') {
+      return res.status(503).json({
+        code: 'ACCOUNT_NOT_CONFIGURED',
+        message: "Your Digio account is not enabled for this PAN verification service.",
+        suggestion: "This is an account configuration issue, not a code issue. Please contact Digio support and ask them to enable the KRA/PAN service for your Client ID.",
+        digio_transaction_id: errorData.details
+      });
+    }
+
+    // Friendly message for common name mismatch
+    const rawMessage = (errorData?.message || '').toString().toLowerCase();
+    const looksLikeNameMismatch = ['name mismatch','name does not match','name not matching','mismatch in name']
+      .some(s => rawMessage.includes(s));
+    const friendlyMessage = looksLikeNameMismatch
+      ? 'PAN and DOB look correct, but the name did not match. Please enter your full legal name exactly as on PAN, including middle name if any.'
+      : (errorData?.message || 'An unexpected error occurred.');
+
+    // Generic error handler for other issues
+    return res.status(status).json({
+      code: errorData?.code || (looksLikeNameMismatch ? 'NAME_MISMATCH' : 'API_REQUEST_FAILED'),
+      message: friendlyMessage,
+      details: errorData?.details || error.message
+    });
+  }
+};

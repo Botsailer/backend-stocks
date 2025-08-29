@@ -84,7 +84,7 @@ exports.updateUser = async (req, res) => {
 
 exports.updateUserPAN = async (req, res) => {
   try {
-    const { userId, pandetails, reason } = req.body;
+    const { userId, pandetails, reason, name, dob } = req.body;
     
     if (!req.user.isAdmin) {
       return res.status(403).json({ error: 'Admin access required' });
@@ -95,18 +95,50 @@ exports.updateUserPAN = async (req, res) => {
     }
     
     const panCardRegex = /^[A-Z]{5}[0-9]{4}[A-Z]{1}$/;
-    if (!panCardRegex.test(pandetails.trim())) {
+    const pan = pandetails.trim().toUpperCase();
+    if (!panCardRegex.test(pan)) {
       return res.status(400).json({ 
         error: 'Invalid PAN card format. Must be AAAAA9999A (5 letters, 4 digits, 1 letter)' 
       });
     }
-    
+
+    // PAN verification is mandatory for admin updates too
+    if (!name || !dob) {
+      return res.status(400).json({ error: 'name and dob (DD/MM/YYYY) are required for PAN verification' });
+    }
+
+    const { digioPanVerify } = require('../services/digioPanService');
+    let verification;
+    try {
+      verification = await digioPanVerify({ id_no: pan, name, dob });
+    } catch (e) {
+      const rawMessage = (e && (e.data?.message || e.message || '')).toString().toLowerCase();
+      const looksLikeNameMismatch =
+        ['name mismatch', 'name does not match', 'name not matching', 'mismatch in name']
+          .some(s => rawMessage.includes(s)) || (e.code === 'NAME_MISMATCH');
+      const humanMsg = looksLikeNameMismatch
+        ? 'PAN and DOB look correct, but the name did not match. Please enter the customer\'s full legal name exactly as on PAN, including middle name if any.'
+        : 'PAN verification failed';
+      return res.status(400).json({
+        error: humanMsg,
+        code: e.code || (looksLikeNameMismatch ? 'NAME_MISMATCH' : 'PAN_VERIFY_FAILED'),
+        details: e.data || e.message
+      });
+    }
+
+    const User = require('../models/user');
     const updatedUser = await User.findByIdAndUpdate(
       userId,
       { 
         $set: { 
-          pandetails: pandetails.trim().toUpperCase(),
-          panUpdatedAt: new Date()
+          pandetails: pan,
+          panUpdatedAt: new Date(),
+          panVerified: true,
+          panVerificationStatus: 'verified',
+          panVerifiedName: name,
+          panVerifiedDob: dob,
+          panLastVerifiedAt: new Date(),
+          panVerificationData: verification || {}
         }
       },
       { new: true, runValidators: true }

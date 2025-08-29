@@ -988,7 +988,6 @@ exports.createEmandate = async (req, res) => {
   const userId = req.user._id;
   
   try {
-    // Validate required fields
     if (!productType || !productId) {
       logger.error("EMandate creation failed: Missing required fields", {
         userId: userId.toString(),
@@ -1003,7 +1002,6 @@ exports.createEmandate = async (req, res) => {
       });
     }
 
-    // Log emandate creation attempt
     logger.info("EMandate creation started", {
       userId: userId.toString(),
       productType,
@@ -1013,7 +1011,6 @@ exports.createEmandate = async (req, res) => {
       timestamp: new Date().toISOString()
     });
 
-    // ✨ ENHANCED: Check subscription status with renewal logic
     const subscriptionStatus = await checkSubscriptionStatus(userId, productType, productId);
     
     if (subscriptionStatus.hasActiveSubscription && !subscriptionStatus.canRenew) {
@@ -1032,7 +1029,6 @@ exports.createEmandate = async (req, res) => {
       });
     }
 
-    // Get product info with enhanced validation
     let product, originalYearlyAmount, category;
     try {
       const productInfo = await getProductInfo(productType, productId, "yearly");
@@ -1040,7 +1036,6 @@ exports.createEmandate = async (req, res) => {
       originalYearlyAmount = productInfo.amount;
       category = productInfo.category;
       
-      // Validate amount for emandate
       if (!originalYearlyAmount || originalYearlyAmount < 100) {
         throw new Error(`Invalid yearly amount: ${originalYearlyAmount}. Minimum ₹100 required for emandate.`);
       }
@@ -1063,7 +1058,6 @@ exports.createEmandate = async (req, res) => {
       });
     }
 
-    // ✨ NEW: Apply coupon if provided for eMandate
     let finalYearlyAmount = originalYearlyAmount;
     let discountApplied = 0;
     let couponUsed = null;
@@ -1081,7 +1075,6 @@ exports.createEmandate = async (req, res) => {
           });
         }
 
-        // Check if coupon is valid (active and not expired)
         if (!coupon.isValid) {
           let reason = 'Coupon is not valid';
           if (coupon.status !== 'active') {
@@ -1099,7 +1092,6 @@ exports.createEmandate = async (req, res) => {
           });
         }
 
-        // Check usage limit
         if (coupon.usageLimit !== -1 && coupon.usedCount >= coupon.usageLimit) {
           return res.status(400).json({
             success: false,
@@ -1108,7 +1100,6 @@ exports.createEmandate = async (req, res) => {
           });
         }
 
-        // Check if user can use this coupon
         const userCheck = coupon.canUserUseCoupon(userId);
         if (!userCheck.canUse) {
           return res.status(400).json({
@@ -1118,7 +1109,6 @@ exports.createEmandate = async (req, res) => {
           });
         }
 
-        // Check if coupon applies to the product
         if (!coupon.appliesTo(productType, productId)) {
           return res.status(400).json({
             success: false,
@@ -1127,7 +1117,6 @@ exports.createEmandate = async (req, res) => {
           });
         }
 
-        // Check for new users only restriction
         if (coupon.userRestrictions.newUsersOnly) {
           const hasAnySubscription = await Subscription.findOne({ user: userId });
           if (hasAnySubscription) {
@@ -1139,7 +1128,6 @@ exports.createEmandate = async (req, res) => {
           }
         }
 
-        // Calculate discount
         const discountResult = coupon.calculateDiscount(originalYearlyAmount);
         
         if (discountResult.reason) {
@@ -1150,7 +1138,6 @@ exports.createEmandate = async (req, res) => {
           });
         }
 
-        // Apply discount
         finalYearlyAmount = discountResult.finalAmount;
         discountApplied = discountResult.discount;
         couponUsed = coupon._id;
@@ -1190,12 +1177,10 @@ exports.createEmandate = async (req, res) => {
 
     const monthlyAmount = Math.round(finalYearlyAmount / 12);
     
-    // Apply 18% GST for eMandate
     const gstRate = 0.18;
     const gstAmount = Math.round(monthlyAmount * gstRate);
     const gstInclusiveMonthlyAmount = monthlyAmount + gstAmount;
     
-    // Validate GST-inclusive monthly amount after discount
     if (gstInclusiveMonthlyAmount < 10) {
       logger.error("EMandate creation failed: GST-inclusive monthly amount too low after discount", {
         userId: userId.toString(),
@@ -1215,7 +1200,6 @@ exports.createEmandate = async (req, res) => {
       });
     }
 
-    // Get Razorpay instance with error handling
     let razorpay;
     try {
       razorpay = await getRazorpayInstance();
@@ -1231,7 +1215,6 @@ exports.createEmandate = async (req, res) => {
       });
     }
 
-    // Create or fetch customer with enhanced error handling
     let customer;
     try {
       customer = await createOrFetchCustomer(razorpay, req.user);
@@ -1260,7 +1243,6 @@ exports.createEmandate = async (req, res) => {
       });
     }
 
-    // Create subscription plan with enhanced error handling
     let plan;
     try {
       plan = await createSubscriptionPlan(gstInclusiveMonthlyAmount * 100);
@@ -1296,15 +1278,13 @@ exports.createEmandate = async (req, res) => {
     const commitmentEndDate = new Date();
     commitmentEndDate.setFullYear(startDate.getFullYear() + 1);
 
-    // ✨ ENHANCED: Apply compensation if renewing
     if (subscriptionStatus.canRenew) {
       const compensation = calculateCompensatedEndDate("yearly", subscriptionStatus.existingSubscription.expiresAt);
       commitmentEndDate.setTime(compensation.endDate.getTime());
     }
 
-    // Validate dates with proper buffer time
     const now = Math.floor(Date.now() / 1000);
-    const startAt = now + 300; // Start 5 minutes from now to avoid timing issues
+    const startAt = now + 300; 
     const expireBy = Math.floor(commitmentEndDate.getTime() / 1000);
     
     if (expireBy <= startAt) {
@@ -1339,13 +1319,11 @@ exports.createEmandate = async (req, res) => {
         existingSubscriptionId: subscriptionStatus.existingSubscription?._id?.toString() || null,
         created_at: new Date().toISOString(),
         user_email: req.user.email,
-        // Coupon related notes
         couponCode: couponCode || null,
         couponUsed: couponUsed?.toString() || null,
         originalYearlyAmount: originalYearlyAmount.toString(),
         discountApplied: discountApplied.toString(),
         finalYearlyAmount: finalYearlyAmount.toString(),
-        // GST related notes
         gstRate: gstRate.toString(),
         gstAmount: gstAmount.toString(),
         gstInclusiveMonthlyAmount: gstInclusiveMonthlyAmount.toString()
@@ -1367,7 +1345,7 @@ exports.createEmandate = async (req, res) => {
       discountApplied
     });
 
-    // Create Razorpay subscription with enhanced error handling
+
     let razorpaySubscription;
     try {
       razorpaySubscription = await razorpay.subscriptions.create(subscriptionParams);
@@ -1418,7 +1396,6 @@ exports.createEmandate = async (req, res) => {
       });
     }
     
-    // ✨ ENHANCED: Save to DB with compensation logic and coupon information
     const session = await mongoose.startSession();
     let dbSubscriptions = [];
     

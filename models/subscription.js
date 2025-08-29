@@ -91,7 +91,7 @@ discountApplied: {
   lastPaymentAt: {
     type: Date,
     default: Date.now
-  },  // Payment references
+  }, 
   paymentId: String,
   orderId: String,
   razorpaySubscriptionId: String,

@@ -5,6 +5,7 @@ const Cart = require('../models/carts');
 const PaymentHistory = require('../models/paymenthistory');
 const Tip = require('../models/portfolioTips');
 const Bundle = require('../models/bundle');
+const { digioPanVerify } = require('../services/digioPanService');
 
 
 // Function is now defined at the top of the file
@@ -123,6 +124,13 @@ exports.getProfile = async (req, res) => {
         canUpdatePAN: !user.panUpdatedByUser || user.isAdmin,
         lastUpdated: user.panUpdatedAt,
         updatedByUser: user.panUpdatedByUser
+      },
+      panVerification: {
+        verified: !!user.panVerified,
+        status: user.panVerificationStatus || 'unverified',
+        verifiedName: user.panVerifiedName || null,
+        verifiedDob: user.panVerifiedDob || null,
+        lastVerifiedAt: user.panLastVerifiedAt || null
       }
     });
   } catch (err) {
@@ -164,7 +172,7 @@ exports.updateProfile = async (req, res) => {
 
     if (updates.pandetails && updates.pandetails.trim() !== '') {
       const panCardRegex = /^[A-Z]{5}[0-9]{4}[A-Z]{1}$/;
-      if (!panCardRegex.test(updates.pandetails.trim())) {
+      if (!panCardRegex.test(updates.pandetails.trim().toUpperCase())) {
         return res.status(400).json({ 
           error: 'Invalid PAN card format. Must be AAAAA9999A' 
         });
@@ -178,12 +186,45 @@ exports.updateProfile = async (req, res) => {
         });
       }
       
-      updates.pandetails = updates.pandetails.trim().toUpperCase();
+      const pan = updates.pandetails.trim().toUpperCase();
+      const dob = updates.panDob || req.body.panDob; // expected DD/MM/YYYY
+      const nameForPan = updates.fullName || currentUser.fullName || updates.name;
+
+      if (!nameForPan || !dob) {
+        return res.status(400).json({
+          error: 'fullName and panDob (DD/MM/YYYY) are required to verify PAN before saving'
+        });
+      }
+
+      try {
+        const verifyResp = await digioPanVerify({ id_no: pan, name: nameForPan, dob });
+        updates.pandetails = pan;
+        updates.panVerified = true;
+        updates.panVerificationStatus = 'verified';
+        updates.panVerifiedName = nameForPan;
+        updates.panVerifiedDob = dob;
+        updates.panLastVerifiedAt = new Date();
+        updates.panVerificationData = verifyResp || {};
+      } catch (e) {
+        const rawMessage = (e && (e.data?.message || e.message || '')).toString().toLowerCase();
+        const looksLikeNameMismatch =
+          ['name mismatch', 'name does not match', 'name not matching', 'mismatch in name']
+            .some(s => rawMessage.includes(s)) || (e.code === 'NAME_MISMATCH');
+        const humanMsg = looksLikeNameMismatch
+          ? 'PAN and DOB look correct, but the name did not match. Please enter your full legal name exactly as on PAN, including middle name if any (e.g., "Anup Anand Mishra" not just "Anup Mishra").'
+          : 'PAN verification failed';
+        return res.status(400).json({
+          error: humanMsg,
+          code: e.code || (looksLikeNameMismatch ? 'NAME_MISMATCH' : 'PAN_VERIFY_FAILED'),
+          details: e.data || e.message
+        });
+      }
       
       if (!currentUser.panUpdatedByUser && !isAdmin) {
         updates.panUpdatedByUser = true;
         updates.panUpdatedAt = new Date();
       }
+      delete updates.panDob; // do not persist raw request-only field
     }
 
     const updatedUser = await User.findByIdAndUpdate(

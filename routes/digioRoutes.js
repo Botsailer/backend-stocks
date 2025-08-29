@@ -5,7 +5,8 @@ const {
   getStatus,
   webhook,
   getUserEMandates,
-  cancelEMandate
+  cancelEMandate,
+  verifyPAN
 } = require("../controllers/digioController");
 const DigioSign = require("../models/DigioSign");
 const passport = require("passport");
@@ -119,13 +120,48 @@ const requireAuth = (req, res, next) => {
  *           type: string
  *         message:
  *           type: string
+ * 
+ *     PANVerificationRequest:
+ *       type: object
+ *       required:
+ *         - id_no
+ *         - name
+ *         - dob
+ *       properties:
+ *         id_no:
+ *           type: string
+ *           pattern: '^[A-Z]{5}[0-9]{4}[A-Z]$'
+ *           description: PAN number in uppercase
+ *           example: "ABCDE1234F"
+ *         name:
+ *           type: string
+ *           description: Full name as per PAN
+ *           example: "John Doe"
+ *         dob:
+ *           type: string
+ *           pattern: '^\d{2}\/\d{2}\/\d{4}$'
+ *           description: Date of birth in DD/MM/YYYY format
+ *           example: "15/08/1990"
+ * 
+ *     PANVerificationResponse:
+ *       type: object
+ *       properties:
+ *         success:
+ *           type: boolean
+ *         message:
+ *           type: string
+ *         data:
+ *           type: object
+ *           description: PAN verification data from Digio API
  */
 
 /**
  * @swagger
  * tags:
- *   name: E-Mandate
- *   description: Digital e-mandate consent and signing APIs
+ *   - name: Digio-endpoint
+ *     description: Digital consent and signing APIs
+ *   - name: PAN Verification
+ *     description: PAN verification and KYC services using Digio API
  */
 
 /**
@@ -133,7 +169,7 @@ const requireAuth = (req, res, next) => {
  * /digio/document/upload:
  *   post:
  *     summary: Upload PDF document for digital signing
- *     tags: [E-Mandate]
+ *     tags: [Digio-endpoint]
  *     security:
  *       - bearerAuth: []
  *     requestBody:
@@ -208,7 +244,7 @@ router.post("/document/upload", requireAuth, uploadDocument);
  * /digio/emandate/create:
  *   post:
  *     summary: Create e-mandate document for digital signing
- *     tags: [E-Mandate]
+ *     tags: [Digio-endpoint]
  *     security:
  *       - bearerAuth: []
  *     requestBody:
@@ -242,7 +278,7 @@ router.post("/emandate/create", requireAuth, createEMandate);
  * /digio/emandate:
  *   get:
  *     summary: Get user's e-mandate history
- *     tags: [E-Mandate]
+ *     tags: [Digio-endpoint]
  *     security:
  *       - bearerAuth: []
  *     parameters:
@@ -302,7 +338,7 @@ router.get("/emandate", requireAuth, getUserEMandates);
  * /digio/status/{documentId}:
  *   get:
  *     summary: Get e-mandate document status
- *     tags: [E-Mandate]
+ *     tags: [Digio-endpoint]
  *     security:
  *       - bearerAuth: []
  *     parameters:
@@ -336,7 +372,7 @@ router.get("/status/:documentId", requireAuth, getStatus);
  * /digio/emandate/{sessionId}/cancel:
  *   post:
  *     summary: Cancel pending e-mandate document
- *     tags: [E-Mandate]
+ *     tags: [Digio-endpoint]
  *     security:
  *       - bearerAuth: []
  *     parameters:
@@ -370,10 +406,61 @@ router.post("/emandate/:sessionId/cancel", requireAuth, cancelEMandate);
 
 /**
  * @swagger
+ * /digio/pan/verify:
+ *   post:
+ *     summary: Verify PAN details using Digio KYC API
+ *     tags: [Digio-endpoint]
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             $ref: '#/components/schemas/PANVerificationRequest'
+ *     responses:
+ *       200:
+ *         description: PAN details retrieved successfully
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/PANVerificationResponse'
+ *       400:
+ *         description: Invalid input parameters
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 code:
+ *                   type: string
+ *                   example: "INVALID_PAN_FORMAT"
+ *                 message:
+ *                   type: string
+ *                   example: "The provided PAN number has an invalid format."
+ *       401:
+ *         description: Authentication required
+ *       503:
+ *         description: Service not configured
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 code:
+ *                   type: string
+ *                   example: "ACCOUNT_NOT_CONFIGURED"
+ *                 message:
+ *                   type: string
+ *                 suggestion:
+ *                   type: string
+ */
+router.post("/pan/verify", verifyPAN);
+
+/**
+ * @swagger
  * /digio/webhook:
  *   post:
  *     summary: Webhook endpoint for Digio status updates
- *     tags: [E-Mandate]
+ *     tags: [Digio-endpoint]
  *     description: Internal endpoint for receiving Digio webhook notifications
  *     requestBody:
  *       required: true
@@ -412,7 +499,7 @@ router.post("/webhook", webhook);
  * /digio/emandate/check:
  *   get:
  *     summary: Check if user has completed e-mandate
- *     tags: [E-Mandate]
+ *     tags: [Digio-endpoint]
  *     security:
  *       - bearerAuth: []
  *     description: Quick check for payment validation
@@ -462,7 +549,7 @@ router.get("/emandate/check", requireAuth, async (req, res) => {
  * /digio/emandate/page:
  *   get:
  *     summary: Serve e-mandate signing page
- *     tags: [E-Mandate]
+ *     tags: [Digio-endpoint]
  *     description: Returns HTML page for e-mandate signing interface
  *     responses:
  *       200:
