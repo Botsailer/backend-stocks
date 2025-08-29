@@ -6,6 +6,7 @@ const PaymentHistory = require('../models/paymenthistory');
 const Tip = require('../models/portfolioTips');
 const Bundle = require('../models/bundle');
 const { digioPanVerify } = require('../services/digioPanService');
+const DigioSign = require('../models/DigioSign');
 
 
 // Function is now defined at the top of the file
@@ -105,6 +106,9 @@ exports.getProfile = async (req, res) => {
     
     if (!user) return res.status(404).json({ error: 'User not found' });
 
+    // eSign info (latest record)
+    const latestEsign = await DigioSign.findOne({ userId: user._id, idType: { $in: ['esign','document'] } }).sort({ createdAt: -1 });
+
     const requiredFields = ['fullName', 'phone', 'pandetails'];
     const isComplete = requiredFields.every(field => user[field] && user[field] !== null);
     
@@ -131,6 +135,11 @@ exports.getProfile = async (req, res) => {
         verifiedName: user.panVerifiedName || null,
         verifiedDob: user.panVerifiedDob || null,
         lastVerifiedAt: user.panLastVerifiedAt || null
+      },
+      eSign: {
+        status: latestEsign?.status || 'missing',
+        documentId: latestEsign?.documentId || null,
+        signedDocumentUrl: latestEsign?.signedDocumentUrl || null
       }
     });
   } catch (err) {

@@ -43,9 +43,16 @@ const requireAuth = passport.authenticate("jwt", { session: false });
  *                 example: "615a2d4b87d9c34f7d4f8a12"
  *               planType:
  *                 type: string
- *                 enum: [monthly, quarterly, yearly]
+ *                 enum: 
+ *                   - monthly
+ *                   - quarterly
+ *                   - yearly
  *                 example: "quarterly"
- *                 description: Plan type for the subscription
+ *                 description: |
+ *                   Plan type for one-time payment:
+ *                   - **monthly**: 1 month access
+ *                   - **quarterly**: 3 months access
+ *                   - **yearly**: 12 months access
  *               couponCode:
  *                 type: string
  *                 example: "WELCOME10"
@@ -81,9 +88,16 @@ router.post("/order", requireAuth, checkEMandate, subscriptionController.createO
  *             properties:
  *               planType:
  *                 type: string
- *                 enum: [monthly, quarterly, yearly]
+ *                 enum: 
+ *                   - monthly
+ *                   - quarterly
+ *                   - yearly
  *                 example: "quarterly"
- *                 description: Plan type for the cart items
+ *                 description: |
+ *                   Plan type for cart items (one-time payment):
+ *                   - **monthly**: 1 month access
+ *                   - **quarterly**: 3 months access
+ *                   - **yearly**: 12 months access
  *               couponCode:
  *                 type: string
  *                 example: "WELCOME10"
@@ -184,7 +198,7 @@ router.get("/history", requireAuth, subscriptionController.getHistory);
  * @swagger
  * /api/subscriptions/emandate:
  *   post:
- *     summary: Create eMandate for yearly subscription with monthly payments
+ *     summary: Create eMandate for recurring payments with flexible intervals
  *     tags: [Subscriptions]
  *     security:
  *       - bearerAuth: []
@@ -206,6 +220,18 @@ router.get("/history", requireAuth, subscriptionController.getHistory);
  *                 type: string
  *                 format: objectid
  *                 example: "615a2d4b87d9c34f7d4f8a12"
+ *               emandateType:
+ *                 type: string
+ *                 enum: 
+ *                   - monthly
+ *                   - quarterly
+ *                   - yearly
+ *                 example: "monthly"
+ *                 description: |
+ *                   Emandate billing interval:
+ *                   - **monthly**: Charged every 1 month, continues indefinitely until cancelled
+ *                   - **quarterly**: Charged every 3 months, continues indefinitely until cancelled
+ *                   - **yearly**: Charged once per year, continues indefinitely until cancelled
  *               couponCode:
  *                 type: string
  *                 example: "WELCOME10"
@@ -213,6 +239,41 @@ router.get("/history", requireAuth, subscriptionController.getHistory);
  *     responses:
  *       201:
  *         description: eMandate created successfully
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success:
+ *                   type: boolean
+ *                   example: true
+ *                 subscriptionId:
+ *                   type: string
+ *                   description: Razorpay subscription ID
+ *                 setupUrl:
+ *                   type: string
+ *                   description: URL for customer to complete emandate setup
+ *                 amount:
+ *                   type: number
+ *                   description: Amount per billing cycle
+ *                 emandateType:
+ *                   type: string
+ *                   enum: 
+ *                     - monthly
+ *                     - quarterly
+ *                     - yearly
+ *                   description: |
+ *                     Billing interval:
+ *                     - **monthly**: Charged every 1 month, continues indefinitely until cancelled
+ *                     - **quarterly**: Charged every 3 months, continues indefinitely until cancelled
+ *                     - **yearly**: Charged once per year, continues indefinitely until cancelled
+ *                 interval:
+ *                   type: number
+ *                   description: Interval in months between charges
+
+ *                 status:
+ *                   type: string
+ *                   description: Subscription status
  *       400:
  *         description: Invalid request parameters
  *       404:

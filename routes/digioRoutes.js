@@ -6,7 +6,11 @@ const {
   webhook,
   getUserEMandates,
   cancelEMandate,
-  verifyPAN
+  verifyPAN,
+  getEsignDocument,
+  initiateAadhaarEsign,
+  submitEsignOtp,
+  uploadTemplateDocument
 } = require("../controllers/digioController");
 const DigioSign = require("../models/DigioSign");
 const passport = require("passport");
@@ -77,6 +81,33 @@ const requireAuth = (req, res, next) => {
  *           description: Last 4 digits of Aadhaar
  *           example: "1234"
  * 
+ *     ESIGNInitiateRequest:
+ *       type: object
+ *       required:
+ *         - documentId
+ *         - aadhaarSuffix
+ *       properties:
+ *         documentId:
+ *           type: string
+ *         aadhaarSuffix:
+ *           type: string
+ *           pattern: '^[0-9]{4}$'
+ *
+ *     ESIGNOtpVerifyRequest:
+ *       type: object
+ *       required:
+ *         - documentId
+ *         - otp
+ *         - transactionId
+ *       properties:
+ *         documentId:
+ *           type: string
+ *         otp:
+ *           type: string
+ *           pattern: '^[0-9]{6}$'
+ *         transactionId:
+ *           type: string
+ *
  *     EMandateResponse:
  *       type: object
  *       properties:
@@ -162,7 +193,101 @@ const requireAuth = (req, res, next) => {
  *     description: Digital consent and signing APIs
  *   - name: PAN Verification
  *     description: PAN verification and KYC services using Digio API
+ *   - name: eSign
+ *     description: Aadhaar eSign endpoints
  */
+
+/** eSign endpoints */
+/**
+ * @swagger
+ * /digio/esign/document:
+ *   get:
+ *     summary: Get current eSign document status or create it if missing
+ *     tags: [eSign]
+ *     security:
+ *       - bearerAuth: []
+ *     responses:
+ *       200:
+ *         description: eSign document status
+ */
+router.get('/esign/document', requireAuth, getEsignDocument);
+
+/**
+ * @swagger
+ * /digio/esign/aadhaar/init:
+ *   post:
+ *     summary: Initiate Aadhaar eSign using last 4 digits
+ *     tags: [eSign]
+ *     security:
+ *       - bearerAuth: []
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             $ref: '#/components/schemas/ESIGNInitiateRequest'
+ *     responses:
+ *       200:
+ *         description: Initiated
+ */
+router.post('/esign/aadhaar/init', requireAuth, initiateAadhaarEsign);
+
+/**
+ * @swagger
+ * /digio/esign/aadhaar/otp:
+ *   post:
+ *     summary: Submit OTP to complete Aadhaar eSign
+ *     tags: [eSign]
+ *     security:
+ *       - bearerAuth: []
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             $ref: '#/components/schemas/ESIGNOtpVerifyRequest'
+ *     responses:
+ *       200:
+ *         description: Signed
+ */
+router.post('/esign/aadhaar/otp', requireAuth, submitEsignOtp);
+
+/**
+ * @swagger
+ * /digio/esign/template/upload:
+ *   post:
+ *     summary: Upload a PDF (URL or base64) to Digio and get documentId
+ *     tags: [eSign]
+ *     security:
+ *       - bearerAuth: []
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               fileUrl:
+ *                 type: string
+ *                 description: Public URL of PDF
+ *               fileBase64:
+ *                 type: string
+ *                 description: Base64-encoded PDF (data:application/pdf;base64,...) if not using URL
+ *               fileName:
+ *                 type: string
+ *               signerEmail:
+ *                 type: string
+ *               signerName:
+ *                 type: string
+ *               signerPhone:
+ *                 type: string
+ *               reason:
+ *                 type: string
+ *     responses:
+ *       200:
+ *         description: Uploaded and created Digio document
+ */
+router.post('/esign/template/upload', requireAuth, uploadTemplateDocument);
 
 /**
  * @swagger
@@ -410,6 +535,8 @@ router.post("/emandate/:sessionId/cancel", requireAuth, cancelEMandate);
  *   post:
  *     summary: Verify PAN details using Digio KYC API
  *     tags: [Digio-endpoint]
+ *     security:
+ *       - bearerAuth: []
  *     requestBody:
  *       required: true
  *       content:
@@ -453,7 +580,7 @@ router.post("/emandate/:sessionId/cancel", requireAuth, cancelEMandate);
  *                 suggestion:
  *                   type: string
  */
-router.post("/pan/verify", verifyPAN);
+router.post("/pan/verify", requireAuth,verifyPAN);
 
 /**
  * @swagger

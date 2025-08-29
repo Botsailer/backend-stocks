@@ -38,6 +38,24 @@ const portfolioService = require('../services/portfolioservice');
  *           type: number
  *           format: float
  *           example: 149.99
+ *     EmandateSubscriptionFee:
+ *       type: object
+ *       required:
+ *         - type
+ *         - price
+ *       properties:
+ *         type:
+ *           type: string
+ *           enum: 
+ *             - monthly
+ *             - quarterly
+ *             - yearly
+ *           description: E-mandate subscription interval
+ *           example: "yearly"
+ *         price:
+ *           type: number
+ *           format: float
+ *           example: 199.99
  *     DescriptionItem:
  *       type: object
  *       required:
@@ -292,6 +310,15 @@ const portfolioService = require('../services/portfolioservice');
  *               price: 19.99
  *             - type: "yearly"
  *               price: 199.99
+ *         emandateSubriptionFees:
+ *           type: array
+ *           items:
+ *             $ref: '#/components/schemas/EmandateSubscriptionFee'
+ *           example:
+ *             - type: "monthly"
+ *               price: 29.99
+ *             - type: "yearly"
+ *               price: 299.99
  *         minInvestment:
  *           type: number
  *           example: 1000
@@ -299,10 +326,7 @@ const portfolioService = require('../services/portfolioservice');
  *         durationMonths:
  *           type: integer
  *           example: 12
- *         expiryDate:
- *           type: string
- *           format: date-time
- *           example: "2026-02-05T00:00:00.000Z"
+
  *         PortfolioCategory:
  *           type: string
  *           example: "Premium"
@@ -565,6 +589,11 @@ router.get('/portfolios/:id', requireAdmin, portfolioController.getPortfolioById
  *                 price: 29.99
  *               - type: "yearly"
  *                 price: 299.99
+ *             emandateSubriptionFees:
+ *               - type: "monthly"
+ *                 price: 39.99
+ *               - type: "yearly"
+ *                 price: 399.99
  *             minInvestment: 10000
  *             durationMonths: 24
  *             PortfolioCategory: "Premium"

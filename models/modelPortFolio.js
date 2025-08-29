@@ -15,6 +15,21 @@ const subscriptionFeeSchema = new Schema({
   }
 }, { _id: false });
 
+
+const emandateSubriptionFeesSchema = new Schema({
+  type:{
+    type:String,
+    enum: ['monthly', 'quarterly', 'yearly'],
+    required: true
+  },
+  price: {
+    type: Number,
+    required: true,
+    min: 0
+  }
+})
+
+
 const StockHoldingSchema = new Schema({
   symbol: {
     type: String,
@@ -323,6 +338,14 @@ const PortfolioSchema = new Schema({
     required: true,
     validate: v => Array.isArray(v) && v.length > 0
   },
+
+  emandateSubriptionFees : {
+    type:[emandateSubriptionFeesSchema],
+    require: true,
+    validate: V =>  Array.isArray(V) && V.length > 0
+
+  },
+
   minInvestment: {
     type: Number,
     required: true,
@@ -362,10 +385,7 @@ const PortfolioSchema = new Schema({
       message: props => `Benchmark symbol "${props.value}" does not exist in stock symbols`
     }
   },
-  expiryDate: {
-    type: Date,
-    required: false
-  },
+
   holdings: {
     type: [StockHoldingSchema],
     default: []
@@ -610,13 +630,7 @@ PortfolioSchema.pre('save', async function(next) {
       parseFloat(((holdingMarketValue / this.currentValue) * 100).toFixed(2)) : 0;
   });
 
-  // Set expiry date if not provided
-  if (!this.expiryDate && this.durationMonths) {
-    const start = this.createdAt || new Date();
-    const expire = new Date(start);
-    expire.setMonth(expire.getMonth() + this.durationMonths);
-    this.expiryDate = expire;
-  }
+
 
   // Update historical values (store daily snapshot)
   this.updateHistoricalValues();

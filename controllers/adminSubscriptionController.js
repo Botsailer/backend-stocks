@@ -77,7 +77,7 @@ exports.listSubscriptions = async (req, res) => {
         amount: sub.amount || 0,
         
         // Expiry Date
-        expiryDate: sub.expiresAt,
+
         
         // Creation Date
         creationDate: sub.createdAt,
@@ -166,7 +166,7 @@ exports.getSubscription = async (req, res) => {
       userAddress: sub.user?.address || 'No address',
       paymentType,
       amount: sub.amount || 0,
-      expiryDate: sub.expiresAt,
+
       creationDate: sub.createdAt,
       discount: sub.discountAmount || 0,
       couponCode: sub.couponCode || null,
@@ -247,7 +247,7 @@ exports.generateInvoice = async (req, res) => {
       
       // Dates
       subscriptionDate: sub.createdAt,
-      expiryDate: sub.expiresAt,
+
       paymentDate: latestPayment?.createdAt || sub.createdAt,
       
       // Payment Info

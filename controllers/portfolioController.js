@@ -143,6 +143,22 @@ exports.createPortfolio = asyncHandler(async (req, res) => {
       });
     }
 
+    // Step 2.5: Validate emandate subscription fee structure
+    if (!Array.isArray(requestData.emandateSubriptionFees) || requestData.emandateSubriptionFees.length === 0) {
+      return res.status(400).json({ error: 'At least one emandate subscription fee is required' });
+    }
+
+    const invalidEmandateFees = requestData.emandateSubriptionFees.filter(fee => 
+      !fee.type || typeof fee.price !== 'number' || fee.price <= 0
+    );
+    
+    if (invalidEmandateFees.length > 0) {
+      return res.status(400).json({ 
+        error: 'Invalid emandate subscription fee structure',
+        details: 'All emandate fees must have type and price > 0'
+      });
+    }
+
     // Step 3: Calculate portfolio summary (for info only, don't block creation)
     const portfolioSummary = PortfolioCalculationValidator.calculatePortfolioSummary({
       holdings: requestData.holdings || [],
@@ -192,9 +208,10 @@ exports.createPortfolio = asyncHandler(async (req, res) => {
       name: requestData.name.trim(),
       description: requestData.description || [],
       subscriptionFee: requestData.subscriptionFee,
+      emandateSubriptionFees: requestData.emandateSubriptionFees,
       minInvestment: portfolioSummary.minInvestment,
       durationMonths: requestData.durationMonths,
-      expiryDate: requestData.expiryDate,
+      
       holdings: requestData.holdings || [],
       PortfolioCategory: requestData.PortfolioCategory || 'Basic',
       downloadLinks: requestData.downloadLinks || [],
@@ -223,6 +240,7 @@ exports.createPortfolio = asyncHandler(async (req, res) => {
         totalValue: portfolioData.currentValue,
         holdingsCount: portfolioData.holdings.length,
         subscriptionFee: portfolioData.subscriptionFee,
+        emandateSubriptionFees: portfolioData.emandateSubriptionFees,
         category: portfolioData.PortfolioCategory,
         timeHorizon: portfolioData.timeHorizon,
         durationMonths: portfolioData.durationMonths
@@ -264,6 +282,7 @@ exports.createPortfolio = asyncHandler(async (req, res) => {
         cashBalance: savedPortfolio.cashBalance,
         holdingsCount: savedPortfolio.holdings.length,
         subscriptionFeeTypes: savedPortfolio.subscriptionFee.map(fee => fee.type),
+        emandateSubscriptionFeeTypes: savedPortfolio.emandateSubriptionFees.map(fee => fee.type),
         createdAt: savedPortfolio.createdAt,
         portfolioCategory: savedPortfolio.PortfolioCategory
       }
@@ -509,6 +528,14 @@ exports.updatePortfolio = asyncHandler(async (req, res) => {
     if (!Array.isArray(req.body.subscriptionFee) || req.body.subscriptionFee.length === 0 ||
         req.body.subscriptionFee.some(fee => !fee.type || fee.price == null)) {
       return res.status(400).json({ error: 'Invalid subscription fee structure' });
+    }
+  }
+
+  // Validate emandate subscription fee if provided
+  if (req.body.emandateSubriptionFees) {
+    if (!Array.isArray(req.body.emandateSubriptionFees) || req.body.emandateSubriptionFees.length === 0 ||
+        req.body.emandateSubriptionFees.some(fee => !fee.type || fee.price == null)) {
+      return res.status(400).json({ error: 'Invalid emandate subscription fee structure' });
     }
   }
 
@@ -1243,7 +1270,7 @@ exports.updatePortfolio = asyncHandler(async (req, res) => {
 
   // Update other allowed fields (ignore calculated fields from frontend)
   const allowedUpdates = [
-    'name', 'description', 'subscriptionFee', 'expiryDate', 
+            'name', 'description', 'subscriptionFee', 'emandateSubriptionFees', 
     'PortfolioCategory', 'downloadLinks', 'youTubeLinks', 'timeHorizon', 
     'rebalancing', 'index', 'details', 'compareWith', 
     'lastRebalanceDate', 'nextRebalanceDate', 'monthlyContribution',

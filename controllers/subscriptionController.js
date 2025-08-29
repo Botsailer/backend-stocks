@@ -83,6 +83,15 @@ const calculateEndDate = (planType, startDate = new Date()) => {
   return endDate;
 };
 
+const calculateEmandateInterval = (emandateType) => {
+  switch(emandateType) {
+    case "monthly": return 1; // Charge every 1 month
+    case "quarterly": return 3; // Charge every 3 months
+    case "yearly": return 12; // Charge every 12 months
+    default: return 1;
+  }
+};
+
 async function handleTelegramIntegration(user, productType, productId, subscription) {
   try {
     const telegramInvites = [];
@@ -357,24 +366,45 @@ const calculateCompensatedEndDate = (planType, oldExpiryDate) => {
   };
 };
 
-const getProductInfo = async (productType, productId, planType) => {
+const getProductInfo = async (productType, productId, planType, emandateType = null) => {
   let product, amount, category;
   
   if (productType === "Portfolio") {
     product = await Portfolio.findById(productId);
     if (!product) throw new Error("Portfolio not found");
-    const plan = product.subscriptionFee.find(p => p.type === planType);
-    if (!plan) throw new Error(`Plan '${planType}' not available for portfolio`);
-    amount = plan.price;
+    
+    if (emandateType) {
+      // Use emandate subscription fees
+      const plan = product.emandateSubriptionFees.find(p => p.type === emandateType);
+      if (!plan) throw new Error(`Emandate plan '${emandateType}' not available for portfolio`);
+      amount = plan.price;
+    } else {
+      // Use regular subscription fees
+      const plan = product.subscriptionFee.find(p => p.type === planType);
+      if (!plan) throw new Error(`Plan '${planType}' not available for portfolio`);
+      amount = plan.price;
+    }
     category = product.PortfolioCategory ? product.PortfolioCategory.toLowerCase() : "basic";
   } else if (productType === "Bundle") {
     product = await Bundle.findById(productId).populate("portfolios");
     if (!product) throw new Error("Bundle not found");
-    switch(planType) {
-      case "monthly": amount = product.monthlyPrice; break;
-      case "quarterly": amount = product.monthlyemandateprice; break;
-      case "yearly": amount = product.yearlyPrice; break;
-      default: throw new Error("Invalid planType");
+    
+    if (emandateType) {
+      // Use emandate pricing for bundles
+      switch(emandateType) {
+        case "monthly": amount = product.monthlyemandateprice; break;
+        case "quarterly": amount = product.quarterlyemandateprice; break;
+        case "yearly": amount = product.yearlyemandateprice; break;
+        default: throw new Error("Invalid emandate type");
+      }
+    } else {
+      // Use regular pricing for bundles
+      switch(planType) {
+        case "monthly": amount = product.monthlyPrice; break;
+        case "quarterly": amount = product.monthlyemandateprice; break; // Fallback to monthly emandate price
+        case "yearly": amount = product.yearlyPrice; break;
+        default: throw new Error("Invalid planType");
+      }
     }
     category = product.category ? product.category.toLowerCase() : "basic";
   } else {
@@ -508,7 +538,7 @@ const createOrFetchCustomer = async (razorpay, user) => {
   }
 };
 
-const createSubscriptionPlan = async (amountInPaisa) => {
+const createSubscriptionPlan = async (amountInPaisa, emandateType = "monthly") => {
   const razorpay = await getRazorpayInstance();
   
   // Validate amount
@@ -520,15 +550,17 @@ const createSubscriptionPlan = async (amountInPaisa) => {
     throw new Error(`Plan amount too high: ₹${amountInPaisa/100}. Maximum ₹10,00,000 allowed.`);
   }
   
+  const interval = calculateEmandateInterval(emandateType);
+  
   try {
     // Check for existing plans first
-    logger.info("Checking for existing subscription plans", { amountInPaisa });
+    logger.info("Checking for existing subscription plans", { amountInPaisa, emandateType, interval });
     
     const existingPlans = await razorpay.plans.all({ count: 100 });
     const found = existingPlans.items.find(p => 
       p.item.amount === amountInPaisa && 
       p.period === "monthly" && 
-      p.interval === 1 &&
+      p.interval === interval &&
       p.item.currency === "INR"
     );
     
@@ -536,12 +568,13 @@ const createSubscriptionPlan = async (amountInPaisa) => {
       logger.info("Using existing subscription plan", {
         planId: found.id,
         amount: found.item.amount,
-        period: found.period
+        period: found.period,
+        interval: found.interval
       });
       return found;
     }
     
-    logger.info("Creating new subscription plan", { amountInPaisa });
+    logger.info("Creating new subscription plan", { amountInPaisa, emandateType, interval });
     
   } catch(planFetchError) {
     logger.warn("Error fetching existing plans, proceeding with creation", {
@@ -553,18 +586,18 @@ const createSubscriptionPlan = async (amountInPaisa) => {
     // Create new plan with enhanced metadata
     const planData = {
       period: "monthly",
-      interval: 1,
+      interval: interval,
       item: {
-        name: `Monthly Subscription Plan - ₹${amountInPaisa/100}`,
+        name: `${emandateType.charAt(0).toUpperCase() + emandateType.slice(1)} Emandate Plan - ₹${amountInPaisa/100}`,
         amount: amountInPaisa,
         currency: "INR",
-        description: "Monthly billing for yearly commitment - Stock Portfolio Subscription",
+        description: `${emandateType.charAt(0).toUpperCase() + emandateType.slice(1)} billing for emandate subscription`,
       },
       notes: { 
-        commitment: "yearly", 
-        total_months: "12",
+        emandate_type: emandateType,
+        interval: interval.toString(),
         created_at: new Date().toISOString(),
-        plan_type: "emandate_monthly"
+        plan_type: `emandate_${emandateType}`
       }
     };
     
@@ -578,7 +611,8 @@ const createSubscriptionPlan = async (amountInPaisa) => {
       planId: newPlan.id,
       amount: newPlan.item.amount,
       period: newPlan.period,
-      interval: newPlan.interval
+      interval: newPlan.interval,
+      emandateType
     });
     
     return newPlan;
@@ -588,6 +622,8 @@ const createSubscriptionPlan = async (amountInPaisa) => {
       error: planCreateError.message,
       stack: planCreateError.stack,
       amountInPaisa,
+      emandateType,
+      interval,
       razorpayError: planCreateError.error || null
     });
     
@@ -665,14 +701,14 @@ const sendRenewalReminderEmail = async (user, subscription, portfolio) => {
       metadata: {
         subscriptionId: subscription._id,
         portfolioName: portfolio.name,
-        expiryDate: subscription.expiresAt
+
       }
     });
     
     logger.info(`Renewal reminder queued for ${user.email} for subscription ${subscription._id}`, {
       userId: user._id,
       portfolioName: portfolio.name,
-      expiryDate: subscription.expiresAt
+      
     });
     return true;
   } catch (error) {
@@ -725,7 +761,7 @@ const sendRenewalConfirmationEmail = async (user, subscription, portfolio, compe
         subscriptionId: subscription._id,
         portfolioName: portfolio.name,
         compensationDays,
-        newExpiryDate: subscription.expiresAt
+
       }
     });
     
@@ -984,7 +1020,7 @@ exports.createOrder = async (req, res) => {
  * ✨ ENHANCED: Supports renewal with compensation logic + Enhanced Error Handling
  */
 exports.createEmandate = async (req, res) => {
-  const { productType, productId, couponCode } = req.body;
+  const { productType, productId, couponCode, emandateType = "monthly" } = req.body;
   const userId = req.user._id;
   
   try {
@@ -1029,19 +1065,19 @@ exports.createEmandate = async (req, res) => {
       });
     }
 
-    let product, originalYearlyAmount, category;
+    let product, originalAmount, category;
     try {
-      const productInfo = await getProductInfo(productType, productId, "yearly");
+      const productInfo = await getProductInfo(productType, productId, null, emandateType);
       product = productInfo.product;
-      originalYearlyAmount = productInfo.amount;
+      originalAmount = productInfo.amount;
       category = productInfo.category;
       
-      if (!originalYearlyAmount || originalYearlyAmount < 100) {
-        throw new Error(`Invalid yearly amount: ${originalYearlyAmount}. Minimum ₹100 required for emandate.`);
+      if (!originalAmount || originalAmount < 100) {
+        throw new Error(`Invalid ${emandateType} amount: ${originalAmount}. Minimum ₹100 required for emandate.`);
       }
       
-      if (originalYearlyAmount > 1000000) {
-        throw new Error(`Amount too high: ₹${originalYearlyAmount}. Maximum ₹10,00,000 allowed for emandate.`);
+      if (originalAmount > 1000000) {
+        throw new Error(`Amount too high: ₹${originalAmount}. Maximum ₹10,00,000 allowed for emandate.`);
       }
       
     } catch (error) {
@@ -1049,6 +1085,7 @@ exports.createEmandate = async (req, res) => {
         userId: userId.toString(),
         productType,
         productId: productId.toString(),
+        emandateType,
         error: error.message
       });
       return res.status(400).json({
@@ -1058,7 +1095,7 @@ exports.createEmandate = async (req, res) => {
       });
     }
 
-    let finalYearlyAmount = originalYearlyAmount;
+    let finalAmount = originalAmount;
     let discountApplied = 0;
     let couponUsed = null;
     let couponDetails = null;
@@ -1128,7 +1165,7 @@ exports.createEmandate = async (req, res) => {
           }
         }
 
-        const discountResult = coupon.calculateDiscount(originalYearlyAmount);
+        const discountResult = coupon.calculateDiscount(originalAmount);
         
         if (discountResult.reason) {
           return res.status(400).json({
@@ -1138,7 +1175,7 @@ exports.createEmandate = async (req, res) => {
           });
         }
 
-        finalYearlyAmount = discountResult.finalAmount;
+        finalAmount = discountResult.finalAmount;
         discountApplied = discountResult.discount;
         couponUsed = coupon._id;
         couponDetails = {
@@ -1152,9 +1189,10 @@ exports.createEmandate = async (req, res) => {
         logger.info('Coupon applied successfully in eMandate creation', {
           userId: userId.toString(),
           couponCode: coupon.code,
-          originalYearlyAmount,
+          originalAmount,
           discountApplied,
-          finalYearlyAmount,
+          finalAmount,
+          emandateType,
           productType,
           productId: productId.toString()
         });
@@ -1175,27 +1213,23 @@ exports.createEmandate = async (req, res) => {
       }
     }
 
-    const monthlyAmount = Math.round(finalYearlyAmount / 12);
+    // Use the amount directly without GST calculation
+    const emandateAmount = finalAmount;
     
-    const gstRate = 0.18;
-    const gstAmount = Math.round(monthlyAmount * gstRate);
-    const gstInclusiveMonthlyAmount = monthlyAmount + gstAmount;
-    
-    if (gstInclusiveMonthlyAmount < 10) {
-      logger.error("EMandate creation failed: GST-inclusive monthly amount too low after discount", {
+    if (emandateAmount < 10) {
+      logger.error("EMandate creation failed: Amount too low after discount", {
         userId: userId.toString(),
-        originalYearlyAmount,
-        finalYearlyAmount,
-        monthlyAmount,
-        gstAmount,
-        gstInclusiveMonthlyAmount,
+        originalAmount,
+        finalAmount,
+        emandateAmount,
         discountApplied,
+        emandateType,
         productType,
         productId: productId.toString()
       });
       return res.status(400).json({
         success: false,
-        error: `GST-inclusive monthly amount (₹${gstInclusiveMonthlyAmount}) is too low after discount. Minimum ₹10 required.`,
+        error: `Amount (₹${emandateAmount}) is too low after discount. Minimum ₹10 required.`,
         code: "AMOUNT_TOO_LOW"
       });
     }
@@ -1245,7 +1279,7 @@ exports.createEmandate = async (req, res) => {
 
     let plan;
     try {
-      plan = await createSubscriptionPlan(gstInclusiveMonthlyAmount * 100);
+      plan = await createSubscriptionPlan(emandateAmount * 100, emandateType);
       
       if (!plan || !plan.id) {
         throw new Error("Failed to create subscription plan");
@@ -1254,16 +1288,16 @@ exports.createEmandate = async (req, res) => {
       logger.info("Subscription plan created successfully", {
         userId: userId.toString(),
         planId: plan.id,
-        monthlyAmount,
-        gstAmount,
-        gstInclusiveMonthlyAmount,
+        emandateAmount,
+        emandateType,
         planAmount: plan.item.amount
       });
       
     } catch (error) {
       logger.error("EMandate creation failed: Plan creation error", {
         userId: userId.toString(),
-        gstInclusiveMonthlyAmount,
+        emandateAmount,
+        emandateType,
         error: error.message,
         stack: error.stack
       });
@@ -1276,10 +1310,16 @@ exports.createEmandate = async (req, res) => {
 
     const startDate = new Date();
     const commitmentEndDate = new Date();
+    
+          // Calculate interval based on emandate type
+      const interval = calculateEmandateInterval(emandateType);
+    
+    // Set commitment end date to 1 year from now (for Razorpay requirement)
+    // Note: This is just for Razorpay's expire_by field, actual subscription continues indefinitely
     commitmentEndDate.setFullYear(startDate.getFullYear() + 1);
 
     if (subscriptionStatus.canRenew) {
-      const compensation = calculateCompensatedEndDate("yearly", subscriptionStatus.existingSubscription.expiresAt);
+      const compensation = calculateCompensatedEndDate(emandateType, subscriptionStatus.existingSubscription.expiresAt);
       commitmentEndDate.setTime(compensation.endDate.getTime());
     }
 
@@ -1306,7 +1346,6 @@ exports.createEmandate = async (req, res) => {
     const subscriptionParams = {
       plan_id: plan.id,
       customer_id: customer.id,
-      total_count: 12,
       quantity: 1,
       start_at: startAt,
       expire_by: expireBy,
@@ -1315,18 +1354,17 @@ exports.createEmandate = async (req, res) => {
         product_type: productType,
         product_id: productId.toString(),
         category,
+        emandate_type: emandateType,
+        interval: interval.toString(),
         isRenewal: subscriptionStatus.canRenew.toString(),
         existingSubscriptionId: subscriptionStatus.existingSubscription?._id?.toString() || null,
         created_at: new Date().toISOString(),
         user_email: req.user.email,
         couponCode: couponCode || null,
         couponUsed: couponUsed?.toString() || null,
-        originalYearlyAmount: originalYearlyAmount.toString(),
+        originalAmount: originalAmount.toString(),
         discountApplied: discountApplied.toString(),
-        finalYearlyAmount: finalYearlyAmount.toString(),
-        gstRate: gstRate.toString(),
-        gstAmount: gstAmount.toString(),
-        gstInclusiveMonthlyAmount: gstInclusiveMonthlyAmount.toString()
+        finalAmount: finalAmount.toString()
       }
     };
 
@@ -1334,14 +1372,13 @@ exports.createEmandate = async (req, res) => {
       userId: userId.toString(),
       planId: plan.id,
       customerId: customer.id,
-      totalCount: 12,
+      interval,
+      emandateType,
       startAt,
       expireBy,
-      monthlyAmount,
-      gstAmount,
-      gstInclusiveMonthlyAmount,
-      originalYearlyAmount,
-      finalYearlyAmount,
+      emandateAmount,
+      originalAmount,
+      finalAmount,
       discountApplied
     });
 
@@ -1407,7 +1444,7 @@ exports.createEmandate = async (req, res) => {
           }
           
           for (const portfolio of product.portfolios) {
-            const gstInclusiveAmountPerPortfolio = Math.round(gstInclusiveMonthlyAmount / product.portfolios.length);
+            const amountPerPortfolio = Math.round(emandateAmount / product.portfolios.length);
             const dbSubscription = await Subscription.findOneAndUpdate(
               { 
                 user: userId, 
@@ -1422,13 +1459,11 @@ exports.createEmandate = async (req, res) => {
                 portfolio: portfolio._id,
                 type: "recurring",
                 status: "pending",
-                amount: gstInclusiveAmountPerPortfolio,
-                originalAmount: Math.round(originalYearlyAmount / product.portfolios.length / 12),
-                discountApplied: Math.round(discountApplied / product.portfolios.length / 12),
-                gstAmount: Math.round(gstAmount / product.portfolios.length),
-                gstInclusiveAmount: gstInclusiveAmountPerPortfolio,
+                amount: amountPerPortfolio,
+                originalAmount: Math.round(originalAmount / product.portfolios.length),
+                discountApplied: Math.round(discountApplied / product.portfolios.length),
                 category: portfolio.PortfolioCategory ? portfolio.PortfolioCategory.toLowerCase() : category,
-                planType: "yearly",
+                planType: emandateType,
                 expiresAt: commitmentEndDate,
                 razorpaySubscriptionId: razorpaySubscription.id,
                 bundleId: productId,
@@ -1448,10 +1483,10 @@ exports.createEmandate = async (req, res) => {
             bundleId: productId.toString(),
             portfolioCount: product.portfolios.length,
             razorpaySubscriptionId: razorpaySubscription.id,
+            emandateType,
             couponCode: couponCode || 'none',
             discountApplied,
-            gstAmount,
-            gstInclusiveMonthlyAmount
+            emandateAmount
           });
           
         } else {
@@ -1469,13 +1504,11 @@ exports.createEmandate = async (req, res) => {
               portfolio: productType === "Portfolio" ? productId : null,
               type: "recurring",
               status: "pending",
-              amount: gstInclusiveMonthlyAmount,
-              originalAmount: Math.round(originalYearlyAmount / 12),
-              discountApplied: Math.round(discountApplied / 12),
-              gstAmount: gstAmount,
-              gstInclusiveAmount: gstInclusiveMonthlyAmount,
+              amount: emandateAmount,
+              originalAmount: originalAmount,
+              discountApplied: discountApplied,
               category,
-              planType: "yearly",
+              planType: emandateType,
               expiresAt: commitmentEndDate,
               razorpaySubscriptionId: razorpaySubscription.id,
               isRenewal: subscriptionStatus.canRenew,
@@ -1494,10 +1527,10 @@ exports.createEmandate = async (req, res) => {
             productId: productId.toString(),
             subscriptionId: dbSubscription._id.toString(),
             razorpaySubscriptionId: razorpaySubscription.id,
+            emandateType,
             couponCode: couponCode || 'none',
             discountApplied,
-            gstAmount,
-            gstInclusiveMonthlyAmount
+            emandateAmount
           });
         }
       });
@@ -1535,23 +1568,22 @@ exports.createEmandate = async (req, res) => {
       success: true, 
       subscriptionId: razorpaySubscription.id, 
       setupUrl: razorpaySubscription.short_url,
-      amount: gstInclusiveMonthlyAmount,
-      gstAmount: gstAmount,
-      gstInclusiveAmount: gstInclusiveMonthlyAmount,
-      originalYearlyAmount,
-      finalYearlyAmount,
+      amount: emandateAmount,
+      originalAmount,
+      finalAmount,
       discountApplied,
       savings: discountApplied,
       category,
+      emandateType,
+      interval,
       status: razorpaySubscription.status || "pending_authentication",
-      totalCount: 12,
       createdAt: new Date().toISOString()
     };
 
     // Add coupon information to response
     if (couponDetails) {
       responseData.couponApplied = couponDetails;
-      responseData.message = `Coupon "${couponDetails.code}" applied successfully! You saved ₹${discountApplied} on your yearly subscription.`;
+      responseData.message = `Coupon "${couponDetails.code}" applied successfully! You saved ₹${discountApplied} on your ${emandateType} subscription.`;
     }
 
     // Add renewal information if applicable
@@ -1571,12 +1603,12 @@ exports.createEmandate = async (req, res) => {
       subscriptionId: razorpaySubscription.id,
       productType,
       productId: productId.toString(),
-      monthlyAmount,
-      gstAmount,
-      gstInclusiveMonthlyAmount,
-      originalYearlyAmount,
-      finalYearlyAmount,
+      emandateAmount,
+      originalAmount,
+      finalAmount,
       discountApplied,
+      emandateType,
+      interval,
       couponCode: couponCode || 'none',
       isRenewal: subscriptionStatus.canRenew
     });
@@ -2036,7 +2068,6 @@ exports.verifyPayment = async (req, res) => {
           category: bundle.category,
           isRenewal: isRenewal === "true",
           compensationDays,
-          newExpiryDate: expiryDate,
           originalAmount,
           discountApplied,
           finalAmount,
@@ -2098,7 +2129,6 @@ exports.verifyPayment = async (req, res) => {
           category: notes.category,
           isRenewal: isRenewal === "true",
           compensationDays,
-          newExpiryDate: expiryDate,
           originalAmount,
           discountApplied,
           finalAmount,
@@ -2333,9 +2363,10 @@ exports.verifyEmandate = async (req, res) => {
     // Extract coupon information from Razorpay notes
     const couponCode = rSub.notes.couponCode;
     const couponUsed = rSub.notes.couponUsed;
-    const originalYearlyAmount = parseFloat(rSub.notes.originalYearlyAmount) || 0;
+    const originalAmount = parseFloat(rSub.notes.originalAmount) || 0;
     const discountApplied = parseFloat(rSub.notes.discountApplied) || 0;
-    const finalYearlyAmount = parseFloat(rSub.notes.finalYearlyAmount) || 0;
+    const finalAmount = parseFloat(rSub.notes.finalAmount) || 0;
+    const emandateType = rSub.notes.emandate_type || "monthly";
     
     let activatedCount = 0;
     let telegramInviteLinks = [];
@@ -2462,9 +2493,9 @@ exports.verifyEmandate = async (req, res) => {
             paymentId: null, // eMandate doesn't have immediate payment ID
             orderId: null,
             subscriptionId: subscription_id,
-            originalAmount: originalYearlyAmount,
+            originalAmount: originalAmount,
             discountApplied,
-            finalAmount: finalYearlyAmount,
+            finalAmount: finalAmount,
             couponCode
           });
           
@@ -2519,9 +2550,9 @@ exports.verifyEmandate = async (req, res) => {
       if (couponCode) {
         responseData.couponUsed = {
           code: couponCode,
-          originalYearlyAmount,
+          originalAmount,
           discountApplied,
-          finalYearlyAmount,
+          finalAmount,
           savings: discountApplied
         };
       }
@@ -2612,9 +2643,9 @@ exports.verifyEmandate = async (req, res) => {
       if (couponCode) {
         responseData.couponWillBeApplied = {
           code: couponCode,
-          originalYearlyAmount,
+          originalAmount,
           discountApplied,
-          finalYearlyAmount,
+          finalAmount,
           savings: discountApplied
         };
       }

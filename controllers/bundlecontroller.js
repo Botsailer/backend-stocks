@@ -13,6 +13,8 @@ exports.createBundle = asyncHandler(async (req, res) => {
     category, 
     monthlyPrice, 
     monthlyemandateprice, 
+    quarterlyemandateprice,
+    yearlyemandateprice,
     yearlyPrice 
   } = req.body;
 
@@ -24,7 +26,9 @@ exports.createBundle = asyncHandler(async (req, res) => {
     return res.status(400).json({ error: 'Invalid category. Must be basic or premium' });
   }
 
-  if (monthlyPrice === undefined && monthlyemandateprice === undefined && yearlyPrice === undefined) {
+  if (monthlyPrice === undefined && monthlyemandateprice === undefined && 
+      quarterlyemandateprice === undefined && yearlyemandateprice === undefined && 
+      yearlyPrice === undefined) {
     return res.status(400).json({ error: 'At least one pricing option is required' });
   }
 
@@ -47,6 +51,8 @@ exports.createBundle = asyncHandler(async (req, res) => {
     category,
     monthlyPrice,
     monthlyemandateprice,
+    quarterlyemandateprice,
+    yearlyemandateprice,
     yearlyPrice
   });
 
@@ -68,6 +74,8 @@ exports.updateBundle = asyncHandler(async (req, res) => {
     category, 
     monthlyPrice, 
     monthlyemandateprice, 
+    quarterlyemandateprice,
+    yearlyemandateprice,
     yearlyPrice 
   } = req.body;
 
@@ -101,11 +109,15 @@ exports.updateBundle = asyncHandler(async (req, res) => {
   // Update pricing fields
   if (monthlyPrice !== undefined) bundle.monthlyPrice = monthlyPrice;
   if (monthlyemandateprice !== undefined) bundle.monthlyemandateprice = monthlyemandateprice;
+  if (quarterlyemandateprice !== undefined) bundle.quarterlyemandateprice = quarterlyemandateprice;
+  if (yearlyemandateprice !== undefined) bundle.yearlyemandateprice = yearlyemandateprice;
   if (yearlyPrice !== undefined) bundle.yearlyPrice = yearlyPrice;
 
   // Validate at least one price exists
   if (bundle.monthlyPrice === null && 
       bundle.monthlyemandateprice === null && 
+      bundle.quarterlyemandateprice === null &&
+      bundle.yearlyemandateprice === null &&
       bundle.yearlyPrice === null) {
     return res.status(400).json({ error: 'At least one pricing option is required' });
   }

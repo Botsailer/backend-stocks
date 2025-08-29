@@ -78,16 +78,7 @@ discountApplied: {
     default: 0,
     min: 0
   },
-  gstAmount: {
-    type: Number,
-    default: 0,
-    min: 0
-  },
-  gstInclusiveAmount: {
-    type: Number,
-    default: 0,
-    min: 0
-  },
+
   lastPaymentAt: {
     type: Date,
     default: Date.now

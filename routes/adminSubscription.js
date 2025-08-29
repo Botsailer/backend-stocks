@@ -23,17 +23,17 @@ router.use(passport.authenticate('jwt', { session: false }), requireAdmin);
  * @swagger
  * components:
  *   schemas:
- *     Subscription:
+ *     AdminSubscription:
  *       type: object
  *       properties:
  *         _id:
  *           type: string
  *           description: MongoDB subscription ID
  *         user:
- *           $ref: '#/components/schemas/User'
+ *           type: object
  *           description: Full user data
  *         portfolio:
- *           $ref: '#/components/schemas/Portfolio'
+ *           type: object
  *           description: Full portfolio data
  *         isActive:
  *           type: boolean
@@ -45,10 +45,6 @@ router.use(passport.authenticate('jwt', { session: false }), requireAdmin);
  *           type: string
  *           format: date-time
  *           description: Last renewal date
- *         expiryDate:
- *           type: string
- *           format: date-time
- *           description: Expiry date of subscription
  *         createdAt:
  *           type: string
  *           format: date-time
@@ -57,7 +53,22 @@ router.use(passport.authenticate('jwt', { session: false }), requireAdmin);
  *           type: string
  *           format: date-time
  *           description: Last update timestamp
+ *     AdminSubscriptionList:
+ *       type: object
+ *       properties:
+ *         success:
+ *           type: boolean
+ *           example: true
+ *         count:
+ *           type: integer
+ *           description: Total number of subscriptions
+ *           example: 25
+ *         subscriptions:
+ *           type: array
+ *           items:
+ *             $ref: '#/components/schemas/AdminSubscription'
  */
+
 /**
  * @swagger
  * /api/admin/subscriptions:
@@ -73,7 +84,7 @@ router.use(passport.authenticate('jwt', { session: false }), requireAdmin);
  *         content:
  *           application/json:
  *             schema:
- *               $ref: '#/components/schemas/SubscriptionListResponse'
+ *               $ref: '#/components/schemas/AdminSubscriptionList'
  *       401:
  *         description: Unauthorized - invalid or missing authentication
  *       403:
@@ -114,7 +125,7 @@ router.get('/', adminCtl.listSubscriptions);
  *         content:
  *           application/json:
  *             schema:
- *               $ref: '#/components/schemas/Subscription'
+ *               $ref: '#/components/schemas/AdminSubscription'
  *       401:
  *         description: Unauthorized - invalid or missing authentication
  *       403:
@@ -126,9 +137,12 @@ router.get('/', adminCtl.listSubscriptions);
  *             schema:
  *               type: object
  *               properties:
+ *                 success:
+ *                   type: boolean
+ *                   example: false
  *                 error:
  *                   type: string
- *                   example: Subscription not found
+ *                   example: "Subscription not found"
  *       500:
  *         description: Server error
  *         content:
@@ -136,9 +150,14 @@ router.get('/', adminCtl.listSubscriptions);
  *             schema:
  *               type: object
  *               properties:
+ *                 success:
+ *                   type: boolean
+ *                   example: false
  *                 error:
  *                   type: string
- *                   example: Failed to retrieve subscription
+ *                   example: "Failed to generate invoice"
+ *                 details:
+ *                   type: string
  */
 router.get('/:id', adminCtl.getSubscription);
 
@@ -147,18 +166,20 @@ router.get('/:id', adminCtl.getSubscription);
  * /api/admin/subscriptions/{id}/invoice:
  *   get:
  *     summary: Generate invoice for a subscription
- *     description: Generate and return invoice data for a specific subscription
+ *     description: Creates a detailed invoice PDF for a specific subscription
  *     tags: [AdminSubscriptions]
+ *     security:
+ *       - bearerAuth: []
  *     parameters:
  *       - in: path
  *         name: id
  *         required: true
  *         schema:
  *           type: string
- *         description: Subscription ID
+ *         description: MongoDB subscription ID
  *     responses:
  *       200:
- *         description: Invoice generated successfully
+ *         description: Invoice data generated successfully
  *         content:
  *           application/json:
  *             schema:
@@ -172,7 +193,7 @@ router.get('/:id', adminCtl.getSubscription);
  *                   properties:
  *                     invoiceNumber:
  *                       type: string
- *                       example: "INV-12345678-987654"
+ *                       example: "INV-12345678-123456"
  *                     customerName:
  *                       type: string
  *                       example: "John Doe"
@@ -182,15 +203,17 @@ router.get('/:id', adminCtl.getSubscription);
  *                     productName:
  *                       type: string
  *                       example: "Premium Portfolio"
- *                     paymentType:
- *                       type: string
- *                       example: "Emandate"
  *                     amount:
  *                       type: number
- *                       example: 1200
- *                     paymentStatus:
+ *                       example: 999.99
+ *                     paymentDate:
  *                       type: string
- *                       example: "active"
+ *                       format: date-time
+ *                       example: "2024-01-15T10:30:00.000Z"
+ *       401:
+ *         description: Unauthorized - invalid or missing authentication
+ *       403:
+ *         description: Forbidden - user does not have admin privileges
  *       404:
  *         description: Subscription not found
  *       500:
@@ -202,7 +225,7 @@ router.get('/:id/invoice', adminCtl.generateInvoice);
  * @swagger
  * /api/admin/subscriptions:
  *   post:
- *     summary: Create a new subscription record
+ *     summary: Create a new subscription
  *     description: Creates a subscription relationship between a user and portfolio
  *     tags: [AdminSubscriptions]
  *     security:
@@ -218,20 +241,20 @@ router.get('/:id/invoice', adminCtl.generateInvoice);
  *               userId:
  *                 type: string
  *                 description: MongoDB user ID
- *                 example: 60f72a9b1d2f3b0014b3c0f1
+ *                 example: "507f1f77bcf86cd799439011"
  *               portfolioId:
  *                 type: string
  *                 description: MongoDB portfolio ID
- *                 example: 60f72a9b1d2f3b0014b3c0f2
+ *                 example: "507f1f77bcf86cd799439012"
  *     responses:
  *       201:
  *         description: Subscription created successfully
  *         content:
  *           application/json:
  *             schema:
- *               $ref: '#/components/schemas/Subscription'
+ *               $ref: '#/components/schemas/AdminSubscription'
  *       400:
- *         description: Validation error
+ *         description: Bad request - missing required fields
  *         content:
  *           application/json:
  *             schema:
@@ -246,14 +269,6 @@ router.get('/:id/invoice', adminCtl.generateInvoice);
  *         description: Forbidden - user does not have admin privileges
  *       500:
  *         description: Server error
- *         content:
- *           application/json:
- *             schema:
- *               type: object
- *               properties:
- *                 error:
- *                   type: string
- *                   example: Unable to create subscription
  */
 router.post('/', adminCtl.createSubscription);
 
@@ -261,8 +276,8 @@ router.post('/', adminCtl.createSubscription);
  * @swagger
  * /api/admin/subscriptions/{id}:
  *   put:
- *     summary: Update a subscription by ID
- *     description: Modify subscription details such as active status or missed cycles
+ *     summary: Update a subscription
+ *     description: Updates an existing subscription with new data
  *     tags: [AdminSubscriptions]
  *     security:
  *       - bearerAuth: []
@@ -280,60 +295,28 @@ router.post('/', adminCtl.createSubscription);
  *           schema:
  *             type: object
  *             properties:
- *               isActive:
- *                 type: boolean
- *                 description: Activate/deactivate subscription
- *               missedCycles:
+ *               status:
+ *                 type: string
+ *                 enum: [active, cancelled, expired, pending]
+ *                 description: New subscription status
+ *               amount:
  *                 type: number
- *                 description: Number of missed payment cycles
- *               lastRenewed:
- *                 type: string
- *                 format: date-time
- *                 description: Date of last renewal
- *               expiryDate:
- *                 type: string
- *                 format: date-time
- *                 description: Expiry date of subscription
+ *                 description: Updated subscription amount
  *     responses:
  *       200:
- *         description: Updated subscription
+ *         description: Subscription updated successfully
  *         content:
  *           application/json:
  *             schema:
- *               $ref: '#/components/schemas/Subscription'
- *       400:
- *         description: Validation error
- *         content:
- *           application/json:
- *             schema:
- *               type: object
- *               properties:
- *                 error:
- *                   type: string
+ *               $ref: '#/components/schemas/AdminSubscription'
  *       401:
  *         description: Unauthorized - invalid or missing authentication
  *       403:
  *         description: Forbidden - user does not have admin privileges
  *       404:
  *         description: Subscription not found
- *         content:
- *           application/json:
- *             schema:
- *               type: object
- *               properties:
- *                 error:
- *                   type: string
- *                   example: Subscription not found
  *       500:
  *         description: Server error
- *         content:
- *           application/json:
- *             schema:
- *               type: object
- *               properties:
- *                 error:
- *                   type: string
- *                   example: Failed to update subscription
  */
 router.put('/:id', adminCtl.updateSubscription);
 
@@ -341,8 +324,8 @@ router.put('/:id', adminCtl.updateSubscription);
  * @swagger
  * /api/admin/subscriptions/{id}:
  *   delete:
- *     summary: Delete a subscription by ID
- *     description: Permanently removes a subscription record
+ *     summary: Delete a subscription
+ *     description: Permanently deletes a subscription
  *     tags: [AdminSubscriptions]
  *     security:
  *       - bearerAuth: []
@@ -355,7 +338,7 @@ router.put('/:id', adminCtl.updateSubscription);
  *         description: MongoDB subscription ID
  *     responses:
  *       200:
- *         description: Deletion confirmation
+ *         description: Subscription deleted successfully
  *         content:
  *           application/json:
  *             schema:
@@ -363,31 +346,15 @@ router.put('/:id', adminCtl.updateSubscription);
  *               properties:
  *                 message:
  *                   type: string
- *                   example: Subscription deleted
+ *                   example: "Subscription deleted"
  *       401:
  *         description: Unauthorized - invalid or missing authentication
  *       403:
  *         description: Forbidden - user does not have admin privileges
  *       404:
  *         description: Subscription not found
- *         content:
- *           application/json:
- *             schema:
- *               type: object
- *               properties:
- *                 error:
- *                   type: string
- *                   example: Subscription not found
  *       500:
  *         description: Server error
- *         content:
- *           application/json:
- *             schema:
- *               type: object
- *               properties:
- *                 error:
- *                   type: string
- *                   example: Failed to delete subscription
  */
 router.delete('/:id', adminCtl.deleteSubscription);
 
