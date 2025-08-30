@@ -341,9 +341,18 @@ const PortfolioSchema = new Schema({
 
   emandateSubriptionFees : {
     type:[emandateSubriptionFeesSchema],
-    require: true,
-    validate: V =>  Array.isArray(V) && V.length > 0
-
+    required: true,
+    validate: {
+      validator: function(V) {
+        // Ensure it's an array and not empty
+        if (!Array.isArray(V) || V.length === 0) {
+          return false;
+        }
+        // Ensure each item has required fields
+        return V.every(fee => fee && fee.type && fee.price !== undefined && fee.price !== null);
+      },
+      message: 'emandateSubriptionFees must be a non-empty array with valid fee objects containing type and price'
+    }
   },
 
   minInvestment: {
@@ -501,6 +510,17 @@ PortfolioSchema.virtual('daysSinceCreation').get(function() {
 
 // Pre-save hook for data consistency and stockRef linking
 PortfolioSchema.pre('save', async function(next) {
+  // Validate emandateSubriptionFees to prevent empty strings or invalid data
+  if (this.emandateSubriptionFees !== undefined) {
+    if (typeof this.emandateSubriptionFees === 'string' && this.emandateSubriptionFees.trim() === '') {
+      // If it's an empty string, set it to undefined to trigger the required validation
+      this.emandateSubriptionFees = undefined;
+    } else if (!Array.isArray(this.emandateSubriptionFees)) {
+      // If it's not an array, set it to undefined to trigger the required validation
+      this.emandateSubriptionFees = undefined;
+    }
+  }
+
   // Sanitize holdings data to prevent NaN values
   this.holdings.forEach(holding => {
     holding.buyPrice = parseFloat(holding.buyPrice) || 0;
