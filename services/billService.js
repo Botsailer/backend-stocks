@@ -100,32 +100,16 @@ async function generateBill(subscriptionId, paymentDetails = {}) {
       throw new Error('Invalid subscription product type or missing product data');
     }
 
-    // Calculate tax - only if amount is not already GST-inclusive
+    // No GST calculation - amounts are already final
     let taxAmount = 0;
     let totalAmount = subtotal;
     
-    // Check if subscription has GST fields (eMandate subscriptions)
-    if (subscription.gstAmount && subscription.gstInclusiveAmount) {
-      // Amount is already GST-inclusive
-      taxAmount = subscription.gstAmount;
-      totalAmount = subscription.gstInclusiveAmount;
-      logger.info('Using pre-calculated GST for bill', {
-        subscriptionId: subscription._id,
-        gstAmount: taxAmount,
-        gstInclusiveAmount: totalAmount
-      });
-    } else {
-      // Calculate tax for non-eMandate subscriptions
-      taxAmount = Math.round((subtotal * TAX_RATE) / 100);
-      totalAmount = subtotal + taxAmount;
-      logger.info('Calculated tax for bill', {
-        subscriptionId: subscription._id,
-        subtotal,
-        taxRate: TAX_RATE,
-        taxAmount,
-        totalAmount
-      });
-    }
+    logger.info('No GST applied to bill', {
+      subscriptionId: subscription._id,
+      subtotal,
+      taxAmount,
+      totalAmount
+    });
 
     // Create bill
     const billData = {
@@ -136,7 +120,7 @@ async function generateBill(subscriptionId, paymentDetails = {}) {
       customerDetails,
       items,
       subtotal,
-      taxRate: TAX_RATE,
+      taxRate: 0, // No GST
       taxAmount,
       totalAmount,
       paymentId: paymentDetails.paymentId || null,
@@ -225,7 +209,6 @@ function generateBillHTML(bill) {
             <div>${COMPANY_INFO.country}</div>
             <div>Phone: ${COMPANY_INFO.phone}</div>
             <div>Email: ${COMPANY_INFO.email}</div>
-            <div>GSTIN: ${COMPANY_INFO.gstin}</div>
           </div>
           <div class="invoice-info">
             <div class="invoice-title">INVOICE</div>
@@ -277,10 +260,6 @@ function generateBillHTML(bill) {
             <tr>
               <td>Subtotal:</td>
               <td class="amount">${formatCurrency(bill.subtotal)}</td>
-            </tr>
-            <tr>
-              <td>GST (${bill.taxRate}%):</td>
-              <td class="amount">${formatCurrency(bill.taxAmount)}</td>
             </tr>
             <tr class="total-row">
               <td>Total Amount:</td>

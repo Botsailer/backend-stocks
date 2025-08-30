@@ -56,8 +56,8 @@ const BillSchema = new Schema({
   
   // Financial details
   subtotal: { type: Number, required: true },
-  taxRate: { type: Number, default: 18 }, // GST rate in percentage
-  taxAmount: { type: Number, required: true },
+  taxRate: { type: Number, default: 0 }, // No GST
+  taxAmount: { type: Number, default: 0 }, // No GST
   totalAmount: { type: Number, required: true },
   
   // Payment details

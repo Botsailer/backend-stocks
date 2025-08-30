@@ -9,9 +9,8 @@ module.exports = {
     phone: "+91-9876543210",
     email: "support@rangaone.finance",
     website: "www.rangaone.finance",
-    gstin: "27AAAAA0000A1Z5",
     pan: "AAAAA0000A"
   },
-  TAX_RATE: 18, // GST percentage
+  TAX_RATE: 0, // No GST
   BILL_DUE_DAYS: 30 // Days until bill is due
 };
