@@ -4,7 +4,7 @@ const express = require("express");
 const router = express.Router();
 const passport = require("passport");
 const subscriptionController = require("../controllers/subscriptionController");
-const checkEMandate = require("../middleware/checkEMandate");
+
 
 const requireAuth = passport.authenticate("jwt", { session: false });
 
@@ -69,7 +69,7 @@ const requireAuth = passport.authenticate("jwt", { session: false });
  *       503:
  *         description: Payment service unavailable
  */
-router.post("/order", requireAuth, checkEMandate, subscriptionController.createOrder);
+router.post("/order", requireAuth, subscriptionController.createOrder);
 
 /**
  * @swagger
@@ -114,7 +114,7 @@ router.post("/order", requireAuth, checkEMandate, subscriptionController.createO
  *       503:
  *         description: Payment service unavailable
  */
-router.post("/checkout", requireAuth, checkEMandate, subscriptionController.checkoutCart);
+router.post("/checkout", requireAuth, subscriptionController.checkoutCart);
 
 /**
  * @swagger
