@@ -14,7 +14,7 @@ const logger = winston.createLogger({
   ]
 });
 
-const TELEGRAM_BOT_API_URL = process.env.TELEGRAM_BOT_API_URL || 'http://89.116.121.11:5000/';
+const TELEGRAM_BOT_API_URL = process.env.TELEGRAM_BOT_API_URL || 'http://89.116.121.11:5000';
 const INVITE_EXPIRY_DAYS = process.env.TELEGRAM_INVITE_EXPIRY_DAYS || 7;
 
 class TelegramService {
