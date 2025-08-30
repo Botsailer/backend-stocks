@@ -197,6 +197,26 @@ router.get("/history", requireAuth, subscriptionController.getHistory);
 /**
  * @swagger
  * /api/subscriptions/emandate:
+ *   get:
+ *     summary: Get emandate information (method not allowed)
+ *     tags: [Subscriptions]
+ *     security:
+ *       - bearerAuth: []
+ *     responses:
+ *       405:
+ *         description: Method not allowed - use POST to create emandate
+ */
+router.get("/emandate", requireAuth, (req, res) => {
+  return res.status(405).json({
+    success: false,
+    error: "Method not allowed. Use POST to create emandate subscription.",
+    code: "METHOD_NOT_ALLOWED"
+  });
+});
+
+/**
+ * @swagger
+ * /api/subscriptions/emandate:
  *   post:
  *     summary: Create eMandate for recurring payments with flexible intervals
  *     tags: [Subscriptions]
@@ -270,7 +290,6 @@ router.get("/history", requireAuth, subscriptionController.getHistory);
  *                 interval:
  *                   type: number
  *                   description: Interval in months between charges
-
  *                 status:
  *                   type: string
  *                   description: Subscription status
@@ -283,26 +302,6 @@ router.get("/history", requireAuth, subscriptionController.getHistory);
  *       503:
  *         description: Payment service unavailable
  */
-/**
- * @swagger
- * /api/subscriptions/emandate:
- *   get:
- *     summary: Get emandate information (method not allowed)
- *     tags: [Subscriptions]
- *     security:
- *       - bearerAuth: []
- *     responses:
- *       405:
- *         description: Method not allowed - use POST to create emandate
- */
-router.get("/emandate", requireAuth, (req, res) => {
-  return res.status(405).json({
-    success: false,
-    error: "Method not allowed. Use POST to create emandate subscription.",
-    code: "METHOD_NOT_ALLOWED"
-  });
-});
-
 router.post("/emandate", requireAuth, subscriptionController.createEmandate);
 
 /**
