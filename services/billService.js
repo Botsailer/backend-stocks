@@ -41,6 +41,19 @@ async function generateBill(subscriptionId, paymentDetails = {}) {
       throw new Error('Subscription not found');
     }
 
+    // Debug: Log subscription data
+    logger.info('Subscription data for bill generation', {
+      subscriptionId: subscription._id,
+      productType: subscription.productType,
+      hasUser: !!subscription.user,
+      hasProductId: !!subscription.productId,
+      hasPortfolio: !!subscription.portfolio,
+      hasBundleId: !!subscription.bundleId,
+      amount: subscription.amount,
+      planType: subscription.planType,
+      userEmail: subscription.user?.email
+    });
+
     // Check if bill already exists for this subscription
     const existingBill = await Bill.findOne({ 
       subscription: subscriptionId,
@@ -63,6 +76,16 @@ async function generateBill(subscriptionId, paymentDetails = {}) {
     // Prepare bill items
     const items = [];
     let subtotal = 0;
+
+    // Debug: Log subscription data
+    logger.info('Preparing bill items for subscription', {
+      subscriptionId: subscription._id,
+      productType: subscription.productType,
+      hasBundleId: !!subscription.bundleId,
+      hasPortfolio: !!subscription.portfolio,
+      amount: subscription.amount,
+      planType: subscription.planType
+    });
 
     if (subscription.productType === 'Bundle' && subscription.bundleId) {
       // Bundle subscription
@@ -100,6 +123,19 @@ async function generateBill(subscriptionId, paymentDetails = {}) {
       throw new Error('Invalid subscription product type or missing product data');
     }
 
+    // Validate items array
+    if (!items || items.length === 0) {
+      throw new Error('No bill items generated for subscription');
+    }
+
+    // Validate each item has required fields
+    for (let i = 0; i < items.length; i++) {
+      const item = items[i];
+      if (!item.description || !item.productType || !item.productId || !item.planType || !item.unitPrice || !item.totalPrice) {
+        throw new Error(`Invalid item at index ${i}: missing required fields`);
+      }
+    }
+
     // No GST calculation - amounts are already final
     let taxAmount = 0;
     let totalAmount = subtotal;
@@ -132,6 +168,18 @@ async function generateBill(subscriptionId, paymentDetails = {}) {
     };
 
     const bill = new Bill(billData);
+    
+    // Debug: Log bill data before saving
+    logger.info('Creating bill with data', {
+      billData: {
+        user: billData.user,
+        subscription: billData.subscription,
+        subtotal: billData.subtotal,
+        totalAmount: billData.totalAmount,
+        itemsCount: billData.items.length
+      }
+    });
+    
     await bill.save();
 
     logger.info('Bill generated successfully', { 

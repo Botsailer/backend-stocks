@@ -94,16 +94,34 @@ const BillSchema = new Schema({
 // Generate bill number
 BillSchema.pre('save', async function(next) {
   if (!this.billNumber) {
-    const year = new Date().getFullYear();
-    const month = String(new Date().getMonth() + 1).padStart(2, '0');
-    const count = await this.constructor.countDocuments({
-      createdAt: {
-        $gte: new Date(year, new Date().getMonth(), 1),
-        $lt: new Date(year, new Date().getMonth() + 1, 1)
-      }
-    });
-    this.billNumber = `INV-${year}${month}-${String(count + 1).padStart(4, '0')}`;
+    try {
+      const year = new Date().getFullYear();
+      const month = String(new Date().getMonth() + 1).padStart(2, '0');
+      
+      // Count existing bills for this month using a more reliable method
+      const count = await this.constructor.countDocuments({
+        billDate: {
+          $gte: new Date(year, new Date().getMonth(), 1),
+          $lt: new Date(year, new Date().getMonth() + 1, 1)
+        }
+      });
+      
+      this.billNumber = `INV-${year}${month}-${String(count + 1).padStart(4, '0')}`;
+      
+      console.log(`Generated bill number: ${this.billNumber} (count: ${count})`);
+    } catch (error) {
+      console.error('Error generating bill number:', error);
+      // Fallback bill number
+      this.billNumber = `INV-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+    }
   }
+  
+  // Ensure billNumber is always set
+  if (!this.billNumber) {
+    this.billNumber = `INV-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+    console.log(`Fallback bill number generated: ${this.billNumber}`);
+  }
+  
   next();
 });
 
