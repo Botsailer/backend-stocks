@@ -143,20 +143,24 @@ exports.createPortfolio = asyncHandler(async (req, res) => {
       });
     }
 
-    // Step 2.5: Validate emandate subscription fee structure
-    if (!Array.isArray(requestData.emandateSubriptionFees) || requestData.emandateSubriptionFees.length === 0) {
-      return res.status(400).json({ error: 'At least one emandate subscription fee is required' });
-    }
-
-    const invalidEmandateFees = requestData.emandateSubriptionFees.filter(fee => 
-      !fee.type || typeof fee.price !== 'number' || fee.price <= 0
-    );
-    
-    if (invalidEmandateFees.length > 0) {
-      return res.status(400).json({ 
-        error: 'Invalid emandate subscription fee structure',
-        details: 'All emandate fees must have type and price > 0'
-      });
+    // Step 2.5: Validate emandate subscription fee structure (optional)
+    if (requestData.emandateSubriptionFees) {
+      if (!Array.isArray(requestData.emandateSubriptionFees)) {
+        return res.status(400).json({ error: 'emandateSubriptionFees must be an array' });
+      }
+      
+      if (requestData.emandateSubriptionFees.length > 0) {
+        const invalidEmandateFees = requestData.emandateSubriptionFees.filter(fee => 
+          !fee.type || typeof fee.price !== 'number' || fee.price <= 0
+        );
+        
+        if (invalidEmandateFees.length > 0) {
+          return res.status(400).json({ 
+            error: 'Invalid emandate subscription fee structure',
+            details: 'All emandate fees must have type and price > 0'
+          });
+        }
+      }
     }
 
     // Step 3: Calculate portfolio summary (for info only, don't block creation)

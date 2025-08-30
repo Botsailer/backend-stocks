@@ -18,7 +18,7 @@ async function digioPanVerify({ id_no, name, dob }) {
     throw err;
   }
 
-  const DIGIO_BASE_URL = await getConfig('DIGIO_BASE_URL', 'https://api.digio.in');
+  const DIGIO_BASE_URL = await getConfig('DIGIO_API_BASE', 'https://ext.digio.in:444');
   const DIGIO_PAN_ENDPOINT = await getConfig('DIGIO_PAN_ENDPOINT', '/v3/client/kyc/fetch_id_data/PAN');
   const DIGIO_CLIENT_ID = await getConfig('DIGIO_CLIENT_ID');
   const DIGIO_CLIENT_SECRET = await getConfig('DIGIO_CLIENT_SECRET');
@@ -51,6 +51,7 @@ async function digioPanVerify({ id_no, name, dob }) {
       validateStatus: s => s < 500
     });
 
+
     if (response.status >= 400) {
       const err = new Error('PAN_VERIFY_FAILED');
       err.code = response.data?.code || 'API_REQUEST_FAILED';
@@ -61,6 +62,7 @@ async function digioPanVerify({ id_no, name, dob }) {
 
     return response.data;
   } catch (error) {
+    console.log(error);
     // Pass through specific digio config error as-is for callers to map
     throw error;
   }

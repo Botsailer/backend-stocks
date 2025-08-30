@@ -140,7 +140,7 @@ exports.uploadDocument = async (req, res) => {
       embedded_signing: true
     };
     
-    const documentResponse = await digioRequest('POST', `${DIGIO_API_BASE}/v2/document`, documentPayload);
+    const documentResponse = await digioRequest('POST', `${DIGIO_API_BASE}/v2/client/document`, documentPayload);
     
     if (!documentResponse || !documentResponse.id) {
       throw new Error('Invalid document creation response from Digio');
@@ -233,16 +233,37 @@ exports.verifyPAN = async (req, res) => {
       dob: dob
     };
     
-    const response = await digioRequest('POST', `${DIGIO_API_BASE}/v2/pan`, panData);
+    const response = await digioRequest('POST', `${DIGIO_API_BASE}/v3/client/kyc/fetch_id_data/PAN`, panData);
     
-    res.json({
-      success: true,
-      message: "PAN verification completed",
-      data: response
-    });
+
+
+if(response.name_as_per_pan_match && response.date_of_birth_match && response.status === 'valid'){
+  res.json({
+    success: true,
+    message: "PAN verification completed",
+    data: response
+  });
+}else if(!response.name_as_per_pan_match && response.date_of_birth_match && response.status === 'valid'){
+  res.json({
+    success: false,
+    message: "Please check the name write full name along with middle name as per PAN",
+    data: response
+  });
+}else if(!response.date_of_birth_match && response.status === 'valid'){
+  res.json({
+    success: false,
+    message: "Please check the date of birth",
+    data: response
+  });
+}else{
+  res.json({
+    success: false,
+    message: "Please check the PAN number",
+    data: response
+  });
+}
     
   } catch (error) {
-    console.error('[verifyPAN] Error:', error);
     
     if (error.message.includes('BAD_REQUEST')) {
       return res.status(400).json({
@@ -506,7 +527,7 @@ exports.uploadTemplateDocument = async (req, res) => {
       embedded_signing: true
     };
     
-    const documentResponse = await digioRequest('POST', `${DIGIO_API_BASE}/v2/document`, documentPayload);
+    const documentResponse = await digioRequest('POST', `${DIGIO_API_BASE}/v2/client/document/upload`, documentPayload);
     
     if (!documentResponse || !documentResponse.id) {
       throw new Error('Invalid document creation response from Digio');

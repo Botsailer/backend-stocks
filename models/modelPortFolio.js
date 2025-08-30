@@ -341,17 +341,22 @@ const PortfolioSchema = new Schema({
 
   emandateSubriptionFees : {
     type:[emandateSubriptionFeesSchema],
-    required: true,
+    required: false, // Made optional since GST is removed
+    default: [], // Default to empty array
     validate: {
       validator: function(V) {
-        // Ensure it's an array and not empty
-        if (!Array.isArray(V) || V.length === 0) {
+        // If not provided, allow empty array
+        if (!V || V.length === 0) {
+          return true;
+        }
+        // If provided, ensure it's a valid array with required fields
+        if (!Array.isArray(V)) {
           return false;
         }
         // Ensure each item has required fields
         return V.every(fee => fee && fee.type && fee.price !== undefined && fee.price !== null);
       },
-      message: 'emandateSubriptionFees must be a non-empty array with valid fee objects containing type and price'
+      message: 'emandateSubriptionFees must be a valid array with valid fee objects containing type and price'
     }
   },
 

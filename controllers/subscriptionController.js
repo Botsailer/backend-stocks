@@ -374,7 +374,10 @@ const getProductInfo = async (productType, productId, planType, emandateType = n
     if (!product) throw new Error("Portfolio not found");
     
     if (emandateType) {
-      // Use emandate subscription fees
+      // Use emandate subscription fees if available
+      if (!product.emandateSubriptionFees || product.emandateSubriptionFees.length === 0) {
+        throw new Error(`Emandate subscription fees not configured for this portfolio`);
+      }
       const plan = product.emandateSubriptionFees.find(p => p.type === emandateType);
       if (!plan) throw new Error(`Emandate plan '${emandateType}' not available for portfolio`);
       amount = plan.price;
