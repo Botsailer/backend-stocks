@@ -1343,12 +1343,29 @@ exports.createEmandate = async (req, res) => {
       });
     }
 
+    // Calculate total_count based on emandate type for Razorpay requirement
+    let totalCount;
+    switch (emandateType) {
+      case 'monthly':
+        totalCount = 12; // 12 months
+        break;
+      case 'quarterly':
+        totalCount = 4;  // 4 quarters
+        break;
+      case 'yearly':
+        totalCount = 1;  // 1 year
+        break;
+      default:
+        totalCount = 12; // Default to 12 months
+    }
+
     const subscriptionParams = {
       plan_id: plan.id,
       customer_id: customer.id,
       quantity: 1,
       start_at: startAt,
       expire_by: expireBy,
+      total_count: totalCount, // Add total_count for Razorpay requirement
       notes: {
         user_id: userId.toString(),
         product_type: productType,
@@ -1376,6 +1393,7 @@ exports.createEmandate = async (req, res) => {
       emandateType,
       startAt,
       expireBy,
+      totalCount,
       emandateAmount,
       originalAmount,
       finalAmount,
