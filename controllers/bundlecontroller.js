@@ -32,10 +32,9 @@ exports.createBundle = asyncHandler(async (req, res) => {
     return res.status(400).json({ error: 'At least one pricing option is required' });
   }
 
-  if (portfolios && portfolios.length > 0) {
+  if (Array.isArray(portfolios) && portfolios.length > 0) {
     try {
       const existingPortfolios = await Portfolio.find({ _id: { $in: portfolios } });
-      
       if (existingPortfolios.length !== portfolios.length) {
         return res.status(400).json({ error: 'One or more portfolio IDs are invalid' });
       }
@@ -91,9 +90,9 @@ exports.updateBundle = asyncHandler(async (req, res) => {
     bundle.category = category;
   }
 
-  // Validate and update portfolios if provided
+  // Validate and update portfolios if provided and not empty
   if (portfolios !== undefined) {
-    if (portfolios.length > 0) {
+    if (Array.isArray(portfolios) && portfolios.length > 0) {
       try {
         const existingCount = await Portfolio.countDocuments({ _id: { $in: portfolios } });
         if (existingCount !== portfolios.length) {

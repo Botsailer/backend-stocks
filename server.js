@@ -730,11 +730,10 @@ dbAdapter.connect()
     });
 
     // Routes
-    app.use('/auth', authRoutes);
+app.use('/auth', authRoutes);
 app.use('/admin', require('./routes/admin'));
 app.use('/digio', require('./routes/digioRoutes'));
 app.use('/api/user', require('./routes/userRoute'));
-
 app.use('/api/subscriptions', require('./routes/Subscription'));
 app.use('/api/admin/subscriptions', require('./routes/adminSubscription'));
 app.use('/api/admin/coupons', require('./routes/couponRoute'));

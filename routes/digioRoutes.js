@@ -1,15 +1,31 @@
 const express = require("express");
+const multer = require("multer");
+const router = express.Router();
+
+// Configure multer for PDF uploads (memory storage)
+const upload = multer({
+  storage: multer.memoryStorage(),
+  limits: {
+    fileSize: 10 * 1024 * 1024, // 10MB limit
+  },
+  fileFilter: (req, file, cb) => {
+    if (file.mimetype === 'application/pdf') {
+      cb(null, true);
+    } else {
+      cb(new Error('Only PDF files are allowed'), false);
+    }
+  }
+});
+
 const {
-  uploadDocument,
   verifyPAN,
-  getEsignDocument,
-  initiateAadhaarEsign,
-  submitEsignOtp,
-  uploadTemplateDocument
+  uploadPdfForSigning,
+  refetchPdfFromUrl,
+  getLatestPdfData,
+  createDocumentForSigning
 } = require("../controllers/digioController");
 const passport = require("passport");
 
-const router = express.Router();
 const requireAuth = (req, res, next) => {
   console.log('[Auth Middleware] Headers:', req.headers.authorization);
   passport.authenticate("jwt", { session: false }, (err, user, info) => {
@@ -25,33 +41,6 @@ const requireAuth = (req, res, next) => {
  * @swagger
  * components:
  *   schemas:
- *     ESIGNInitiateRequest:
- *       type: object
- *       required:
- *         - documentId
- *         - aadhaarSuffix
- *       properties:
- *         documentId:
- *           type: string
- *         aadhaarSuffix:
- *           type: string
- *           pattern: '^[0-9]{4}$'
- *
- *     ESIGNOtpVerifyRequest:
- *       type: object
- *       required:
- *         - documentId
- *         - otp
- *         - transactionId
- *       properties:
- *         documentId:
- *           type: string
- *         otp:
- *           type: string
- *           pattern: '^[0-9]{6}$'
- *         transactionId:
- *           type: string
- * 
  *     PANVerificationRequest:
  *       type: object
  *       required:
@@ -102,178 +91,11 @@ const requireAuth = (req, res, next) => {
  * tags:
  *   - name: KYC
  *     description: Know Your Customer verification services
- *   - name: eSign
- *     description: Aadhaar eSign endpoints
+ *   - name: PDF Operations
+ *     description: PDF upload and management
  *   - name: Document Signing
  *     description: Digital document signing services
  */
-
-/** eSign endpoints */
-/**
- * @swagger
- * /digio/esign/document:
- *   get:
- *     summary: Get current eSign document status or create it if missing
- *     tags: [eSign]
- *     security:
- *       - bearerAuth: []
- *     responses:
- *       200:
- *         description: eSign document status
- */
-router.get('/esign/document', requireAuth, getEsignDocument);
-
-/**
- * @swagger
- * /digio/esign/aadhaar/init:
- *   post:
- *     summary: Initiate Aadhaar eSign using last 4 digits
- *     tags: [eSign]
- *     security:
- *       - bearerAuth: []
- *     requestBody:
- *       required: true
- *       content:
- *         application/json:
- *           schema:
- *             $ref: '#/components/schemas/ESIGNInitiateRequest'
- *     responses:
- *       200:
- *         description: Initiated
- */
-router.post('/esign/aadhaar/init', requireAuth, initiateAadhaarEsign);
-
-/**
- * @swagger
- * /digio/esign/aadhaar/otp:
- *   post:
- *     summary: Submit OTP to complete Aadhaar eSign
- *     tags: [eSign]
- *     security:
- *       - bearerAuth: []
- *     requestBody:
- *       required: true
- *       content:
- *         application/json:
- *           schema:
- *             $ref: '#/components/schemas/ESIGNOtpVerifyRequest'
- *     responses:
- *       200:
- *         description: Signed
- */
-router.post('/esign/aadhaar/otp', requireAuth, submitEsignOtp);
-
-/**
- * @swagger
- * /digio/esign/template/upload:
- *   post:
- *     summary: Upload a PDF (URL or base64) to Digio and get documentId
- *     tags: [eSign]
- *     security:
- *       - bearerAuth: []
- *     requestBody:
- *       required: true
- *       content:
- *         application/json:
- *           schema:
- *             type: object
- *             properties:
- *               fileUrl:
- *                 type: string
- *                 description: Public URL of PDF
- *               fileBase64:
- *                 type: string
- *                 description: Base64-encoded PDF (data:application/pdf;base64,...) if not using URL
- *               fileName:
- *                 type: string
- *               signerEmail:
- *                 type: string
- *               signerName:
- *                 type: string
- *               signerPhone:
- *                 type: string
- *               reason:
- *                 type: string
- *     responses:
- *       200:
- *         description: Uploaded and created Digio document
- */
-router.post('/esign/template/upload', requireAuth, uploadTemplateDocument);
-
-/**
- * @swagger
- * /digio/document/upload:
- *   post:
- *     summary: Upload PDF document for digital signing
- *     tags: [Document Signing]
- *     security:
- *       - bearerAuth: []
- *     requestBody:
- *       required: true
- *       content:
- *         application/json:
- *           schema:
- *             type: object
- *             required:
- *               - fileUrl
- *               - signerEmail
- *               - signerName
- *             properties:
- *               fileUrl:
- *                 type: string
- *                 format: uri
- *                 description: URL of the PDF document to be signed
- *                 example: "https://example.com/document.pdf"
- *               fileName:
- *                 type: string
- *                 description: Name for the document
- *                 example: "Agreement.pdf"
- *               signerEmail:
- *                 type: string
- *                 format: email
- *                 description: Email of the signer
- *                 example: "john@example.com"
- *               signerName:
- *                 type: string
- *                 description: Name of the signer
- *                 example: "John Doe"
- *               signerPhone:
- *                 type: string
- *                 description: Phone number of the signer
- *                 example: "9999999999"
- *               reason:
- *                 type: string
- *                 description: Reason for signing
- *                 example: "Agreement Signature"
- *     responses:
- *       200:
- *         description: Document uploaded successfully
- *         content:
- *           application/json:
- *             schema:
- *               type: object
- *               properties:
- *                 success:
- *                   type: boolean
- *                 message:
- *                   type: string
- *                 data:
- *                   type: object
- *                   properties:
- *                     sessionId:
- *                       type: string
- *                     documentId:
- *                       type: string
- *                     identifier:
- *                       type: string
- *                     signUrl:
- *                       type: string
- *       400:
- *         description: Invalid input
- *       401:
- *         description: Authentication required
- */
-router.post("/document/upload", requireAuth, uploadDocument);
 
 /**
  * @swagger
@@ -327,5 +149,235 @@ router.post("/document/upload", requireAuth, uploadDocument);
  *                   type: string
  */
 router.post("/pan/verify", requireAuth, verifyPAN);
+
+/**
+ * @swagger
+ * /digio/pdf/upload:
+ *   post:
+ *     summary: Upload PDF file and convert to base64 for Digio signing
+ *     tags: [PDF Operations]
+ *     security:
+ *       - bearerAuth: []
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         multipart/form-data:
+ *           schema:
+ *             type: object
+ *             required:
+ *               - file
+ *             properties:
+ *               file:
+ *                 type: string
+ *                 format: binary
+ *                 description: PDF file to upload
+ *     responses:
+ *       200:
+ *         description: PDF uploaded and converted successfully
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success:
+ *                   type: boolean
+ *                 message:
+ *                   type: string
+ *                 data:
+ *                   type: object
+ *                   properties:
+ *                     recordId:
+ *                       type: string
+ *                     fileName:
+ *                       type: string
+ *                     fileSize:
+ *                       type: number
+ *                     base64Length:
+ *                       type: number
+ *                     nextStep:
+ *                       type: string
+ *       400:
+ *         description: Invalid file or no file provided
+ *       401:
+ *         description: Authentication required
+ */
+router.post('/pdf/upload', requireAuth, upload.single('file'), uploadPdfForSigning);
+
+/**
+ * @swagger
+ * /digio/pdf/refetch:
+ *   post:
+ *     summary: Force refetch PDF from ESIGN_PDF_URL and convert to base64
+ *     tags: [PDF Operations]
+ *     security:
+ *       - bearerAuth: []
+ *     responses:
+ *       200:
+ *         description: PDF refetched successfully
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success:
+ *                   type: boolean
+ *                 message:
+ *                   type: string
+ *                 data:
+ *                   type: object
+ *                   properties:
+ *                     recordId:
+ *                       type: string
+ *                     fileName:
+ *                       type: string
+ *                     fileSize:
+ *                       type: number
+ *                     base64Length:
+ *                       type: number
+ *                     sourceUrl:
+ *                       type: string
+ *                     message:
+ *                       type: string
+ *       401:
+ *         description: Authentication required
+ *       503:
+ *         description: PDF URL not configured
+ */
+router.post('/pdf/refetch', requireAuth, refetchPdfFromUrl);
+
+/**
+ * @swagger
+ * /digio/pdf/data:
+ *   get:
+ *     summary: Get the latest PDF base64 data for the user
+ *     tags: [PDF Operations]
+ *     security:
+ *       - bearerAuth: []
+ *     responses:
+ *       200:
+ *         description: PDF data retrieved successfully
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success:
+ *                   type: boolean
+ *                 data:
+ *                   type: object
+ *                   properties:
+ *                     recordId:
+ *                       type: string
+ *                     fileName:
+ *                       type: string
+ *                     fileSize:
+ *                       type: number
+ *                     base64Length:
+ *                       type: number
+ *                     idType:
+ *                       type: string
+ *                     status:
+ *                       type: string
+ *                     createdAt:
+ *                       type: string
+ *                     base64Data:
+ *                       type: string
+ *       401:
+ *         description: Authentication required
+ *       404:
+ *         description: No PDF data found
+ */
+router.get('/pdf/data', requireAuth, getLatestPdfData);
+
+/**
+ * @swagger
+ * /digio/document/create:
+ *   post:
+ *     summary: Create document for signing using Digio API (Based on Postman collection)
+ *     tags: [Document Signing]
+ *     security:
+ *       - bearerAuth: []
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required:
+ *               - signerEmail
+ *               - signerName
+ *             properties:
+ *               signerEmail:
+ *                 type: string
+ *                 format: email
+ *                 description: Email of the signer
+ *                 example: "user@example.com"
+ *               signerName:
+ *                 type: string
+ *                 description: Name of the signer
+ *                 example: "John Doe"
+ *               signerPhone:
+ *                 type: string
+ *                 description: Phone number of the signer (optional)
+ *                 example: "1234567890"
+ *               reason:
+ *                 type: string
+ *                 description: Reason for signing (optional)
+ *                 example: "Document Agreement"
+ *               expireInDays:
+ *                 type: number
+ *                 description: Number of days until document expires
+ *                 example: 10
+ *               displayOnPage:
+ *                 type: string
+ *                 description: Display preference
+ *                 example: "Custom"
+ *               notifySigners:
+ *                 type: boolean
+ *                 description: Whether to notify signers
+ *                 example: true
+ *               sendSignLink:
+ *                 type: boolean
+ *                 description: Whether to send sign link
+ *                 example: true
+ *     responses:
+ *       200:
+ *         description: Document created successfully
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success:
+ *                   type: boolean
+ *                 message:
+ *                   type: string
+ *                 data:
+ *                   type: object
+ *                   properties:
+ *                     recordId:
+ *                       type: string
+ *                     documentId:
+ *                       type: string
+ *                     fileName:
+ *                       type: string
+ *                     signerEmail:
+ *                       type: string
+ *                     signerName:
+ *                       type: string
+ *                     signUrl:
+ *                       type: string
+ *                     expireInDays:
+ *                       type: number
+ *       400:
+ *         description: Invalid input parameters
+ *       401:
+ *         description: Authentication required
+ *       404:
+ *         description: No PDF data found
+ *       503:
+ *         description: Digio API not configured
+ */
+router.post('/document/create', requireAuth, createDocumentForSigning);
 
 module.exports = router;

@@ -5,8 +5,23 @@ module.exports = {
   
   // API endpoints
   apiBase: {
-    sandbox: 'https://ext-gateway.digio.in',
-    production: 'https://app.digio.in'
+    sandbox: 'https://ext.digio.in:444',
+    production: 'https://ext.digio.in:444'
+  },
+  
+  // Template configuration
+  template: {
+    defaultId: process.env.DIGIO_TEMPLATE_ID || 'TMP25083108440494195SS3J7UVAZ8BR',
+    signCoordinates: {
+      default: {
+        "1": [{
+          llx: 181.99970713317074,
+          lly: 496.001598402815,
+          urx: 318.99104879757715,
+          ury: 517.9997575993099
+        }]
+      }
+    }
   },
   
   // SDK settings

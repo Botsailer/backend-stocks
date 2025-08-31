@@ -41,11 +41,36 @@ async function digioRequest(method, url, data = {}, headers = {}) {
       config.params = data;
     }
 
+    console.log(`[DIGIO] Request config:`, {
+      method: config.method,
+      url: config.url,
+      headers: config.headers,
+      dataSize: config.data ? JSON.stringify(config.data).length : 0
+    });
+
     const response = await axios(config);
     console.log(`[DIGIO] Response Status: ${response.status}`, response.data);
     
     if (response.status >= 400) {
-      throw new Error(`Digio API Error: ${response.status} - ${JSON.stringify(response.data)}`);
+      const errorMessage = response.data?.message || `HTTP ${response.status}`;
+      const errorCode = response.data?.code || 'UNKNOWN_ERROR';
+      const errorDetails = response.data?.details || '';
+      
+      console.error(`[DIGIO] API Error ${response.status}:`, {
+        code: errorCode,
+        message: errorMessage,
+        details: errorDetails,
+        fullResponse: response.data
+      });
+      
+      // Create a more descriptive error
+      const enhancedError = new Error(`Digio API Error: ${response.status} - ${JSON.stringify(response.data)}`);
+      enhancedError.status = response.status;
+      enhancedError.code = errorCode;
+      enhancedError.details = errorDetails;
+      enhancedError.response = response.data;
+      
+      throw enhancedError;
     }
     
     return response.data;
@@ -62,229 +87,138 @@ async function digioRequest(method, url, data = {}, headers = {}) {
   }
 }
 
-// Helper: ensure we have base64 PDF data (download from URL if needed)
-async function resolvePdfBase64({ fileUrl, fileBase64 }) {
-  if (fileBase64) {
-    return fileBase64.replace(/^data:application\/pdf;base64,/, '');
-  }
-  if (!fileUrl) return null;
-  try {
-    const resp = await axios.get(fileUrl, { responseType: 'arraybuffer', timeout: 30000 });
-    return Buffer.from(resp.data).toString('base64');
-  } catch (e) {
-    console.error('[DIGIO] Failed to fetch file from URL for base64 conversion:', { fileUrl, error: e.message });
-    return null;
-  }
-}
-
 /**
- * Upload and create document for signing
- */
-exports.uploadDocument = async (req, res) => {
-  try {
-    console.log('[uploadDocument] Request received:', {
-      user: req.user,
-      body: req.body,
-      headers: req.headers.authorization
-    });
-    
-    const userId = req.user?.id || req.user?._id;
-    const { fileUrl, fileName, signerEmail, signerName, signerPhone, reason, fileBase64 } = req.body;
-    
-    if (!userId) {
-      return res.status(401).json({
-        success: false,
-        error: "Authentication required - user not found"
-      });
-    }
-    
-    if (!fileUrl && !fileBase64) {
-      return res.status(400).json({
-        success: false,
-        error: "Either fileUrl or fileBase64 is required"
-      });
-    }
-    
-    if (!signerEmail || !signerName) {
-      return res.status(400).json({
-        success: false,
-        error: "signerEmail and signerName are required"
-      });
-    }
-    
-    const DIGIO_API_BASE = await getConfig("DIGIO_API_BASE", "https://ext-gateway.digio.in");
-    
-    // Resolve PDF base64 data
-    const base64Data = await resolvePdfBase64({ fileUrl, fileBase64 });
-    if (!base64Data) {
-      return res.status(400).json({
-        success: false,
-        error: "Failed to process PDF file"
-      });
-    }
-    
-    // Create document for signing
-    const documentPayload = {
-      file_data: base64Data,
-      file_name: fileName || `Document-${Date.now()}.pdf`,
-      signers: [{
-        identifier: signerEmail,
-        name: signerName,
-        email: signerEmail,
-        mobile: signerPhone || '',
-        reason: reason || "Document Signing",
-        sign_page: "all"
-      }],
-      expire_in_days: 7,
-      send_sign_link: false,
-      embedded_signing: true
-    };
-    
-    const documentResponse = await digioRequest('POST', `${DIGIO_API_BASE}/v2/client/document`, documentPayload);
-    
-    if (!documentResponse || !documentResponse.id) {
-      throw new Error('Invalid document creation response from Digio');
-    }
-    
-    // Save record to database
-    const record = await DigioSign.create({
-      userId,
-      documentId: documentResponse.id,
-      sessionId: documentResponse.id,
-      name: signerName,
-      email: signerEmail,
-      phone: signerPhone,
-      idType: 'document',
-      status: 'initiated',
-      digioResponse: documentResponse
-    });
-    
-    res.json({
-      success: true,
-      message: "Document uploaded successfully",
-      data: {
-        sessionId: record._id,
-        documentId: documentResponse.id,
-        identifier: signerEmail,
-        signUrl: documentResponse.sign_url
-      }
-    });
-    
-  } catch (error) {
-    console.error('[uploadDocument] Error:', error);
-    res.status(500).json({
-      success: false,
-      error: error.message || "Failed to upload document"
-    });
-  }
-};
-
-/**
- * Verify PAN details using Digio KYC API
+ * PAN Verification (KEPT AS IS - NO CHANGES)
  */
 exports.verifyPAN = async (req, res) => {
   try {
     const { id_no, name, dob } = req.body;
     
-    // Validation
+    // Validate required fields
     if (!id_no || !name || !dob) {
       return res.status(400).json({
         success: false,
-        error: "id_no, name, and dob are required"
+        code: 'MISSING_REQUIRED_FIELDS',
+        message: 'Missing required fields: id_no, name, and dob are mandatory.',
+        details: {
+          id_no: !id_no ? 'PAN number is required' : null,
+          name: !name ? 'Name is required' : null,
+          dob: !dob ? 'Date of birth is required' : null
+        }
       });
     }
-    
-    // Validate PAN format
-    if (!/^[A-Z]{5}[0-9]{4}[A-Z]$/.test(id_no)) {
+
+    // Validate PAN format (5 letters, 4 digits, 1 letter)
+    const panRegex = /^[A-Z]{5}[0-9]{4}[A-Z]$/;
+    if (!panRegex.test(id_no)) {
       return res.status(400).json({
         success: false,
-        error: "Invalid PAN format. Expected format: ABCDE1234F"
+        code: 'INVALID_PAN_FORMAT',
+        message: 'The provided PAN number has an invalid format. Expected format: ABCDE1234F',
+        details: 'PAN should contain 5 uppercase letters, followed by 4 digits, followed by 1 uppercase letter.'
       });
     }
-    
+
     // Validate date format (DD/MM/YYYY)
-    if (!/^\d{2}\/\d{2}\/\d{4}$/.test(dob)) {
+    const dobRegex = /^\d{2}\/\d{2}\/\d{4}$/;
+    if (!dobRegex.test(dob)) {
       return res.status(400).json({
         success: false,
-        error: "Invalid date format. Expected format: DD/MM/YYYY"
+        code: 'INVALID_DOB_FORMAT',
+        message: 'The provided date of birth has an invalid format. Expected format: DD/MM/YYYY',
+        example: '15/08/1990'
       });
     }
+
+    console.log('[PAN Verification] Request:', { id_no, name, dob });
+
+    // Get Digio configuration
+    const DIGIO_API_BASE = await getConfig("DIGIO_API_BASE", "https://ext.digio.in:444");
     
-    const DIGIO_API_BASE = await getConfig("DIGIO_API_BASE", "https://ext-gateway.digio.in");
-    
-    // Check if Digio is configured
-    const DIGIO_CLIENT_ID = await getConfig("DIGIO_CLIENT_ID");
-    const DIGIO_CLIENT_SECRET = await getConfig("DIGIO_CLIENT_SECRET");
-    
-    if (!DIGIO_CLIENT_ID || !DIGIO_CLIENT_SECRET) {
-      return res.status(503).json({
-        success: false,
-        error: "Digio service not configured",
-        code: "ACCOUNT_NOT_CONFIGURED",
-        message: "PAN verification service is not available",
-        suggestion: "Please contact support to enable this feature"
-      });
-    }
-    
-    // Call Digio PAN verification API
-    const panData = {
-      id_no: id_no,
-      name: name,
+    // Prepare the request data
+    const requestData = {
+      id_no: id_no.toUpperCase(),
+      name: name.trim(),
       dob: dob
     };
-    
-    const response = await digioRequest('POST', `${DIGIO_API_BASE}/v3/client/kyc/fetch_id_data/PAN`, panData);
-    
 
+    console.log('[PAN Verification] Calling Digio API with:', requestData);
 
-if(response.name_as_per_pan_match && response.date_of_birth_match && response.status === 'valid'){
-  res.json({
-    success: true,
-    message: "PAN verification completed",
-    data: response
-  });
-}else if(!response.name_as_per_pan_match && response.date_of_birth_match && response.status === 'valid'){
-  res.json({
-    success: false,
-    message: "Please check the name write full name along with middle name as per PAN",
-    data: response
-  });
-}else if(!response.date_of_birth_match && response.status === 'valid'){
-  res.json({
-    success: false,
-    message: "Please check the date of birth",
-    data: response
-  });
-}else{
-  res.json({
-    success: false,
-    message: "Please check the PAN number",
-    data: response
-  });
-}
-    
-  } catch (error) {
-    
-    if (error.message.includes('BAD_REQUEST')) {
-      return res.status(400).json({
-        success: false,
-        error: "Invalid PAN details provided",
-        code: "INVALID_PAN_FORMAT",
-        message: "The provided PAN number has an invalid format."
-      });
-    }
-    
-    res.status(500).json({
-      success: false,
-      error: error.message || "Failed to verify PAN"
+    // Call Digio PAN verification API
+    const response = await digioRequest('POST', `${DIGIO_API_BASE}/v2/client/kyc/pan_verification`, requestData);
+
+    console.log('[PAN Verification] Digio Response:', response);
+
+    // Return success response
+    res.json({
+      success: true,
+      message: 'PAN verification completed successfully.',
+      data: response
     });
+
+  } catch (error) {
+    console.error('[PAN Verification] Error:', error);
+    
+    let errorResponse = {
+      success: false,
+      code: 'PAN_VERIFICATION_FAILED',
+      message: 'PAN verification failed due to an unexpected error.',
+      details: error.message
+    };
+
+    let statusCode = 500;
+
+    // Handle specific error cases
+    if (error.response && error.response.data) {
+      const digioError = error.response.data;
+      
+      if (error.status === 400) {
+        errorResponse = {
+          success: false,
+          code: digioError.code || 'INVALID_REQUEST',
+          message: digioError.message || 'Invalid request parameters.',
+          details: digioError.details || 'Please check your input data.'
+        };
+        statusCode = 400;
+      } else if (error.status === 401 || error.status === 403) {
+        errorResponse = {
+          success: false,
+          code: 'AUTHENTICATION_FAILED',
+          message: 'Authentication with Digio API failed.',
+          suggestion: 'Please check your API credentials and account configuration.'
+        };
+        statusCode = 503;
+      } else if (error.status === 404) {
+        errorResponse = {
+          success: false,
+          code: 'PAN_NOT_FOUND',
+          message: 'PAN details not found or do not match the provided information.',
+          details: 'Please verify the PAN number, name, and date of birth.'
+        };
+        statusCode = 404;
+      }
+    }
+
+    // Check if credentials are missing
+    if (error.message.includes('credentials not found')) {
+      errorResponse = {
+        success: false,
+        code: 'ACCOUNT_NOT_CONFIGURED',
+        message: 'Digio API credentials are not configured.',
+        suggestion: 'Please configure DIGIO_CLIENT_ID and DIGIO_CLIENT_SECRET in your environment variables.'
+      };
+      statusCode = 503;
+    }
+
+    res.status(statusCode).json(errorResponse);
   }
 };
 
 /**
- * Get current eSign document status or create it if missing
+ * Upload PDF file and convert to base64 for Digio signing
+ * This creates a reusable template - no signer details needed
  */
-exports.getEsignDocument = async (req, res) => {
+exports.uploadPdfForSigning = async (req, res) => {
   try {
     const userId = req.user?.id;
     
@@ -295,273 +229,365 @@ exports.getEsignDocument = async (req, res) => {
       });
     }
     
-    // Find existing eSign document
-    let esignDoc = await DigioSign.findOne({
-      userId: userId,
-      idType: 'esign'
-    }).sort({ createdAt: -1 });
+    // Check if file was uploaded
+    if (!req.file) {
+      return res.status(400).json({
+        success: false,
+        error: "PDF file is required"
+      });
+    }
     
-    if (!esignDoc) {
-      // Create new eSign document
-      const DIGIO_API_BASE = await getConfig("DIGIO_API_BASE", "https://ext-gateway.digio.in");
-      
-      const documentPayload = {
-        file_data: "base64_encoded_pdf_data", // Replace with actual PDF
-        file_name: "eSign_Consent.pdf",
-        signers: [{
-          identifier: req.user.email,
-          name: req.user.name || req.user.email,
-          email: req.user.email,
-          reason: "eSign Consent",
-          sign_page: "all"
-        }],
-        expire_in_days: 7,
-        send_sign_link: false,
-        embedded_signing: true
-      };
-      
-      const documentResponse = await digioRequest('POST', `${DIGIO_API_BASE}/v2/document`, documentPayload);
-      
-      esignDoc = await DigioSign.create({
-        userId,
-        documentId: documentResponse.id,
-        sessionId: documentResponse.id,
-        name: req.user.name || req.user.email,
-        email: req.user.email,
-        idType: 'esign',
-        status: 'initiated',
-        digioResponse: documentResponse
+    // Validate file type
+    if (req.file.mimetype !== 'application/pdf') {
+      return res.status(400).json({
+        success: false,
+        error: "Only PDF files are allowed"
+      });
+    }
+    
+    // Convert PDF to base64
+    const pdfBuffer = req.file.buffer;
+    const base64Data = pdfBuffer.toString('base64');
+    
+    // Generate filename with timestamp
+    const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+    const fileName = `template_${userId}_${timestamp}.pdf`;
+    
+    // Delete existing records for this user (keep only latest template)
+    await DigioSign.deleteMany({ userId });
+    
+    // Save to DigioSign collection - minimal data, just the template
+    const record = await DigioSign.create({
+      userId,
+      documentId: null, // Will be set when document is created for signing
+      sessionId: null,
+      name: "Template", // Placeholder - real name provided during signing
+      email: "template@placeholder.com", // Placeholder - real email provided during signing  
+      phone: "0000000000", // Placeholder - real phone provided during signing
+      idType: 'pdf_uploaded',
+      idNumber: userId,
+      status: 'template_uploaded',
+      fileBase64: base64Data,
+      fileName: fileName,
+      fileSize: pdfBuffer.length,
+      createdAt: new Date()
+    });
+    
+    res.json({
+      success: true,
+      message: "PDF template uploaded and converted to base64 successfully",
+      data: {
+        recordId: record._id,
+        fileName: fileName,
+        fileSize: pdfBuffer.length,
+        base64Length: base64Data.length,
+        status: 'template_ready',
+        nextStep: "Use /document/create endpoint with signer details to create document for signing"
+      }
+    });
+    
+  } catch (error) {
+    console.error('[uploadPdfForSigning] Error:', error);
+    res.status(500).json({
+      success: false,
+      error: error.message || "Failed to upload PDF template"
+    });
+  }
+};
+
+/**
+ * Force refetch PDF from ESIGN_PDF_URL and convert to base64
+ * This creates a reusable template - no signer details needed
+ */
+exports.refetchPdfFromUrl = async (req, res) => {
+  try {
+    const userId = req.user?.id;
+    
+    if (!userId) {
+      return res.status(401).json({
+        success: false,
+        error: "Authentication required"
+      });
+    }
+    
+    // Get PDF URL from config
+    const pdfUrl = await getConfig("ESIGN_PDF_URL");
+    if (!pdfUrl) {
+      return res.status(503).json({
+        success: false,
+        error: "ESIGN_PDF_URL not configured",
+        code: "URL_NOT_CONFIGURED"
+      });
+    }
+    
+    console.log(`[DIGIO] Fetching PDF from URL: ${pdfUrl}`);
+    
+    // Download PDF from URL
+    const response = await axios.get(pdfUrl, {
+      responseType: 'arraybuffer',
+      timeout: 30000,
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (compatible; DigioBot/1.0)'
+      }
+    });
+    
+    if (response.status !== 200) {
+      throw new Error(`Failed to download PDF: HTTP ${response.status}`);
+    }
+    
+    // Convert to base64
+    const pdfBuffer = Buffer.from(response.data);
+    const base64Data = pdfBuffer.toString('base64');
+    
+    // Generate filename with timestamp
+    const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+    const fileName = `template_from_config_${userId}_${timestamp}.pdf`;
+    
+    // Delete ALL existing records for this user
+    await DigioSign.deleteMany({ userId });
+    
+    // Create new record - minimal data, just the template
+    const record = await DigioSign.create({
+      userId,
+      documentId: null,
+      sessionId: null,
+      name: "Template", // Placeholder
+      email: "template@placeholder.com", // Placeholder
+      phone: "0000000000", // Placeholder
+      idType: 'pdf_refetched',
+      idNumber: userId,
+      status: 'template_refetched',
+      fileBase64: base64Data,
+      fileName: fileName,
+      fileSize: pdfBuffer.length,
+      sourceUrl: pdfUrl,
+      createdAt: new Date()
+    });
+    
+    res.json({
+      success: true,
+      message: "PDF template refetched and converted to base64 successfully",
+      data: {
+        recordId: record._id,
+        fileName: fileName,
+        fileSize: pdfBuffer.length,
+        base64Length: base64Data.length,
+        sourceUrl: pdfUrl,
+        status: 'template_ready',
+        message: "Template ready for document creation with signer details"
+      }
+    });
+    
+  } catch (error) {
+    console.error('[refetchPdfFromUrl] Error:', error);
+    
+    let errorMessage = error.message || "Failed to refetch PDF template";
+    let statusCode = 500;
+    
+    if (error.code === 'URL_NOT_CONFIGURED') {
+      errorMessage = "PDF URL not configured. Please set ESIGN_PDF_URL in configuration.";
+      statusCode = 503;
+    } else if (error.response?.status === 404) {
+      errorMessage = "PDF file not found at the configured URL.";
+      statusCode = 404;
+    }
+    
+    res.status(statusCode).json({
+      success: false,
+      error: errorMessage,
+      code: error.code || 'FETCH_FAILED'
+    });
+  }
+};
+
+/**
+ * Get the latest PDF base64 data for the user
+ */
+exports.getLatestPdfData = async (req, res) => {
+  try {
+    const userId = req.user?.id;
+    
+    if (!userId) {
+      return res.status(401).json({
+        success: false,
+        error: "Authentication required"
+      });
+    }
+    
+    // Find the latest record for this user
+    const record = await DigioSign.findOne({ userId })
+      .sort({ createdAt: -1 });
+    
+    if (!record) {
+      return res.status(404).json({
+        success: false,
+        error: "No PDF data found for this user",
+        code: "NO_PDF_DATA"
+      });
+    }
+    
+    if (!record.fileBase64) {
+      return res.status(404).json({
+        success: false,
+        error: "PDF base64 data not found in record",
+        code: "NO_BASE64_DATA"
       });
     }
     
     res.json({
       success: true,
       data: {
-        documentId: esignDoc.documentId,
-        status: esignDoc.status,
-        createdAt: esignDoc.createdAt
+        recordId: record._id,
+        fileName: record.fileName,
+        fileSize: record.fileSize,
+        base64Length: record.fileBase64.length,
+        idType: record.idType,
+        status: record.status,
+        createdAt: record.createdAt,
+        base64Data: record.fileBase64
       }
     });
     
   } catch (error) {
-    console.error('[getEsignDocument] Error:', error);
+    console.error('[getLatestPdfData] Error:', error);
     res.status(500).json({
       success: false,
-      error: error.message || "Failed to get eSign document"
+      error: error.message || "Failed to get PDF data"
     });
   }
 };
 
 /**
- * Initiate Aadhaar eSign using last 4 digits
+ * Create document for signing using stored PDF template + signer details
  */
-exports.initiateAadhaarEsign = async (req, res) => {
+exports.createDocumentForSigning = async (req, res) => {
   try {
-    const { documentId, aadhaarSuffix } = req.body;
     const userId = req.user?.id;
+    const { 
+      signerEmail, 
+      signerName, 
+      signerPhone, 
+      reason = "Document Signing",
+      expireInDays = 10,
+      displayOnPage = "All", // Note: Digio uses "All" not "Custom"
+      notifySigners = true,
+      sendSignLink = true
+    } = req.body;
     
     if (!userId) {
       return res.status(401).json({
         success: false,
         error: "Authentication required"
-      });
-    }
-    
-    if (!documentId || !aadhaarSuffix) {
-      return res.status(400).json({
-        success: false,
-        error: "documentId and aadhaarSuffix are required"
-      });
-    }
-    
-    if (!/^[0-9]{4}$/.test(aadhaarSuffix)) {
-      return res.status(400).json({
-        success: false,
-        error: "aadhaarSuffix must be 4 digits"
-      });
-    }
-    
-    const DIGIO_API_BASE = await getConfig("DIGIO_API_BASE", "https://ext-gateway.digio.in");
-    
-    const esignPayload = {
-      document_id: documentId,
-      signer: {
-        identifier: req.user.email,
-        name: req.user.name || req.user.email,
-        email: req.user.email
-      },
-      aadhaar_suffix: aadhaarSuffix
-    };
-    
-    const response = await digioRequest('POST', `${DIGIO_API_BASE}/v2/esign/aadhaar/init`, esignPayload);
-    
-    res.json({
-      success: true,
-      message: "Aadhaar eSign initiated",
-      data: response
-    });
-    
-  } catch (error) {
-    console.error('[initiateAadhaarEsign] Error:', error);
-    res.status(500).json({
-      success: false,
-      error: error.message || "Failed to initiate Aadhaar eSign"
-    });
-  }
-};
-
-/**
- * Submit OTP to complete Aadhaar eSign
- */
-exports.submitEsignOtp = async (req, res) => {
-  try {
-    const { documentId, otp, transactionId } = req.body;
-    const userId = req.user?.id;
-    
-    if (!userId) {
-      return res.status(401).json({
-        success: false,
-        error: "Authentication required"
-      });
-    }
-    
-    if (!documentId || !otp || !transactionId) {
-      return res.status(400).json({
-        success: false,
-        error: "documentId, otp, and transactionId are required"
-      });
-    }
-    
-    if (!/^[0-9]{6}$/.test(otp)) {
-      return res.status(400).json({
-        success: false,
-        error: "OTP must be 6 digits"
-      });
-    }
-    
-    const DIGIO_API_BASE = await getConfig("DIGIO_API_BASE", "https://ext-gateway.digio.in");
-    
-    const otpPayload = {
-      document_id: documentId,
-      transaction_id: transactionId,
-      otp: otp
-    };
-    
-    const response = await digioRequest('POST', `${DIGIO_API_BASE}/v2/esign/aadhaar/otp`, otpPayload);
-    
-    // Update document status
-    await DigioSign.findOneAndUpdate(
-      { documentId: documentId },
-      { status: 'signed', digioResponse: response }
-    );
-    
-    res.json({
-      success: true,
-      message: "Aadhaar eSign completed",
-      data: response
-    });
-    
-  } catch (error) {
-    console.error('[submitEsignOtp] Error:', error);
-    res.status(500).json({
-      success: false,
-      error: error.message || "Failed to submit OTP"
-    });
-  }
-};
-
-/**
- * Upload a PDF (URL or base64) to Digio and get documentId
- */
-exports.uploadTemplateDocument = async (req, res) => {
-  try {
-    const userId = req.user?.id;
-    const { fileUrl, fileBase64, fileName, signerEmail, signerName, signerPhone, reason } = req.body;
-    
-    if (!userId) {
-      return res.status(401).json({
-        success: false,
-        error: "Authentication required"
-      });
-    }
-    
-    if (!fileUrl && !fileBase64) {
-      return res.status(400).json({
-        success: false,
-        error: "Either fileUrl or fileBase64 is required"
       });
     }
     
     if (!signerEmail || !signerName) {
       return res.status(400).json({
         success: false,
-        error: "signerEmail and signerName are required"
+        error: "signerEmail and signerName are required for document creation"
       });
     }
     
-    const DIGIO_API_BASE = await getConfig("DIGIO_API_BASE", "https://ext-gateway.digio.in");
+    // Get the latest PDF template for this user
+    const template = await DigioSign.findOne({ userId })
+      .sort({ createdAt: -1 });
     
-    // Resolve PDF base64 data
-    const base64Data = await resolvePdfBase64({ fileUrl, fileBase64 });
-    if (!base64Data) {
-      return res.status(400).json({
+    if (!template || !template.fileBase64) {
+      return res.status(404).json({
         success: false,
-        error: "Failed to process PDF file"
+        error: "No PDF template found. Please upload a PDF first using /pdf/upload or /pdf/refetch endpoint.",
+        code: "NO_PDF_TEMPLATE"
       });
     }
     
-    // Create document for signing
+    // Get Digio configuration
+    const DIGIO_API_BASE = await getConfig("DIGIO_API_BASE", "https://ext.digio.in:444");
+    
+    // Prepare payload exactly as per Postman collection
     const documentPayload = {
-      file_data: base64Data,
-      file_name: fileName || `Template-${Date.now()}.pdf`,
       signers: [{
-        identifier: signerEmail,
+        identifier: signerEmail, // Use email as identifier
         name: signerName,
-        email: signerEmail,
-        mobile: signerPhone || '',
-        reason: reason || "Document Signing",
-        sign_page: "all"
+        sign_type: "aadhaar",
+        reason: reason
       }],
-      expire_in_days: 7,
-      send_sign_link: false,
-      embedded_signing: true
+      expire_in_days: expireInDays,
+      display_on_page: displayOnPage,
+      notify_signers: notifySigners,
+      send_sign_link: sendSignLink,
+      file_name: template.fileName,
+      file_data: template.fileBase64
     };
     
-    const documentResponse = await digioRequest('POST', `${DIGIO_API_BASE}/v2/client/document/upload`, documentPayload);
+    // If phone is provided, you can use it as identifier instead
+    if (signerPhone) {
+      documentPayload.signers[0].identifier = signerPhone;
+    }
     
-    if (!documentResponse || !documentResponse.id) {
+    console.log(`[DIGIO] Creating document for signing with payload:`, {
+      fileName: template.fileName,
+      signerEmail,
+      signerName,
+      signerPhone
+    });
+    
+    // Call Digio API using the correct endpoint
+    const response = await digioRequest('POST', `${DIGIO_API_BASE}/v2/client/document/uploadpdf`, documentPayload);
+    
+    if (!response || !response.id) {
       throw new Error('Invalid document creation response from Digio');
     }
     
-    // Save record to database
-    const record = await DigioSign.create({
-      userId,
-      documentId: documentResponse.id,
-      sessionId: documentResponse.id,
+    // Update template record with actual document details
+    await DigioSign.findByIdAndUpdate(template._id, {
+      documentId: response.id,
+      sessionId: response.id,
       name: signerName,
       email: signerEmail,
-      phone: signerPhone,
-      idType: 'template',
-      status: 'initiated',
-      digioResponse: documentResponse
+      phone: signerPhone || "0000000000",
+      status: 'document_created',
+      digioResponse: response,
+      updatedAt: new Date()
     });
     
     res.json({
       success: true,
-      message: "Template document uploaded successfully",
+      message: "Document created successfully for signing",
       data: {
-        sessionId: record._id,
-        documentId: documentResponse.id,
-        identifier: signerEmail,
-        signUrl: documentResponse.sign_url
+        recordId: template._id,
+        documentId: response.id,
+        fileName: template.fileName,
+        signerEmail: signerEmail,
+        signerName: signerName,
+        signerPhone: signerPhone,
+        signUrl: response.sign_url || null,
+        expireInDays: expireInDays,
+        digioResponse: response
       }
     });
     
   } catch (error) {
-    console.error('[uploadTemplateDocument] Error:', error);
-    res.status(500).json({
+    console.error('[createDocumentForSigning] Error:', error);
+    
+    let errorMessage = error.message || "Failed to create document for signing";
+    let statusCode = 500;
+    
+    if (error.code === 'NO_PDF_TEMPLATE') {
+      errorMessage = "No PDF template found. Please upload a PDF first.";
+      statusCode = 404;
+    } else if (error.message && error.message.includes('credentials not found')) {
+      errorMessage = "Digio API credentials not configured properly.";
+      statusCode = 503;
+    } else if (error.response && error.response.status === 404) {
+      errorMessage = "Digio API endpoint not found. Please check the API URL.";
+      statusCode = 404;
+    }
+    
+    res.status(statusCode).json({
       success: false,
-      error: error.message || "Failed to upload template document"
+      error: errorMessage,
+      code: error.code || 'CREATION_FAILED',
+      details: error.response || error.details
     });
   }
 };

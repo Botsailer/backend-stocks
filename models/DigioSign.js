@@ -6,27 +6,34 @@ const digioSignSchema = new mongoose.Schema({
   
   // Document identifiers
   documentId: { type: String },
+  sessionId: { type: String },
   
   // User information
   name: { type: String, required: true },
   email: { type: String, required: true },
   phone: { type: String, required: true },
   
-  // E-mandate specific fields
-  mandateAmount: { type: Number },
-  bankAccount: { type: String },
-  
   // KYC information (for compatibility)
-  idType: { type: String, enum: ["aadhaar", "pan", "emandate", "document"], required: true },
+  idType: { 
+    type: String, 
+    enum: ["aadhaar", "pan", "document", "esign", "pdf_uploaded", "pdf_refetched", "document_created"], 
+    required: true 
+  },
   idNumber: { type: String, required: true },
   kycRequestId: { type: String },
   kycVerified: { type: Boolean, default: false },
+  
+  // PDF upload fields
+  fileBase64: { type: String }, // Base64 encoded PDF data
+  fileName: { type: String }, // Generated filename
+  fileSize: { type: Number }, // File size in bytes
+  sourceUrl: { type: String }, // Source URL if fetched from config
   
   // Status tracking
   status: { 
     type: String, 
     default: "initiated",
-    enum: ["initiated", "sent", "viewed", "signed", "completed", "expired", "declined", "failed"]
+    enum: ["initiated", "sent", "viewed", "signed", "completed", "expired", "declined", "failed", "template_uploaded", "template_refetched", "document_created"]
   },
   
   // API responses and webhook data

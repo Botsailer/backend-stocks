@@ -1460,55 +1460,63 @@ exports.createEmandate = async (req, res) => {
     try {
       await session.withTransaction(async () => {
         if (productType === "Bundle") {
-          if (!product.portfolios || product.portfolios.length === 0) {
-            throw new Error("Bundle has no portfolios associated");
+          if (product.portfolios && product.portfolios.length > 0) {
+            for (const portfolio of product.portfolios) {
+              const amountPerPortfolio = Math.round(emandateAmount / product.portfolios.length);
+              const dbSubscription = await Subscription.findOneAndUpdate(
+                { 
+                  user: userId, 
+                  productType: "Portfolio", 
+                  productId: portfolio._id, 
+                  type: "recurring" 
+                },
+                {
+                  user: userId,
+                  productType: "Portfolio",
+                  productId: portfolio._id,
+                  portfolio: portfolio._id,
+                  type: "recurring",
+                  status: "pending",
+                  amount: amountPerPortfolio,
+                  originalAmount: Math.round(originalAmount / product.portfolios.length),
+                  discountApplied: Math.round(discountApplied / product.portfolios.length),
+                  category: portfolio.PortfolioCategory ? portfolio.PortfolioCategory.toLowerCase() : category,
+                  planType: emandateType,
+                  expiresAt: commitmentEndDate,
+                  razorpaySubscriptionId: razorpaySubscription.id,
+                  bundleId: productId,
+                  isRenewal: subscriptionStatus.canRenew,
+                  previousSubscriptionId: subscriptionStatus.existingSubscription?._id || null,
+                  couponUsed: couponUsed,
+                  createdAt: new Date(),
+                  updatedAt: new Date()
+                },
+                { upsert: true, new: true, session }
+              );
+              dbSubscriptions.push(dbSubscription);
+            }
+            logger.info("Bundle subscriptions saved to database with coupon", {
+              userId: userId.toString(),
+              bundleId: productId.toString(),
+              portfolioCount: product.portfolios.length,
+              razorpaySubscriptionId: razorpaySubscription.id,
+              emandateType,
+              couponCode: couponCode || 'none',
+              discountApplied,
+              emandateAmount
+            });
+          } else {
+            // No portfolios: just proceed, do not throw error
+            logger.info("Bundle has no portfolios, proceeding with bundle subscription only", {
+              userId: userId.toString(),
+              bundleId: productId.toString(),
+              razorpaySubscriptionId: razorpaySubscription.id,
+              emandateType,
+              couponCode: couponCode || 'none',
+              discountApplied,
+              emandateAmount
+            });
           }
-          
-          for (const portfolio of product.portfolios) {
-            const amountPerPortfolio = Math.round(emandateAmount / product.portfolios.length);
-            const dbSubscription = await Subscription.findOneAndUpdate(
-              { 
-                user: userId, 
-                productType: "Portfolio", 
-                productId: portfolio._id, 
-                type: "recurring" 
-              },
-              {
-                user: userId,
-                productType: "Portfolio",
-                productId: portfolio._id,
-                portfolio: portfolio._id,
-                type: "recurring",
-                status: "pending",
-                amount: amountPerPortfolio,
-                originalAmount: Math.round(originalAmount / product.portfolios.length),
-                discountApplied: Math.round(discountApplied / product.portfolios.length),
-                category: portfolio.PortfolioCategory ? portfolio.PortfolioCategory.toLowerCase() : category,
-                planType: emandateType,
-                expiresAt: commitmentEndDate,
-                razorpaySubscriptionId: razorpaySubscription.id,
-                bundleId: productId,
-                isRenewal: subscriptionStatus.canRenew,
-                previousSubscriptionId: subscriptionStatus.existingSubscription?._id || null,
-                couponUsed: couponUsed,
-                createdAt: new Date(),
-                updatedAt: new Date()
-              },
-              { upsert: true, new: true, session }
-            );
-            dbSubscriptions.push(dbSubscription);
-          }
-          
-          logger.info("Bundle subscriptions saved to database with coupon", {
-            userId: userId.toString(),
-            bundleId: productId.toString(),
-            portfolioCount: product.portfolios.length,
-            razorpaySubscriptionId: razorpaySubscription.id,
-            emandateType,
-            couponCode: couponCode || 'none',
-            discountApplied,
-            emandateAmount
-          });
           
         } else {
           const dbSubscription = await Subscription.findOneAndUpdate(
@@ -2262,6 +2270,7 @@ exports.verifyPayment = async (req, res) => {
         responseData.telegramInviteLinks = allTelegramInvites;
         responseData.telegramMessage = `You have access to ${allTelegramInvites.length} Telegram group${allTelegramInvites.length > 1 ? 's' : ''}. Check your email for invite links.`;
       }
+      
     }
 
     // Update user premium status
