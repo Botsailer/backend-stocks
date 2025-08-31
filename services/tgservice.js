@@ -1,5 +1,6 @@
 const axios = require('axios');
 const winston = require('winston');
+const { getConfig } = require('../utils/configSettings');
 
 // Configure logger
 const logger = winston.createLogger({
@@ -14,7 +15,7 @@ const logger = winston.createLogger({
   ]
 });
 
-const TELEGRAM_BOT_API_URL = process.env.TELEGRAM_BOT_API_URL || 'http://89.116.121.11:5000/api';
+const TELEGRAM_BOT_API_URL = await getConfig('TELEGRAM_BOT_API_URL', 'http://89.116.121.11:5000/api');
 
 class TelegramService {
   /**
