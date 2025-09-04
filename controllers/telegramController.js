@@ -120,6 +120,49 @@ exports.getUnmappedGroups = async (req, res) => {
 };
 
 /**
+ * Create a new Telegram group
+ * @param {Object} req - Express request object
+ * @param {Object} res - Express response object
+ */
+exports.createGroup = async (req, res) => {
+  try {
+    const { name, description, telegram_group_id } = req.body;
+
+    if (!name) {
+      return res.status(400).json({
+        success: false,
+        error: 'Group name is required'
+      });
+    }
+
+    const result = await TelegramService.createGroup({
+      name,
+      description,
+      telegram_group_id
+    });
+
+    if (result.success) {
+      res.status(201).json({
+        success: true,
+        data: result.data,
+        message: 'Group created successfully'
+      });
+    } else {
+      res.status(500).json({
+        success: false,
+        error: 'Failed to create group'
+      });
+    }
+  } catch (error) {
+    console.error('Error in createGroup controller:', error);
+    res.status(500).json({
+      success: false,
+      error: error.message || 'Failed to create group'
+    });
+  }
+};
+
+/**
  * Map a product to a Telegram group
  * @param {Object} req - Express request object
  * @param {Object} res - Express response object

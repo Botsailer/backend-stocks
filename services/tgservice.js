@@ -715,6 +715,41 @@ class TelegramService {
     }
   }
 
+  /**
+   * Create a new group
+   * @param {Object} groupData - Group data
+   * @returns {Promise<Object>} Created group data
+   */
+  static async createGroup(groupData) {
+    try {
+      this.validateParams(groupData, ['name']);
+
+      const axiosInstance = await this.getAxiosInstance();
+      const response = await axiosInstance.post('/groups', groupData);
+
+      logger.info('Created group', {
+        name: groupData.name,
+        telegram_group_id: groupData.telegram_group_id
+      });
+
+      return {
+        success: true,
+        data: response.data
+      };
+    } catch (error) {
+      if (error instanceof ValidationError) {
+        throw error;
+      }
+
+      const errorData = this.handleError(error, 'createGroup', groupData);
+      throw new TelegramAPIError(
+        'Failed to create group',
+        error.response?.status || 500,
+        error
+      );
+    }
+  }
+
   // ==================== SUBSCRIPTION API ====================
 
   /**
