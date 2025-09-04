@@ -20,6 +20,7 @@ const PriceLog = require('../models/PriceLog');
 const portfolioService = require('../services/portfolioservice');
 const { PortfolioCalculationValidator } = require('../utils/portfolioCalculationValidator');
 const transactionLogger = require('../utils/transactionLogger');
+const TelegramService = require('../services/tgservice');
 const winston = require('winston');
 const path = require('path');
 const fs = require('fs');
@@ -163,6 +164,47 @@ exports.createPortfolio = asyncHandler(async (req, res) => {
       }
     }
 
+    //add telegram intigration bot here 
+    // Step 6.5: Create Telegram product and group (if enabled)
+    let telegramProductId = null;
+    try {
+      // Create product on Telegram service
+      const telegramProduct = await TelegramService.createProduct({
+        name: requestData.name.trim(),
+        description: `Premium portfolio access for ${requestData.name.trim()}`,
+        price: requestData.subscriptionFee[0]?.price || 0, // Use first subscription fee as base price
+        category: requestData.PortfolioCategory || 'Basic'
+      });
+      
+      if (telegramProduct.success) {
+        telegramProductId = telegramProduct.product.id;
+        portfolioLogger.info('Telegram product created successfully', {
+          operation: 'CREATE',
+          userId,
+          userEmail,
+          details: {
+            telegramProductId,
+            productName: telegramProduct.product.name,
+            groupId: telegramProduct.product.group_id
+          }
+        });
+      }
+    } catch (telegramError) {
+      portfolioLogger.warn('Telegram integration failed during portfolio creation', {
+        operation: 'CREATE',
+        userId,
+        userEmail,
+        details: {
+          error: telegramError.message,
+          portfolioName: requestData.name
+        }
+      });
+      // Don't fail portfolio creation if Telegram integration fails
+    }
+
+    
+
+
     // Step 3: Calculate portfolio summary (for info only, don't block creation)
     const portfolioSummary = PortfolioCalculationValidator.calculatePortfolioSummary({
       holdings: requestData.holdings || [],
@@ -231,7 +273,10 @@ exports.createPortfolio = asyncHandler(async (req, res) => {
       
       // Use backend-calculated values
       cashBalance: portfolioSummary.cashBalance,
-      currentValue: portfolioSummary.totalPortfolioValueAtBuy
+      currentValue: portfolioSummary.totalPortfolioValueAtBuy,
+      
+      // Add Telegram integration fields
+      externalId: telegramProductId
     };
 
     // Debug logging before portfolio creation
@@ -1387,10 +1432,52 @@ exports.deletePortfolio = asyncHandler(async (req, res) => {
     holdingsCount: portfolio.holdings.length,
     totalValue: portfolio.totalValue,
     createdAt: portfolio.createdAt,
-    updatedAt: portfolio.updatedAt
+    updatedAt: portfolio.updatedAt,
+    externalId: portfolio.externalId
   };
   
   const deleteStartTime = Date.now();
+  
+  // Delete Telegram product if it exists
+  if (portfolio.externalId) {
+    try {
+      const deleteResult = await TelegramService.deleteProduct(portfolio.externalId);
+      if (deleteResult.success) {
+        portfolioLogger.info('Telegram product deleted successfully', {
+          operation: 'DELETE',
+          portfolioId,
+          userId,
+          userEmail,
+          details: {
+            telegramProductId: portfolio.externalId,
+            portfolioName: portfolio.name
+          }
+        });
+      } else {
+        portfolioLogger.warn('Failed to delete Telegram product', {
+          operation: 'DELETE',
+          portfolioId,
+          userId,
+          userEmail,
+          details: {
+            telegramProductId: portfolio.externalId,
+            error: deleteResult.error
+          }
+        });
+      }
+    } catch (telegramError) {
+      portfolioLogger.error('Telegram deletion error during portfolio cleanup', {
+        operation: 'DELETE',
+        portfolioId,
+        userId,
+        userEmail,
+        details: {
+          error: telegramError.message,
+          telegramProductId: portfolio.externalId
+        }
+      });
+    }
+  }
   
   // Delete portfolio
   await Portfolio.findByIdAndDelete(portfolioId);
@@ -1415,8 +1502,9 @@ exports.deletePortfolio = asyncHandler(async (req, res) => {
   });
 
   res.status(200).json({ 
-    message: 'Portfolio and related price logs deleted successfully',
-    deletedPriceLogs: priceLogDeleteResult.deletedCount
+    message: 'Portfolio and related resources deleted successfully',
+    deletedPriceLogs: priceLogDeleteResult.deletedCount,
+    telegramProductDeleted: !!portfolio.externalId
   });
 });
 
@@ -1684,6 +1772,336 @@ exports.updateAllPortfoliosWithMarketPrices = asyncHandler(async (req, res) => {
     });
   }
 });
+
+// Enhanced Telegram integration endpoints
+
+/**
+ * Generate Telegram invite link for a portfolio subscription
+ */
+exports.generateTelegramInvite = asyncHandler(async (req, res) => {
+  const portfolioId = req.params.id;
+  const userId = req.user?._id;
+  const userEmail = req.user?.email;
+  
+  try {
+    portfolioLogger.info('Generating Telegram invite link', {
+      operation: 'TELEGRAM_INVITE',
+      portfolioId,
+      userId,
+      userEmail
+    });
+
+    const portfolio = await Portfolio.findById(portfolioId);
+    if (!portfolio) {
+      return res.status(404).json({ 
+        success: false, 
+        error: 'Portfolio not found' 
+      });
+    }
+
+    if (!portfolio.externalId) {
+      return res.status(400).json({ 
+        success: false, 
+        error: 'Portfolio not linked to Telegram service' 
+      });
+    }
+
+    // Check if user has active subscription
+    const Subscription = require('../models/subscription');
+    const activeSubscription = await Subscription.findOne({
+      user: userId,
+      productType: 'Portfolio',
+      productId: portfolioId,
+      status: 'active',
+      expiresAt: { $gt: new Date() }
+    });
+
+    if (!activeSubscription) {
+      return res.status(403).json({ 
+        success: false, 
+        error: 'Active subscription required to access Telegram group' 
+      });
+    }
+
+    // Generate invite link
+    const inviteResult = await TelegramService.generateInviteLink(portfolio.externalId);
+    
+    if (inviteResult.success) {
+      // Update subscription with invite link details
+      await Subscription.findByIdAndUpdate(activeSubscription._id, {
+        invite_link_url: inviteResult.invite_link,
+        invite_link_expires_at: inviteResult.expires_at
+      });
+
+      portfolioLogger.info('Telegram invite link generated successfully', {
+        operation: 'TELEGRAM_INVITE',
+        portfolioId,
+        userId,
+        userEmail,
+        details: {
+          subscriptionId: activeSubscription._id,
+          telegramProductId: portfolio.externalId,
+          expiresAt: inviteResult.expires_at
+        }
+      });
+
+      res.status(200).json({
+        success: true,
+        message: 'Telegram invite link generated successfully',
+        data: {
+          invite_link: inviteResult.invite_link,
+          expires_at: inviteResult.expires_at,
+          portfolio_name: portfolio.name,
+          subscription_id: activeSubscription._id
+        }
+      });
+    } else {
+      portfolioLogger.error('Failed to generate Telegram invite link', {
+        operation: 'TELEGRAM_INVITE',
+        portfolioId,
+        userId,
+        userEmail,
+        details: {
+          error: inviteResult.error,
+          telegramProductId: portfolio.externalId
+        }
+      });
+
+      res.status(500).json({
+        success: false,
+        error: inviteResult.error || 'Failed to generate invite link'
+      });
+    }
+  } catch (error) {
+    portfolioLogger.error('Telegram invite generation error', {
+      operation: 'TELEGRAM_INVITE',
+      portfolioId,
+      userId,
+      userEmail,
+      details: {
+        error: error.message,
+        stack: error.stack
+      }
+    });
+
+    res.status(500).json({
+      success: false,
+      error: error.message || 'Internal server error'
+    });
+  }
+});
+
+/**
+ * Get Telegram group status for a portfolio
+ */
+exports.getTelegramGroupStatus = asyncHandler(async (req, res) => {
+  const portfolioId = req.params.id;
+  const userId = req.user?._id;
+  const userEmail = req.user?.email;
+
+  try {
+    portfolioLogger.info('Fetching Telegram group status', {
+      operation: 'TELEGRAM_STATUS',
+      portfolioId,
+      userId,
+      userEmail
+    });
+
+    const portfolio = await Portfolio.findById(portfolioId);
+    if (!portfolio) {
+      return res.status(404).json({ 
+        success: false, 
+        error: 'Portfolio not found' 
+      });
+    }
+
+    if (!portfolio.externalId) {
+      return res.status(200).json({
+        success: true,
+        data: {
+          telegram_enabled: false,
+          message: 'Portfolio not linked to Telegram service'
+        }
+      });
+    }
+
+    // Get group status from Telegram service
+    const groupStatus = await TelegramService.getGroupStatus(portfolio.externalId);
+
+    if (groupStatus.success) {
+      // Check user's subscription and access
+      const Subscription = require('../models/subscription');
+      const userSubscription = await Subscription.findOne({
+        user: userId,
+        productType: 'Portfolio',
+        productId: portfolioId,
+        status: 'active'
+      });
+
+      const responseData = {
+        telegram_enabled: true,
+        group_status: groupStatus.group,
+        user_has_access: !!userSubscription && userSubscription.expiresAt > new Date(),
+        subscription_details: userSubscription ? {
+          id: userSubscription._id,
+          expires_at: userSubscription.expiresAt,
+          invite_link_url: userSubscription.invite_link_url,
+          invite_link_expires_at: userSubscription.invite_link_expires_at
+        } : null
+      };
+
+      portfolioLogger.info('Telegram group status fetched successfully', {
+        operation: 'TELEGRAM_STATUS',
+        portfolioId,
+        userId,
+        userEmail,
+        details: {
+          telegramProductId: portfolio.externalId,
+          groupActive: groupStatus.group.active,
+          userHasAccess: responseData.user_has_access
+        }
+      });
+
+      res.status(200).json({
+        success: true,
+        data: responseData
+      });
+    } else {
+      res.status(500).json({
+        success: false,
+        error: groupStatus.error || 'Failed to fetch group status'
+      });
+    }
+  } catch (error) {
+    portfolioLogger.error('Telegram group status error', {
+      operation: 'TELEGRAM_STATUS',
+      portfolioId,
+      userId,
+      userEmail,
+      details: {
+        error: error.message,
+        stack: error.stack
+      }
+    });
+
+    res.status(500).json({
+      success: false,
+      error: error.message || 'Internal server error'
+    });
+  }
+});
+
+/**
+ * Handle Telegram integration for payment verification
+ */
+async function handleTelegramIntegration(user, productType, productId, subscription) {
+  const telegramInvites = [];
+  
+  if (productType === 'Portfolio') {
+    try {
+      const portfolio = await Portfolio.findById(productId);
+      if (portfolio && portfolio.externalId) {
+        const inviteResult = await TelegramService.generateInviteLink(portfolio.externalId);
+        
+        if (inviteResult.success) {
+          // Update subscription with invite link
+          await Subscription.findByIdAndUpdate(subscription._id, {
+            invite_link_url: inviteResult.invite_link,
+            invite_link_expires_at: inviteResult.expires_at
+          });
+          
+          telegramInvites.push({
+            productId: productId,
+            product_name: portfolio.name,
+            invite_link: inviteResult.invite_link,
+            expires_at: inviteResult.expires_at
+          });
+          
+          // Send email with invite link
+          await sendTelegramInviteEmail(user, portfolio, inviteResult.invite_link, inviteResult.expires_at);
+          
+          portfolioLogger.info('Telegram invite generated for payment verification', {
+            operation: 'PAYMENT_TELEGRAM',
+            userId: user._id,
+            userEmail: user.email,
+            details: {
+              portfolioId: productId,
+              portfolioName: portfolio.name,
+              subscriptionId: subscription._id,
+              telegramProductId: portfolio.externalId
+            }
+          });
+        }
+      }
+    } catch (error) {
+      portfolioLogger.error('Telegram integration error during payment verification', {
+        operation: 'PAYMENT_TELEGRAM',
+        userId: user._id,
+        userEmail: user.email,
+        details: {
+          error: error.message,
+          productId,
+          productType
+        }
+      });
+    }
+  }
+  
+  return telegramInvites;
+}
+
+async function sendTelegramInviteEmail(user, product, inviteLink, expiresAt) {
+  try {
+    const emailQueue = require('../services/emailQueue');
+    const subject = `Your ${product.name} Telegram Group Access`;
+    const text = `You've been granted access to the ${product.name} Telegram group.\n\nJoin here: ${inviteLink}\n\nLink expires on ${expiresAt.toDateString()}`;
+    
+    const html = `
+      <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
+        <h2 style="color: #2E86C1;">Welcome to ${product.name}!</h2>
+        <p>You've been granted access to the exclusive Telegram group for ${product.name} subscribers.</p>
+        <p style="margin: 25px 0;">
+          <a href="${inviteLink}" 
+             style="background-color: #2E86C1; color: white; padding: 12px 24px; text-decoration: none; border-radius: 4px; font-weight: bold;">
+            Join Telegram Group
+          </a>
+        </p>
+        <p><strong>Important:</strong> This invite link will expire on ${expiresAt.toDateString()}</p>
+        <p>If you have any issues joining, please contact our support team.</p>
+      </div>
+    `;
+    
+    await emailQueue.addToQueue({
+      to: user.email,
+      subject,
+      text,
+      html,
+      type: 'telegram_invite',
+      userId: user._id,
+      metadata: {
+        portfolioName: product.name,
+        inviteLink,
+        expiresAt
+      }
+    });
+    
+    portfolioLogger.info(`Telegram invite email queued for ${user.email}`, {
+      userId: user._id,
+      portfolioName: product.name,
+      expiresAt
+    });
+  } catch (error) {
+    portfolioLogger.error(`Failed to send Telegram invite email to ${user.email}:`, {
+      error: error.message,
+      userId: user._id,
+      portfolioName: product.name
+    });
+  }
+}
+
+// Export the helper functions for use in subscription controller
+exports.handleTelegramIntegration = handleTelegramIntegration;
+exports.sendTelegramInviteEmail = sendTelegramInviteEmail;
 
 exports.errorHandler = (err, req, res, next) => {
   portfolioLogger.error('Unhandled portfolio controller error', { 

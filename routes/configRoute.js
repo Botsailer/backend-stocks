@@ -5,13 +5,6 @@ const requireAdmin = require('../middleware/requirreAdmin');
 
 /**
  * @swagger
- * tags:
- *   name: Configuration
- *   description: Admin-only endpoints for managing system configuration
- */
-
-/**
- * @swagger
  * components:
  *   schemas:
  *     ConfigSetting:

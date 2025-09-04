@@ -10,9 +10,6 @@ const portfolioService = require('../services/portfolioservice');
 
 /**
  * @swagger
- * tags:
- *   name: Portfolios
- *   description: Investment portfolio management
  * components:
  *   securitySchemes:
  *     bearerAuth:
@@ -1743,5 +1740,142 @@ router.get('/portfolios/:id/pnl-summary', requireAdmin, portfolioController.getP
  *         description: Server error
  */
 router.put('/portfolios/update-all-market-prices', requireAdmin, portfolioController.updateAllPortfoliosWithMarketPrices);
+
+/**
+ * @swagger
+ * /api/portfolios/{id}/telegram/invite:
+ *   post:
+ *     summary: Generate Telegram invite link for portfolio subscription
+ *     description: Generate an invite link for user to join the portfolio's exclusive Telegram group (requires active subscription)
+ *     tags: [Telegram Management]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema:
+ *           type: string
+ *           pattern: '^[0-9a-fA-F]{24}$'
+ *         description: Portfolio ID (24-character MongoDB ObjectId)
+ *         example: '507f1f77bcf86cd799439011'
+ *     responses:
+ *       200:
+ *         description: Telegram invite link generated successfully
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success:
+ *                   type: boolean
+ *                   example: true
+ *                 message:
+ *                   type: string
+ *                   example: "Telegram invite link generated successfully"
+ *                 data:
+ *                   type: object
+ *                   properties:
+ *                     invite_link:
+ *                       type: string
+ *                       example: "https://t.me/+ABC123xyz"
+ *                     expires_at:
+ *                       type: string
+ *                       format: date-time
+ *                       example: "2025-10-04T12:00:00.000Z"
+ *                     portfolio_name:
+ *                       type: string
+ *                       example: "Growth Portfolio"
+ *                     subscription_id:
+ *                       type: string
+ *                       example: "615a2d4b87d9c34f7d4f8a12"
+ *       400:
+ *         description: Portfolio not linked to Telegram service
+ *       403:
+ *         description: Active subscription required
+ *       404:
+ *         description: Portfolio not found
+ *       500:
+ *         description: Failed to generate invite link
+ */
+router.post('/portfolios/:id/telegram/invite', portfolioController.generateTelegramInvite);
+
+/**
+ * @swagger
+ * /api/portfolios/{id}/telegram/status:
+ *   get:
+ *     summary: Get Telegram group status for portfolio
+ *     description: Check if portfolio has Telegram integration and user's access status
+ *     tags: [Telegram Management]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema:
+ *           type: string
+ *           pattern: '^[0-9a-fA-F]{24}$'
+ *         description: Portfolio ID (24-character MongoDB ObjectId)
+ *         example: '507f1f77bcf86cd799439011'
+ *     responses:
+ *       200:
+ *         description: Telegram group status retrieved successfully
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success:
+ *                   type: boolean
+ *                   example: true
+ *                 data:
+ *                   type: object
+ *                   properties:
+ *                     telegram_enabled:
+ *                       type: boolean
+ *                       example: true
+ *                     group_status:
+ *                       type: object
+ *                       properties:
+ *                         id:
+ *                           type: string
+ *                           example: "group_123"
+ *                         name:
+ *                           type: string
+ *                           example: "Growth Portfolio Group"
+ *                         active:
+ *                           type: boolean
+ *                           example: true
+ *                         member_count:
+ *                           type: number
+ *                           example: 145
+ *                     user_has_access:
+ *                       type: boolean
+ *                       example: true
+ *                     subscription_details:
+ *                       type: object
+ *                       nullable: true
+ *                       properties:
+ *                         id:
+ *                           type: string
+ *                           example: "615a2d4b87d9c34f7d4f8a12"
+ *                         expires_at:
+ *                           type: string
+ *                           format: date-time
+ *                           example: "2025-12-04T12:00:00.000Z"
+ *                         invite_link_url:
+ *                           type: string
+ *                           example: "https://t.me/+ABC123xyz"
+ *                         invite_link_expires_at:
+ *                           type: string
+ *                           format: date-time
+ *                           example: "2025-10-04T12:00:00.000Z"
+ *       404:
+ *         description: Portfolio not found
+ *       500:
+ *         description: Failed to fetch group status
+ */
+router.get('/portfolios/:id/telegram/status', portfolioController.getTelegramGroupStatus);
 
 module.exports = router;

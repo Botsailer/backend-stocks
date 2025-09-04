@@ -737,6 +737,7 @@ app.use('/api/user', require('./routes/userRoute'));
 app.use('/api/subscriptions', require('./routes/Subscription'));
 app.use('/api/admin/subscriptions', require('./routes/adminSubscription'));
 app.use('/api/admin/coupons', require('./routes/couponRoute'));
+app.use('/api/admin/telegram', require('./routes/telegram'));
 app.use('/api/stock-symbols', require('./routes/stocksymbol'));
 app.use('/api/faqs', require('./routes/faqRoute'));
 app.use('/api/tips', require('./routes/tips'));                    

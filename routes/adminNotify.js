@@ -10,13 +10,6 @@ const requireAdmin = require('../middleware/requirreAdmin');
 
 /**
  * @swagger
- * tags:
- *   name: Admin Notifications
- *   description: Endpoints for sending emails to portfolio subscribers
- */
-
-/**
- * @swagger
  * /api/admin/notify:
  *   post:
  *     summary: Send email notification to portfolio subscribers

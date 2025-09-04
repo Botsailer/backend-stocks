@@ -6,13 +6,6 @@ const requireAdmin = require('../middleware/requirreAdmin');
 
 /**
  * @swagger
- * tags:
- *   name: Stock Symbols
- *   description: Endpoints for managing stock symbols and their prices
- */
-
-/**
- * @swagger
  * components:
  *   schemas:
  *     StockSymbol:

@@ -5,9 +5,6 @@ const requireAdmin = require('../middleware/requirreAdmin');
 
 /**
  * @swagger
- * tags:
- *   name: ChartData
- *   description: Portfolio performance chart data management
  * components:
  *   schemas:
  *     PriceLog:

@@ -14,13 +14,6 @@ router.use(passport.authenticate('jwt', { session: false }), requireAdmin);
 
 /**
  * @swagger
- * tags:
- *   name: AdminSubscriptions
- *   description: Admin-only subscription management
- */
-
-/**
- * @swagger
  * components:
  *   schemas:
  *     AdminSubscription:

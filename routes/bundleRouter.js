@@ -5,10 +5,6 @@ const requireAdmin = require('../middleware/requirreAdmin');
 
 /**
  * @swagger
- * tags:
- *   name: Bundles
- *   description: Portfolio bundle management
- * 
  * components:
  *   schemas:
  *     Bundle:

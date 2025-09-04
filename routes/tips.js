@@ -147,15 +147,6 @@ const requireAdmin = require("../middleware/requirreAdmin");
  *           description: Timestamp when the tip was last updated
  */
 
-/**
- * @swagger
- * tags:
- *   - name: Tips
- *     description: Management of portfolio tips
- *   - name: Download Links
- *     description: Management of downloadable resources within tips
- */
-
 // Get all tips for a specific portfolio
 /**
  * @swagger

@@ -1,6 +1,52 @@
 const Bundle = require('../models/bundle');
 const mongoose = require('mongoose');
 const Portfolio = require('../models/modelPortFolio');
+const TelegramService = require('../services/tgservice');
+const winston = require('winston');
+
+// Bundle logger
+const bundleLogger = winston.createLogger({
+  level: 'debug',
+  format: winston.format.combine(
+    winston.format.timestamp({ format: 'YYYY-MM-DD HH:mm:ss.SSS' }),
+    winston.format.errors({ stack: true }),
+    winston.format.splat(),
+    winston.format.printf(({ timestamp, level, message, operation, bundleId, userId, details, ...rest }) => {
+      let logMessage = `[${timestamp}] [${level.toUpperCase()}]`;
+      
+      if (operation) logMessage += ` [${operation}]`;
+      if (bundleId) logMessage += ` [Bundle: ${bundleId}]`;
+      if (userId) logMessage += ` [User: ${userId}]`;
+      
+      logMessage += ` ${message}`;
+      
+      if (details) {
+        logMessage += `\nDetails: ${JSON.stringify(details, null, 2)}`;
+      }
+      
+      if (Object.keys(rest).length > 0) {
+        logMessage += `\nAdditional Data: ${JSON.stringify(rest, null, 2)}`;
+      }
+      
+      return logMessage + '\n' + '='.repeat(120);
+    })
+  ),
+  transports: [
+    new winston.transports.Console({
+      level: 'info',
+      format: winston.format.combine(
+        winston.format.colorize(),
+        winston.format.simple()
+      )
+    }),
+    new winston.transports.File({ 
+      filename: 'logs/bundle-operations.log',
+      maxsize: 10 * 1024 * 1024, // 10MB
+      maxFiles: 10,
+      tailable: true
+    })
+  ]
+});
 
 const asyncHandler = fn => (req, res, next) => 
   Promise.resolve(fn(req, res, next)).catch(next);
@@ -17,6 +63,27 @@ exports.createBundle = asyncHandler(async (req, res) => {
     yearlyemandateprice,
     yearlyPrice 
   } = req.body;
+
+  const userId = req.user?._id || 'Unknown';
+  const userEmail = req.user?.email || 'Unknown';
+
+  bundleLogger.info('Bundle creation started', {
+    operation: 'CREATE',
+    userId,
+    userEmail,
+    details: {
+      name,
+      category,
+      portfoliosCount: portfolios.length,
+      pricingOptions: {
+        monthlyPrice,
+        monthlyemandateprice,
+        quarterlyemandateprice,
+        yearlyemandateprice,
+        yearlyPrice
+      }
+    }
+  });
 
   if (!name || !category) {
     return res.status(400).json({ error: 'Missing required fields: name and category are required' });
@@ -43,6 +110,44 @@ exports.createBundle = asyncHandler(async (req, res) => {
     }
   }
 
+  // Create Telegram product for bundle (if enabled)
+  let telegramProductId = null;
+  try {
+    const basePrice = monthlyPrice || monthlyemandateprice || yearlyPrice || yearlyemandateprice || 0;
+    const telegramProduct = await TelegramService.createProduct({
+      name: name.trim(),
+      description: `Bundle access: ${description || name}`,
+      price: basePrice,
+      category: category,
+      type: 'bundle'
+    });
+    
+    if (telegramProduct.success) {
+      telegramProductId = telegramProduct.product.id;
+      bundleLogger.info('Telegram product created for bundle', {
+        operation: 'CREATE',
+        userId,
+        userEmail,
+        details: {
+          telegramProductId,
+          bundleName: name,
+          groupId: telegramProduct.product.group_id
+        }
+      });
+    }
+  } catch (telegramError) {
+    bundleLogger.warn('Telegram integration failed during bundle creation', {
+      operation: 'CREATE',
+      userId,
+      userEmail,
+      details: {
+        error: telegramError.message,
+        bundleName: name
+      }
+    });
+    // Don't fail bundle creation if Telegram integration fails
+  }
+
   const bundle = new Bundle({
     name,
     description,
@@ -52,10 +157,24 @@ exports.createBundle = asyncHandler(async (req, res) => {
     monthlyemandateprice,
     quarterlyemandateprice,
     yearlyemandateprice,
-    yearlyPrice
+    yearlyPrice,
+    externalId: telegramProductId
   });
 
   await bundle.save();
+  
+  bundleLogger.info('Bundle created successfully', {
+    operation: 'CREATE',
+    bundleId: bundle._id,
+    userId,
+    userEmail,
+    details: {
+      bundleName: bundle.name,
+      category: bundle.category,
+      portfoliosCount: bundle.portfolios.length,
+      telegramIntegrated: !!telegramProductId
+    }
+  });
   
   res.status(201).json(bundle);
 });
@@ -188,9 +307,92 @@ exports.getBundleById = asyncHandler(async (req, res) => {
 });
 
 exports.deleteBundle = asyncHandler(async (req, res) => {
-  const bundle = await Bundle.findByIdAndDelete(req.params.id);
+  const bundleId = req.params.id;
+  const userId = req.user?.id;
+  const userEmail = req.user?.email;
+  
+  // Get bundle before deletion for logging
+  const bundle = await Bundle.findById(bundleId);
+  
   if (!bundle) {
+    bundleLogger.warn('Bundle deletion attempted for non-existent bundle', {
+      operation: 'DELETE',
+      bundleId,
+      userId,
+      userEmail,
+      details: {
+        error: 'Bundle not found'
+      }
+    });
     return res.status(404).json({ error: 'Bundle not found' });
   }
-  res.json({ message: 'Bundle deleted successfully' });
+
+  // Log bundle state before deletion
+  const bundleBefore = {
+    id: bundle._id,
+    name: bundle.name,
+    category: bundle.category,
+    portfoliosCount: bundle.portfolios.length,
+    externalId: bundle.externalId
+  };
+
+  // Delete Telegram product if it exists
+  if (bundle.externalId) {
+    try {
+      const deleteResult = await TelegramService.deleteProduct(bundle.externalId);
+      if (deleteResult.success) {
+        bundleLogger.info('Telegram product deleted successfully for bundle', {
+          operation: 'DELETE',
+          bundleId,
+          userId,
+          userEmail,
+          details: {
+            telegramProductId: bundle.externalId,
+            bundleName: bundle.name
+          }
+        });
+      } else {
+        bundleLogger.warn('Failed to delete Telegram product for bundle', {
+          operation: 'DELETE',
+          bundleId,
+          userId,
+          userEmail,
+          details: {
+            telegramProductId: bundle.externalId,
+            error: deleteResult.error
+          }
+        });
+      }
+    } catch (telegramError) {
+      bundleLogger.error('Telegram deletion error during bundle cleanup', {
+        operation: 'DELETE',
+        bundleId,
+        userId,
+        userEmail,
+        details: {
+          error: telegramError.message,
+          telegramProductId: bundle.externalId
+        }
+      });
+    }
+  }
+
+  // Delete bundle
+  await Bundle.findByIdAndDelete(bundleId);
+
+  bundleLogger.info('Bundle deleted successfully', {
+    operation: 'DELETE',
+    bundleId,
+    userId,
+    userEmail,
+    details: {
+      bundleBefore,
+      telegramProductDeleted: !!bundle.externalId
+    }
+  });
+
+  res.json({ 
+    message: 'Bundle and related resources deleted successfully',
+    telegramProductDeleted: !!bundle.externalId
+  });
 });

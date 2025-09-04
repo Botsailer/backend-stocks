@@ -129,16 +129,6 @@ router.delete(
  *           type: string
  */
 
-// --- Administration tag ---
-/**
- * @swagger
- * tags:
- *   - name: Administration
- *     description: Admin auth (login/logout/refresh/change-password)
- *   - name: AdminUsers
- *     description: Admin-only user management
- */
-
 /**
  * @swagger
  * /admin/login:

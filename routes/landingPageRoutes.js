@@ -5,13 +5,6 @@ const landingPageController = require('../controllers/LandingPageController');
 
 /**
  * @swagger
- * tags:
- *   name: Landing Page
- *   description: Endpoints for managing the landing page configuration.
- */
-
-/**
- * @swagger
  * /landing-page:
  *   get:
  *     summary: Retrieve the landing page configuration.

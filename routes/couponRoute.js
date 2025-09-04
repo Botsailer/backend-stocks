@@ -8,10 +8,6 @@ const requireAuth = passport.authenticate('jwt', { session: false });
 
 /**
  * @swagger
- * tags:
- *   name: Coupons
- *   description: Discount coupon management
- * 
  * components:
  *   schemas:
  *     Coupon:

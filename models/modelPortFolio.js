@@ -296,6 +296,13 @@ const PortfolioSchema = new Schema({
     default: 0,
     min: 0
   },
+  
+  externalId: {
+    type: String,
+    required: false,
+    trim: true
+  },
+
   currentValue: {
     type: Number,
     required: true,

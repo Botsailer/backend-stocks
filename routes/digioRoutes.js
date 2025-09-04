@@ -92,17 +92,6 @@ const requireAuth = (req, res, next) => {
 
 /**
  * @swagger
- * tags:
- *   - name: KYC
- *     description: Know Your Customer verification services
- *   - name: PDF Operations
- *     description: PDF upload and management
- *   - name: Document Signing
- *     description: Digital document signing services
- */
-
-/**
- * @swagger
  * /digio/pan/verify:
  *   post:
  *     summary: Verify PAN details using Digio KYC API

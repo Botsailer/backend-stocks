@@ -12,7 +12,7 @@ const PaymentHistorySchema = new Schema({
   subscription: {
     type: Schema.Types.ObjectId,
     ref: 'Subscription',
-    required: false,  // 🔧 FIXED: Changed from true to false
+    required: false,  
     index: true
   },
   portfolio: {

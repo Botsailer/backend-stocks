@@ -10,13 +10,6 @@ const requireAuth = passport.authenticate("jwt", { session: false });
 
 /**
  * @swagger
- * tags:
- *   name: Subscriptions
- *   description: Financial product subscription management
- */
-
-/**
- * @swagger
  * /api/subscriptions/order:
  *   post:
  *     summary: Create payment order for a single product
@@ -121,7 +114,15 @@ router.post("/checkout", requireAuth, subscriptionController.checkoutCart);
  * /api/subscriptions/verify:
  *   post:
  *     summary: Verify payment after client-side payment completion
- *     tags: [Subscriptions]
+ *     description: |
+ *       Enhanced payment verification with automatic Telegram integration:
+ *       - Validates payment signature and amount
+ *       - Creates active subscriptions with coupon support
+ *       - Automatically generates Telegram invite links for portfolio subscriptions
+ *       - Sends confirmation emails with group access
+ *       - Generates and sends bills with coupon details
+ *       - Supports both single payments and cart checkout
+ *     tags: [Subscriptions, Telegram Management]
  *     security:
  *       - bearerAuth: []
  *     requestBody:
@@ -137,17 +138,95 @@ router.post("/checkout", requireAuth, subscriptionController.checkoutCart);
  *             properties:
  *               orderId:
  *                 type: string
+ *                 description: Razorpay order ID
+ *                 example: "order_ABC123xyz"
  *               paymentId:
  *                 type: string
+ *                 description: Razorpay payment ID
+ *                 example: "pay_DEF456uvw"
  *               signature:
  *                 type: string
+ *                 description: Razorpay payment signature for verification
+ *                 example: "sha256_signature_string"
  *     responses:
  *       200:
- *         description: Payment verified and subscription activated
+ *         description: Payment verified and subscription activated with Telegram integration
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success:
+ *                   type: boolean
+ *                   example: true
+ *                 message:
+ *                   type: string
+ *                   example: "Portfolio payment verified with coupon WELCOME10"
+ *                 subscriptionId:
+ *                   type: string
+ *                   example: "615a2d4b87d9c34f7d4f8a12"
+ *                 category:
+ *                   type: string
+ *                   example: "premium"
+ *                 originalAmount:
+ *                   type: number
+ *                   example: 1999.00
+ *                 discountApplied:
+ *                   type: number
+ *                   example: 199.90
+ *                 finalAmount:
+ *                   type: number
+ *                   example: 1799.10
+ *                 savings:
+ *                   type: number
+ *                   example: 199.90
+ *                 couponUsed:
+ *                   type: object
+ *                   properties:
+ *                     code:
+ *                       type: string
+ *                       example: "WELCOME10"
+ *                     discountApplied:
+ *                       type: number
+ *                       example: 199.90
+ *                     savings:
+ *                       type: number
+ *                       example: 199.90
+ *                 billGenerated:
+ *                   type: boolean
+ *                   example: true
+ *                 billNumber:
+ *                   type: string
+ *                   example: "BILL_2025_001234"
+ *                 telegramInviteLinks:
+ *                   type: array
+ *                   items:
+ *                     type: object
+ *                     properties:
+ *                       productId:
+ *                         type: string
+ *                         example: "615a2d4b87d9c34f7d4f8a12"
+ *                       product_name:
+ *                         type: string
+ *                         example: "Growth Portfolio"
+ *                       invite_link:
+ *                         type: string
+ *                         example: "https://t.me/+ABC123xyz"
+ *                       expires_at:
+ *                         type: string
+ *                         format: date-time
+ *                         example: "2025-10-04T12:00:00.000Z"
+ *                 telegramMessage:
+ *                   type: string
+ *                   example: "You have access to 1 Telegram group. Check your email for invite links."
  *       400:
- *         description: Invalid verification data
+ *         description: Invalid verification data or payment amount mismatch
  *       404:
  *         description: Order/Subscription not found
+ *       409:
+ *         description: Payment already processed
+ *       500:
+ *         description: Payment verification failed
  */
 router.post("/verify", requireAuth, subscriptionController.verifyPayment);
 
@@ -309,7 +388,16 @@ router.post("/emandate", requireAuth, subscriptionController.createEmandate);
  * /api/subscriptions/emandate/verify:
  *   post:
  *     summary: Verify eMandate setup after customer authorization
- *     tags: [Subscriptions]
+ *     description: |
+ *       Enhanced eMandate verification with comprehensive integration:
+ *       - Verifies eMandate subscription status with Razorpay
+ *       - Processes coupon discounts and tracks usage
+ *       - Automatically generates Telegram invite links for portfolio subscriptions
+ *       - Sends email notifications with group access details
+ *       - Generates and sends bills with coupon information
+ *       - Handles renewals with compensation logic
+ *       - Manages user premium status updates
+ *     tags: [Subscriptions, Telegram Management]
  *     security:
  *       - bearerAuth: []
  *     requestBody:
@@ -323,14 +411,113 @@ router.post("/emandate", requireAuth, subscriptionController.createEmandate);
  *             properties:
  *               subscription_id:
  *                 type: string
- *                 description: Razorpay subscription ID
+ *                 description: Razorpay subscription ID for eMandate
+ *                 example: "sub_ABC123xyz"
  *     responses:
  *       200:
- *         description: eMandate verified and subscription activated
+ *         description: eMandate verified and subscription activated with Telegram integration
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success:
+ *                   type: boolean
+ *                   example: true
+ *                 message:
+ *                   type: string
+ *                   example: "eMandate authenticated. Activated 1 subscriptions with coupon SAVE20"
+ *                 subscriptionStatus:
+ *                   type: string
+ *                   example: "authenticated"
+ *                 activatedSubscriptions:
+ *                   type: number
+ *                   example: 1
+ *                 isRenewal:
+ *                   type: boolean
+ *                   example: false
+ *                 telegramInviteLinks:
+ *                   type: array
+ *                   items:
+ *                     type: object
+ *                     properties:
+ *                       productId:
+ *                         type: string
+ *                         example: "615a2d4b87d9c34f7d4f8a12"
+ *                       invite_link:
+ *                         type: string
+ *                         example: "https://t.me/+ABC123xyz"
+ *                       expires_at:
+ *                         type: string
+ *                         format: date-time
+ *                         example: "2025-10-04T12:00:00.000Z"
+ *                 requiresAction:
+ *                   type: boolean
+ *                   example: false
+ *                 couponUsed:
+ *                   type: object
+ *                   properties:
+ *                     code:
+ *                       type: string
+ *                       example: "SAVE20"
+ *                     originalAmount:
+ *                       type: number
+ *                       example: 2499.00
+ *                     discountApplied:
+ *                       type: number
+ *                       example: 499.80
+ *                     finalAmount:
+ *                       type: number
+ *                       example: 1999.20
+ *                     savings:
+ *                       type: number
+ *                       example: 499.80
  *       400:
- *         description: Invalid eMandate data or setup incomplete
+ *         description: Invalid eMandate data or unknown subscription status
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success:
+ *                   type: boolean
+ *                   example: false
+ *                 message:
+ *                   type: string
+ *                   example: "Subscription in pending_authentication state."
+ *                 subscriptionStatus:
+ *                   type: string
+ *                   example: "pending_authentication"
+ *                 requiresAction:
+ *                   type: boolean
+ *                   example: true
+ *                 authenticationUrl:
+ *                   type: string
+ *                   example: "https://rzp.io/i/ABC123"
+ *                 couponWillBeApplied:
+ *                   type: object
+ *                   properties:
+ *                     code:
+ *                       type: string
+ *                       example: "SAVE20"
+ *                     originalAmount:
+ *                       type: number
+ *                       example: 2499.00
+ *                     discountApplied:
+ *                       type: number
+ *                       example: 499.80
+ *                     finalAmount:
+ *                       type: number
+ *                       example: 1999.20
+ *                     savings:
+ *                       type: number
+ *                       example: 499.80
+ *       403:
+ *         description: Unauthorized access to subscription
  *       404:
  *         description: eMandate/Subscription not found
+ *       500:
+ *         description: eMandate verification failed
  */
 router.post(
   "/emandate/verify",

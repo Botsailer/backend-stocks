@@ -6,20 +6,6 @@ const { body } = require('express-validator');
 
 /**
  * @swagger
- * tags:
- *   name: FAQs
- *   description: |
- *     Manage Frequently Asked Questions.
- *     
- *     SIMPLE EXPLANATION (for non-technical users):
- *     The "answer" field can look different depending on how you want it to show on the website/app. Just pick ONE style:
- *     1. A single sentence or paragraph (string)
- *     2. A list of bullet points (array of strings)
- *     3. A structured object with named sections (each section can have a title and a list)
- *     4. A detailed object mixing sections, lists, and key/value items
- *     
- *     You don't need to use all formats—choose what feels natural. The system stores what you send and the frontend will render it nicely.
- *     When you delete an FAQ, any references to it inside other FAQs' "relatedFAQs" lists are automatically removed.
  * components:
  *   schemas:
  *     FAQAnswerSection:

@@ -13,6 +13,12 @@ const BundleSchema = new Schema({
     required: true,
     default: ""
   },
+  externalId: {
+    type: String,
+    required: false,
+    trim: true,
+    index: true // Add index for faster queries
+  },
   portfolios: [{
     type: Schema.Types.ObjectId,
     ref: 'Portfolio',

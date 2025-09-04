@@ -23,49 +23,7 @@ const options = {
     info: {
       title: 'Stock Trading Platform API',
       version: '2.0.0',
-      description: `
-        ## 🚀 Production-Level Stock Trading Platform API
-        
-        A comprehensive API for managing investment portfolios with real stock market behavior, 
-        advanced validation, and production-level security features.
-        
-        ### 🎯 Key Features
-        - **Real Stock Market Logic**: Price averaging, real-time selling, P&L tracking
-        - **Production-Level Validation**: Backend calculations, anti-tampering protection
-        - **Comprehensive Portfolio Management**: CRUD operations with flexible stock actions
-        - **Advanced Security**: JWT authentication, admin-only operations, input validation
-        - **Real-time Data**: Live portfolio values, market price integration
-        - **Robust Error Handling**: Detailed error messages and validation feedback
-        
-        ### 📊 System Capacity
-        **Current Architecture Capacity:**
-        - **Concurrent Users**: 500-1000 users with current Node.js setup
-        - **Database Performance**: MongoDB can handle 10,000+ portfolios efficiently
-        - **API Response Time**: < 200ms for standard operations
-        - **Scalability**: Horizontal scaling ready with load balancer support
-        - **Memory Usage**: ~500MB RAM for full operation
-        - **Storage**: Efficient document storage with indexing
-        
-        ### 🔧 API Usage Guidelines
-        1. **Authentication**: Most endpoints require Bearer JWT token
-        2. **Rate Limiting**: 100 requests per minute per IP
-        3. **Data Validation**: All inputs validated server-side
-        4. **Error Handling**: Consistent error response format
-        5. **Pagination**: Large datasets automatically paginated
-        
-        ### 🛡️ Security Features
-        - JWT-based authentication
-        - Admin role verification
-        - Input sanitization and validation
-        - SQL injection prevention
-        - XSS protection
-        - CORS configuration
-        
-        ### 📈 Performance Monitoring
-        - Health check endpoint: \`GET /health\`
-        - Cron job status: \`GET /api/cron/status\`
-        - Log management: \`GET /api/admin/logs/status\`
-      `,
+      description: 'API for managing investment portfolios with real stock market behavior and advanced validation',
       contact: {
         name: 'API Support',
         email: 'anupm019@gmail.com'
@@ -243,40 +201,96 @@ const options = {
         description: 'Investment portfolio management with real stock market behavior'
       },
       {
-        name: 'Users',
-        description: 'User management and profile operations'
+        name: 'KYC',
+        description: 'Know Your Customer verification and document management'
       },
       {
-        name: 'Subscriptions',
-        description: 'Subscription management and billing'
+        name: 'PDF Operations',
+        description: 'PDF generation and document processing'
       },
       {
-        name: 'Admin',
-        description: 'Administrative operations (admin access required)'
+        name: 'Document Signing',
+        description: 'Digital document signing and verification'
       },
       {
-        name: 'Stock Symbols',
-        description: 'Stock symbol management and market data'
-      },
-      {
-        name: 'FAQs',
-        description: 'Frequently asked questions management'
+        name: 'User Profile',
+        description: 'User profile management and settings'
       },
       {
         name: 'Tips',
         description: 'Investment tips and recommendations'
       },
       {
+        name: 'Subscriptions',
+        description: 'Subscription management and billing'
+      },
+      {
+        name: 'Payments',
+        description: 'Payment processing and transaction management'
+      },
+      {
+        name: 'Cart',
+        description: 'Shopping cart and order management'
+      },
+      {
+        name: 'Telegram Management',
+        description: 'Telegram group management and product synchronization'
+      },
+      {
+        name: 'Download Links',
+        description: 'Management of downloadable resources within tips'
+      },
+      {
+        name: 'Administration',
+        description: 'Admin authentication and system management'
+      },
+      {
+        name: 'AdminUsers',
+        description: 'Admin-only user management operations'
+      },
+      {
         name: 'Bundles',
         description: 'Portfolio bundle management'
       },
       {
-        name: 'ChartData',
-        description: 'Chart data and portfolio performance analytics'
+        name: 'Contact',
+        description: 'Contact us and customer support messaging'
       },
       {
-        name: 'System',
-        description: 'System health, monitoring, and maintenance'
+        name: 'AdminSubscriptions',
+        description: 'Admin-only subscription management operations'
+      },
+      {
+        name: 'Admin Notifications',
+        description: 'Endpoints for sending emails to portfolio subscribers'
+      },
+      {
+        name: 'ChartData',
+        description: 'Portfolio performance chart data management'
+      },
+      {
+        name: 'Configuration',
+        description: 'Admin-only endpoints for managing system configuration'
+      },
+      {
+        name: 'Coupons',
+        description: 'Discount coupon management'
+      },
+      {
+        name: 'FAQs',
+        description: 'Frequently Asked Questions management'
+      },
+      {
+        name: 'Landing Page',
+        description: 'Endpoints for managing the landing page configuration'
+      },
+      {
+        name: 'Portfolio Calculation Logs',
+        description: 'Detailed portfolio calculation logs for debugging and analysis'
+      },
+      {
+        name: 'Stock Symbols',
+        description: 'Endpoints for managing stock symbols and their prices'
       }
     ]
   },

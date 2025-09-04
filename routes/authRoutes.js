@@ -5,13 +5,6 @@ const router = express.Router();
 
 /**
  * @swagger
- * tags:
- *   name: Authentication
- *   description: Endpoints for user authentication and account management.
- */
-
-/**
- * @swagger
  * /auth/signup:
  *   post:
  *     tags:
