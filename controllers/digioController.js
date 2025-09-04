@@ -492,14 +492,85 @@ exports.createDocumentForSigning = async (req, res) => {
     }
     
     // Get the latest PDF template for this user
-    const template = await DigioSign.findOne({ userId, isTemplate: true })
+    let template = await DigioSign.findOne({ userId, isTemplate: true })
       .sort({ createdAt: -1 });
     
+    // If no template exists, fetch PDF from ESIGN_PDF_URL automatically
+    if (!template) {
+      console.log('[DIGIO] No PDF template found, fetching from ESIGN_PDF_URL...');
+      
+      try {
+        // Get PDF URL from config
+        const pdfUrl = await getConfig("ESIGN_PDF_URL");
+        if (!pdfUrl) {
+          return res.status(503).json({
+            success: false,
+            error: "ESIGN_PDF_URL not configured. Please set ESIGN_PDF_URL in your environment variables.",
+            code: "URL_NOT_CONFIGURED"
+          });
+        }
+        
+        console.log(`[DIGIO] Fetching PDF from URL: ${pdfUrl}`);
+        
+        // Download PDF from URL
+        const pdfResponse = await axios.get(pdfUrl, {
+          responseType: 'arraybuffer',
+          timeout: 30000,
+          headers: {
+            'User-Agent': 'Mozilla/5.0 (compatible; DigioBot/1.0)'
+          }
+        });
+        
+        if (pdfResponse.status !== 200) {
+          throw new Error(`Failed to download PDF: HTTP ${pdfResponse.status}`);
+        }
+        
+        // Convert to base64
+        const pdfBuffer = Buffer.from(pdfResponse.data);
+        const base64Data = pdfBuffer.toString('base64');
+        
+        // Generate filename with timestamp
+        const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+        const fileName = `template_auto_${userId}_${timestamp}.pdf`;
+        
+        // Create new template record
+        template = await DigioSign.create({
+          userId,
+          documentId: null,
+          sessionId: null,
+          name: "Auto-generated Template",
+          email: "system@rangaone.finance",
+          phone: "",
+          idType: 'pdf_auto_fetched',
+          idNumber: userId.toString(),
+          status: 'template_ready',
+          fileBase64: base64Data,
+          fileName: fileName,
+          fileSize: pdfBuffer.length,
+          sourceUrl: pdfUrl,
+          isTemplate: true,
+          createdAt: new Date()
+        });
+        
+        console.log('[DIGIO] Auto-created PDF template:', template._id);
+        
+      } catch (fetchError) {
+        console.error('[DIGIO] Failed to auto-fetch PDF:', fetchError);
+        return res.status(503).json({
+          success: false,
+          error: "No PDF template found and unable to fetch from ESIGN_PDF_URL automatically.",
+          code: "AUTO_FETCH_FAILED",
+          details: fetchError.message
+        });
+      }
+    }
+    
+    // Validate template has PDF data
     if (!template || !template.fileBase64) {
       return res.status(404).json({
         success: false,
-        error: "No PDF template found. Please upload a PDF first using /pdf/upload or /pdf/refetch endpoint.",
-        code: "NO_PDF_TEMPLATE"
+        error: "PDF template found but missing base64 data. Please try again or upload a PDF manually.",
+        code: "INVALID_TEMPLATE_DATA"
       });
     }
     
@@ -563,7 +634,7 @@ exports.createDocumentForSigning = async (req, res) => {
     
     res.json({
       success: true,
-      message: "Document created successfully for signing",
+      message: template.sourceUrl ? "Document created successfully for signing (PDF auto-fetched)" : "Document created successfully for signing",
       data: {
         recordId: signingRecord._id,
         documentId: response.id,
@@ -576,7 +647,8 @@ exports.createDocumentForSigning = async (req, res) => {
         authenticationUrl: response.authentication_url || null,
         signUrl: response.sign_url || null,
         expireInDays: expireInDays,
-        digioResponse: response
+        digioResponse: response,
+        pdfSource: template.sourceUrl ? 'auto_fetched' : 'existing_template'
       }
     });
     
@@ -586,9 +658,9 @@ exports.createDocumentForSigning = async (req, res) => {
     let errorMessage = error.message || "Failed to create document for signing";
     let statusCode = 500;
     
-    if (error.code === 'NO_PDF_TEMPLATE') {
-      errorMessage = "No PDF template found. Please upload a PDF first.";
-      statusCode = 404;
+    if (error.code === 'AUTO_FETCH_FAILED') {
+      errorMessage = "Unable to automatically fetch PDF template from ESIGN_PDF_URL.";
+      statusCode = 503;
     } else if (error.message && error.message.includes('credentials not found')) {
       errorMessage = "Digio API credentials not configured properly.";
       statusCode = 503;

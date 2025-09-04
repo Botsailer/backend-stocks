@@ -16,7 +16,7 @@ const digioSignSchema = new mongoose.Schema({
   // KYC information (for compatibility)
   idType: { 
     type: String, 
-    enum: ["aadhaar", "pan", "document", "esign", "pdf_uploaded", "pdf_refetched", "document_created", "document_signing"], 
+    enum: ["aadhaar", "pan", "document", "esign", "pdf_uploaded", "pdf_refetched", "pdf_auto_fetched", "document_created", "document_signing"], 
     required: true 
   },
   idNumber: { type: String, required: true },
