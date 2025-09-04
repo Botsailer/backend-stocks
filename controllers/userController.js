@@ -8,6 +8,28 @@ const Bundle = require('../models/bundle');
 const { digioPanVerify } = require('../services/digioPanService');
 const DigioSign = require('../models/DigioSign');
 
+// Helper function to convert internal status to user-friendly status
+const getUserFriendlyStatus = (status) => {
+  const statusMap = {
+    'signed': 'signed',
+    'completed': 'signed',
+    'document_created': 'unsigned',
+    'sent': 'unsigned',
+    'viewed': 'unsigned',
+    'pending': 'unsigned',
+    'initiated': 'unsigned',
+    'expired': 'expired',
+    'declined': 'declined',
+    'failed': 'failed',
+    'template_uploaded': 'template_ready',
+    'template_refetched': 'template_ready',
+    'template_ready': 'template_ready'
+  };
+
+  return statusMap[status] || status;
+};
+
+
 
 // Function is now defined at the top of the file
 const updateUserPremiumStatus = async (userId) => {
@@ -106,10 +128,14 @@ exports.getProfile = async (req, res) => {
     
     if (!user) return res.status(404).json({ error: 'User not found' });
 
-    // eSign info (latest record) - include all document types that can be signed
-    const latestEsign = await DigioSign.findOne({ 
-      userId: user._id, 
-      idType: { $in: ['esign', 'document', 'pdf_uploaded', 'pdf_refetched', 'document_created'] } 
+    // eSign info (latest signing document) - exclude templates, only get actual signing records
+    // Templates have: isTemplate=true, documentId=null, status="template_*"
+    // Signing docs have: isTemplate=false, documentId="DIGIO_*", status="document_created|signed|..."
+    const latestEsign = await DigioSign.findOne({
+      userId: user._id,
+      isTemplate: false, // Only get actual signing documents, not templates
+      documentId: { $exists: true, $ne: null }, // Must have a documentId (templates don't)
+      idType: { $in: ['esign', 'document', 'document_signing', 'pdf_auto_fetched'] }
     }).sort({ createdAt: -1 });
 
     const requiredFields = ['fullName', 'phone', 'pandetails'];
@@ -146,10 +172,13 @@ exports.getProfile = async (req, res) => {
         documentId: latestEsign.documentId,
         sessionId: latestEsign.sessionId,
         status: latestEsign.status,
+        userFriendlyStatus: getUserFriendlyStatus(latestEsign.status), // Add user-friendly status
         idType: latestEsign.idType,
         signedAt: latestEsign.signedAt,
         signedDocumentUrl: latestEsign.signedDocumentUrl,
-        createdAt: latestEsign.createdAt
+        createdAt: latestEsign.createdAt,
+        signerName: latestEsign.name,
+        signerEmail: latestEsign.email
       } : null
 
     });
