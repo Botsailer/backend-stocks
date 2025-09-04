@@ -540,7 +540,7 @@ exports.createDocumentForSigning = async (req, res) => {
           sessionId: null,
           name: "Auto-generated Template",
           email: "system@rangaone.finance",
-          phone: "",
+          phone: "0000000000", // Placeholder phone for template records
           idType: 'pdf_auto_fetched',
           idNumber: userId.toString(),
           status: 'template_ready',
