@@ -22,7 +22,11 @@ const {
   uploadPdfForSigning,
   refetchPdfFromUrl,
   getLatestPdfData,
-  createDocumentForSigning
+  createDocumentForSigning,
+  getStatus,
+  webhook,
+  syncDocument,
+  syncAllPending
 } = require("../controllers/digioController");
 const passport = require("passport");
 
@@ -379,5 +383,222 @@ router.get('/pdf/data', requireAuth, getLatestPdfData);
  *         description: Digio API not configured
  */
 router.post('/document/create', requireAuth, createDocumentForSigning);
+
+/**
+ * @swagger
+ * /digio/status/{sessionId}:
+ *   get:
+ *     summary: Get Digio document status by sessionId or documentId
+ *     tags: [Document Signing]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: sessionId
+ *         required: true
+ *         schema:
+ *           type: string
+ *         description: Session ID or Document ID from Digio
+ *         example: "doc_123456789"
+ *     responses:
+ *       200:
+ *         description: Document status retrieved successfully
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success:
+ *                   type: boolean
+ *                   example: true
+ *                 data:
+ *                   type: object
+ *                   properties:
+ *                     record:
+ *                       type: object
+ *                       properties:
+ *                         _id:
+ *                           type: string
+ *                         userId:
+ *                           type: string
+ *                         documentId:
+ *                           type: string
+ *                         sessionId:
+ *                           type: string
+ *                         status:
+ *                           type: string
+ *                           enum: ["initiated", "sent", "viewed", "signed", "completed", "expired", "declined", "failed"]
+ *                         signedAt:
+ *                           type: string
+ *                           format: date-time
+ *                         signedDocumentUrl:
+ *                           type: string
+ *                     remote:
+ *                       type: object
+ *                       description: Latest status from Digio API
+ *                     remoteError:
+ *                       type: string
+ *                       description: Error message if remote API call failed
+ *       401:
+ *         description: Authentication required
+ *       404:
+ *         description: Document not found
+ */
+router.get('/status/:sessionId', requireAuth, getStatus);
+
+/**
+ * @swagger
+ * /digio/webhook:
+ *   post:
+ *     summary: Webhook endpoint for Digio notifications
+ *     tags: [Document Signing]
+ *     description: |
+ *       This endpoint receives webhook notifications from Digio when document status changes.
+ *       Configure this URL in your Digio dashboard: https://your-domain.com/digio/webhook
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               event:
+ *                 type: string
+ *                 enum: ["document.sent", "document.viewed", "document.signed", "document.completed", "document.expired", "document.declined", "document.failed"]
+ *                 example: "document.signed"
+ *               document_id:
+ *                 type: string
+ *                 example: "doc_123456789"
+ *               session_id:
+ *                 type: string
+ *                 example: "doc_123456789"
+ *               status:
+ *                 type: string
+ *                 example: "signed"
+ *               signer_details:
+ *                 type: object
+ *                 properties:
+ *                   name:
+ *                     type: string
+ *                   email:
+ *                     type: string
+ *                   phone:
+ *                     type: string
+ *               signed_document_url:
+ *                 type: string
+ *               timestamp:
+ *                 type: string
+ *                 format: date-time
+ *     responses:
+ *       200:
+ *         description: Webhook processed successfully
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success:
+ *                   type: boolean
+ *                   example: true
+ *                 message:
+ *                   type: string
+ *                   example: "Webhook processed successfully"
+ *                 recordId:
+ *                   type: string
+ *                 previousStatus:
+ *                   type: string
+ *                 newStatus:
+ *                   type: string
+ *                 event:
+ *                   type: string
+ */
+router.post('/webhook', webhook);
+
+/**
+ * @swagger
+ * /digio/sync/{documentId}:
+ *   post:
+ *     summary: Manually sync specific document status
+ *     tags: [Document Signing]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: documentId
+ *         required: true
+ *         schema:
+ *           type: string
+ *         description: Document ID to sync
+ *         example: "doc_123456789"
+ *     responses:
+ *       200:
+ *         description: Document synced successfully
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success:
+ *                   type: boolean
+ *                   example: true
+ *                 document:
+ *                   type: object
+ *                   description: Updated document record
+ *                 oldStatus:
+ *                   type: string
+ *                 newStatus:
+ *                   type: string
+ *       401:
+ *         description: Authentication required
+ *       404:
+ *         description: Document not found
+ *       500:
+ *         description: Sync failed
+ */
+router.post('/sync/:documentId', requireAuth, syncDocument);
+
+/**
+ * @swagger
+ * /digio/sync-all:
+ *   post:
+ *     summary: Manually sync all pending documents
+ *     tags: [Document Signing]
+ *     security:
+ *       - bearerAuth: []
+ *     description: |
+ *       Manually trigger the cron job to sync all pending documents.
+ *       This endpoint is useful for testing or when you need immediate status updates.
+ *     responses:
+ *       200:
+ *         description: Sync completed successfully
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success:
+ *                   type: boolean
+ *                   example: true
+ *                 message:
+ *                   type: string
+ *                   example: "Document sync completed"
+ *                 processed:
+ *                   type: number
+ *                   description: Number of documents processed
+ *                 updated:
+ *                   type: number
+ *                   description: Number of documents updated
+ *                 errors:
+ *                   type: number
+ *                   description: Number of errors encountered
+ *                 timestamp:
+ *                   type: string
+ *                   format: date-time
+ *       401:
+ *         description: Authentication required
+ *       500:
+ *         description: Sync failed
+ */
+router.post('/sync-all', requireAuth, syncAllPending);
 
 module.exports = router;

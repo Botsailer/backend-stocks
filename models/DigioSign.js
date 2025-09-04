@@ -59,7 +59,6 @@ const digioSignSchema = new mongoose.Schema({
   timestamps: true,
   toJSON: { 
     transform: function(doc, ret) {
-      // Remove sensitive data from JSON output
       delete ret.digioResponse;
       delete ret.webhookData;
       return ret;

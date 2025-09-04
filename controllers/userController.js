@@ -106,8 +106,11 @@ exports.getProfile = async (req, res) => {
     
     if (!user) return res.status(404).json({ error: 'User not found' });
 
-    // eSign info (latest record)
-    const latestEsign = await DigioSign.findOne({ userId: user._id, idType: { $in: ['esign','document'] } }).sort({ createdAt: -1 });
+    // eSign info (latest record) - include all document types that can be signed
+    const latestEsign = await DigioSign.findOne({ 
+      userId: user._id, 
+      idType: { $in: ['esign', 'document', 'pdf_uploaded', 'pdf_refetched', 'document_created'] } 
+    }).sort({ createdAt: -1 });
 
     const requiredFields = ['fullName', 'phone', 'pandetails'];
     const isComplete = requiredFields.every(field => user[field] && user[field] !== null);
@@ -135,12 +138,20 @@ exports.getProfile = async (req, res) => {
         verifiedName: user.panVerifiedName || null,
         verifiedDob: user.panVerifiedDob || null,
         lastVerifiedAt: user.panLastVerifiedAt || null
-      },
-      eSign: {
-        status: latestEsign?.status || 'missing',
-        documentId: latestEsign?.documentId || null,
-        signedDocumentUrl: latestEsign?.signedDocumentUrl || null
       }
+      ,
+      // Provide the frontend a compact latest eSign/document signing summary
+      latestEsign: latestEsign ? {
+        _id: latestEsign._id,
+        documentId: latestEsign.documentId,
+        sessionId: latestEsign.sessionId,
+        status: latestEsign.status,
+        idType: latestEsign.idType,
+        signedAt: latestEsign.signedAt,
+        signedDocumentUrl: latestEsign.signedDocumentUrl,
+        createdAt: latestEsign.createdAt
+      } : null
+
     });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -196,12 +207,12 @@ exports.updateProfile = async (req, res) => {
       }
       
       const pan = updates.pandetails.trim().toUpperCase();
-      const dob = updates.panDob || req.body.panDob; // expected DD/MM/YYYY
+      const dob = updates.panDob || req.body.dateofBirth; // expected DD/MM/YYYY
       const nameForPan = updates.fullName || currentUser.fullName || updates.name;
 
       if (!nameForPan || !dob) {
         return res.status(400).json({
-          error: 'fullName and panDob (DD/MM/YYYY) are required to verify PAN before saving'
+          error: 'fullName and dateofBirth (DD/MM/YYYY) are required to verify PAN before saving'
         });
       }
 

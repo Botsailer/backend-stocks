@@ -1,6 +1,7 @@
 const axios = require("axios");
 const DigioSign = require("../models/DigioSign");
 const { getConfig } = require("../utils/configSettings");
+const { processWebhook, validateWebhookSignature, syncPendingDocuments, syncDocument } = require("../services/digioWebhookService");
 
 /**
  * Helper: make HTTP requests to Digio with proper authentication and error handling.
@@ -588,6 +589,145 @@ exports.createDocumentForSigning = async (req, res) => {
       error: errorMessage,
       code: error.code || 'CREATION_FAILED',
       details: error.response || error.details
+    });
+  }
+};
+
+/**
+ * Get status for a document/sessionId from DB and optionally fresh data from Digio
+ */
+exports.getStatus = async (req, res) => {
+  try {
+    const sessionId = req.params.sessionId || req.query.sessionId;
+    if (!sessionId) {
+      return res.status(400).json({ success: false, error: 'sessionId is required' });
+    }
+
+    // Look up local record by sessionId or documentId
+    const record = await DigioSign.findOne({
+      $or: [ { sessionId }, { documentId: sessionId } ]
+    }).sort({ createdAt: -1 });
+
+    if (!record) {
+      return res.status(404).json({ success: false, error: 'No eSign record found for provided sessionId' });
+    }
+
+    const responsePayload = {
+      record: {
+        _id: record._id,
+        userId: record.userId,
+        documentId: record.documentId,
+        sessionId: record.sessionId,
+        name: record.name,
+        email: record.email,
+        phone: record.phone,
+        idType: record.idType,
+        idNumber: record.idNumber,
+        status: record.status,
+        signedAt: record.signedAt,
+        signedDocumentUrl: record.signedDocumentUrl,
+        createdAt: record.createdAt,
+        updatedAt: record.updatedAt
+      }
+    };
+
+    // If we have a documentId, attempt to fetch fresh status from Digio API (best-effort)
+    if (record.documentId) {
+      try {
+        const DIGIO_API_BASE = await getConfig('DIGIO_API_BASE', 'https://ext.digio.in:444');
+        const remote = await digioRequest('GET', `${DIGIO_API_BASE}/v2/client/document/${record.documentId}`);
+        responsePayload.remote = remote;
+
+        // Map common remote fields if present
+        if (remote && remote.status) {
+          responsePayload.record.remoteStatus = remote.status;
+        }
+        if (remote && remote.signed_url) {
+          responsePayload.record.signedDocumentUrl = remote.signed_url;
+        }
+      } catch (e) {
+        // Log and continue — don't fail the whole request because remote call failed
+        console.error('[getStatus] Failed to fetch remote Digio status:', e.message || e);
+        responsePayload.remoteError = e.message || String(e);
+      }
+    }
+
+    res.json({ success: true, data: responsePayload });
+  } catch (error) {
+    console.error('[getStatus] Error:', error);
+    res.status(500).json({ success: false, error: error.message || 'Failed to get status' });
+  }
+};
+
+/**
+ * Webhook endpoint to receive notifications from Digio
+ */
+exports.webhook = async (req, res) => {
+  try {
+    console.log('[WEBHOOK] Received Digio webhook');
+    
+    // Validate webhook signature if configured
+    const isValid = await validateWebhookSignature(req.body, req.headers);
+    if (!isValid) {
+      console.warn('[WEBHOOK] Invalid webhook signature');
+      return res.status(401).json({ success: false, error: 'Invalid signature' });
+    }
+
+    // Process the webhook
+    const result = await processWebhook(req.body, req.headers);
+    
+    // Return success response to Digio
+    res.json({
+      success: true,
+      message: 'Webhook processed successfully',
+      ...result
+    });
+
+  } catch (error) {
+    console.error('[WEBHOOK] Error processing webhook:', error);
+    
+    // Still return 200 to avoid Digio retrying if it's our internal error
+    res.status(200).json({
+      success: false,
+      error: 'Webhook processing failed',
+      message: error.message
+    });
+  }
+};
+
+/**
+ * Manual sync endpoint to check document status
+ */
+exports.syncDocument = async (req, res) => {
+  try {
+    const { documentId } = req.params;
+    const result = await syncDocument(documentId);
+    res.json(result);
+  } catch (error) {
+    console.error('[SYNC] Error syncing document:', error);
+    res.status(500).json({
+      success: false,
+      error: error.message || 'Failed to sync document'
+    });
+  }
+};
+
+/**
+ * Manual trigger for cron job to sync all pending documents
+ */
+exports.syncAllPending = async (req, res) => {
+  try {
+    const result = await syncPendingDocuments();
+    res.json({
+      success: true,
+      message: 'Document sync completed',
+      ...result
+    });
+  } catch (error) {
+    console.error('[SYNC_ALL] Error syncing documents:', error);
+    res.status(500).json({
+      success: false,
+      error: error.message || 'Failed to sync documents'
     });
   }
 };

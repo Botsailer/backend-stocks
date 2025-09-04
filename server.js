@@ -1350,6 +1350,16 @@ app.use('/api', require('./routes/Portfolio'));
       // Start subscription cleanup job
       await startSubscriptionCleanupJob();
       
+      // **START DIGIO DOCUMENT SYNC SERVICE**
+      try {
+        console.log('📄 Starting Digio document sync service...');
+        const { startCronJob } = require('./utils/digioCronScheduler');
+        startCronJob();
+        console.log('✅ Digio document sync service started (every 15 minutes)');
+      } catch (error) {
+        console.error('❌ Failed to start Digio sync service:', error.message);
+      }
+      
       // Initialize existing portfolio cron jobs in production
       if (process.env.NODE_ENV === 'production') {
         console.log('Production environment detected. Initializing scheduled jobs.');
