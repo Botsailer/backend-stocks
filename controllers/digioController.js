@@ -553,7 +553,7 @@ exports.createDocumentForSigning = async (req, res) => {
       email: signerEmail,
       phone: signerPhone || "0000000000",
       idType: 'document_signing',
-      idNumber: response.id,
+      idNumber: signerEmail, // Use signer email as identifier
       status: 'document_created',
       digioResponse: response,
       isTemplate: false, // This is a signing document, not a template
