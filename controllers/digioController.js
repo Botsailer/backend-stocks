@@ -1,5 +1,6 @@
 const axios = require("axios");
 const DigioSign = require("../models/DigioSign");
+const User = require("../models/user");
 const { getConfig } = require("../utils/configSettings");
 const { processWebhook, validateWebhookSignature, syncPendingDocuments, syncDocument } = require("../services/digioWebhookService");
 
@@ -533,14 +534,20 @@ exports.createDocumentForSigning = async (req, res) => {
         const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
         const fileName = `template_auto_${userId}_${timestamp}.pdf`;
         
+        // Fetch user's phone number for template
+        const user = await User.findById(userId);
+        if (!user || !user.phone) {
+          throw new Error('User phone number not found. Cannot create template without phone number.');
+        }
+        
         // Create new template record
         template = await DigioSign.create({
           userId,
           documentId: null,
           sessionId: null,
           name: "Auto-generated Template",
-          email: "system@rangaone.finance",
-          phone: "0000000000", // Placeholder phone for template records
+          email: user.email || "system@rangaone.finance",
+          phone: user.phone, // Use real phone number from user
           idType: 'pdf_auto_fetched',
           idNumber: userId.toString(),
           status: 'template_ready',
