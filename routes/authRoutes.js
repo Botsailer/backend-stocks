@@ -30,6 +30,7 @@ const router = express.Router();
  *               - username
  *               - email
  *               - password
+ *               - phone
  *             properties:
  *               username:
  *                 type: string
@@ -42,6 +43,10 @@ const router = express.Router();
  *                 type: string
  *                 format: password
  *                 description: Plain-text password (min length enforced in controller)
+ *               phone:
+ *                 type: string
+ *                 description: User's phone number (required)
+ *                 example: "+91-9876543210"
  *               mainUserId:
  *                 type: string
  *                 description: Optional reference to an existing main user record
@@ -49,6 +54,7 @@ const router = express.Router();
  *               username: "johndoe"
  *               email: "john@example.com"
  *               password: "P@ssw0rd!"
+ *               phone: "+91-9876543210"
  *               mainUserId: "abc123"
  *     responses:
  *       201:

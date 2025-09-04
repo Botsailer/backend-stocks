@@ -11,9 +11,9 @@ const {
 } = require('../config/config').jwt;
 
 exports.signup = async (req, res) => {
-  const { username, email, password, mainUserId } = req.body;
-  if (!username || !email || !password) {
-    return res.status(400).json({ error: 'Missing required fields' });
+  const { username, email, password, phone, mainUserId } = req.body;
+  if (!username || !email || !password || !phone) {
+    return res.status(400).json({ error: 'Missing required fields: username, email, password, phone are required.' });
   }
 
   const exists = await db.findUser({
@@ -29,6 +29,7 @@ exports.signup = async (req, res) => {
     username,
     email,
     password: hashed,
+    phone,
     provider: 'local',
     mainUserId: mainUserId || null,
     changedPasswordAt: Date.now()

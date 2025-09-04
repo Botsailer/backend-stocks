@@ -12,7 +12,7 @@ const userSchema = new mongoose.Schema({
   providerId: String,
   mainUserId: { type: String, default: null },
   fullName: { type: String, default: null },
-  phone: { type: String, default: null },
+  phone: { type: String, required: true },
   pandetails: { 
     type: String, 
     default: null,
