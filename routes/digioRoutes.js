@@ -335,7 +335,7 @@ router.get('/pdf/data', requireAuth, getLatestPdfData);
  *               displayOnPage:
  *                 type: string
  *                 description: Display preference
- *                 example: "Custom"
+ *                 example: "all"
  *               notifySigners:
  *                 type: boolean
  *                 description: Whether to notify signers

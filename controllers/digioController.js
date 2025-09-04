@@ -254,8 +254,8 @@ exports.uploadPdfForSigning = async (req, res) => {
     const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
     const fileName = `template_${userId}_${timestamp}.pdf`;
     
-    // Delete existing records for this user (keep only latest template)
-    await DigioSign.deleteMany({ userId });
+    // Delete existing PDF templates for this user (keep only latest template)
+    await DigioSign.deleteMany({ userId, isTemplate: true });
     
     // Save to DigioSign collection - minimal data, just the template
     const record = await DigioSign.create({
@@ -271,6 +271,7 @@ exports.uploadPdfForSigning = async (req, res) => {
       fileBase64: base64Data,
       fileName: fileName,
       fileSize: pdfBuffer.length,
+      isTemplate: true, // Mark as template
       createdAt: new Date()
     });
     
@@ -344,8 +345,8 @@ exports.refetchPdfFromUrl = async (req, res) => {
     const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
     const fileName = `template_from_config_${userId}_${timestamp}.pdf`;
     
-    // Delete ALL existing records for this user
-    await DigioSign.deleteMany({ userId });
+    // Delete existing PDF templates for this user (keep only latest template)
+    await DigioSign.deleteMany({ userId, isTemplate: true });
     
     // Create new record - minimal data, just the template
     const record = await DigioSign.create({
@@ -362,6 +363,7 @@ exports.refetchPdfFromUrl = async (req, res) => {
       fileName: fileName,
       fileSize: pdfBuffer.length,
       sourceUrl: pdfUrl,
+      isTemplate: true, // Mark as template
       createdAt: new Date()
     });
     
@@ -490,7 +492,7 @@ exports.createDocumentForSigning = async (req, res) => {
     }
     
     // Get the latest PDF template for this user
-    const template = await DigioSign.findOne({ userId })
+    const template = await DigioSign.findOne({ userId, isTemplate: true })
       .sort({ createdAt: -1 });
     
     if (!template || !template.fileBase64) {
@@ -515,6 +517,9 @@ exports.createDocumentForSigning = async (req, res) => {
       expire_in_days: expireInDays,
       display_on_page: displayOnPage,
       notify_signers: notifySigners,
+      generate_access_token: true,
+      include_authentication_url: true,
+      customer_notification_mode:"all",
       send_sign_link: sendSignLink,
       file_name: template.fileName,
       file_data: template.fileBase64
@@ -539,15 +544,20 @@ exports.createDocumentForSigning = async (req, res) => {
       throw new Error('Invalid document creation response from Digio');
     }
     
-    // Update template record with actual document details
-    await DigioSign.findByIdAndUpdate(template._id, {
+    // Create a new DigioSign record for this signing document (don't modify template)
+    const signingRecord = await DigioSign.create({
+      userId,
       documentId: response.id,
       sessionId: response.id,
       name: signerName,
       email: signerEmail,
       phone: signerPhone || "0000000000",
+      idType: 'document_signing',
+      idNumber: response.id,
       status: 'document_created',
       digioResponse: response,
+      isTemplate: false, // This is a signing document, not a template
+      createdAt: new Date(),
       updatedAt: new Date()
     });
     
@@ -555,12 +565,15 @@ exports.createDocumentForSigning = async (req, res) => {
       success: true,
       message: "Document created successfully for signing",
       data: {
-        recordId: template._id,
+        recordId: signingRecord._id,
         documentId: response.id,
         fileName: template.fileName,
         signerEmail: signerEmail,
         signerName: signerName,
         signerPhone: signerPhone,
+        status: 'document_created',
+        reason: reason,
+        authenticationUrl: response.authentication_url || null,
         signUrl: response.sign_url || null,
         expireInDays: expireInDays,
         digioResponse: response

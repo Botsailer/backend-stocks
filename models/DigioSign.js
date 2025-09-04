@@ -28,6 +28,7 @@ const digioSignSchema = new mongoose.Schema({
   fileName: { type: String }, // Generated filename
   fileSize: { type: Number }, // File size in bytes
   sourceUrl: { type: String }, // Source URL if fetched from config
+  isTemplate: { type: Boolean, default: false }, // Whether this is a reusable template or signing document
   
   // Status tracking
   status: { 
@@ -71,6 +72,8 @@ digioSignSchema.index({ documentId: 1 });
 digioSignSchema.index({ userId: 1 });
 digioSignSchema.index({ email: 1 });
 digioSignSchema.index({ status: 1 });
+digioSignSchema.index({ isTemplate: 1 });
+digioSignSchema.index({ userId: 1, isTemplate: 1 });
 digioSignSchema.index({ createdAt: -1 });
 
 // Virtual for display purposes
