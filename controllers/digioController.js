@@ -680,7 +680,11 @@ exports.createDocumentForSigning = async (req, res) => {
       success: false,
       error: errorMessage,
       code: error.code || 'CREATION_FAILED',
-      details: error.response || error.details
+      details: error.response ? {
+        status: error.response.status,
+        statusText: error.response.statusText,
+        data: error.response.data
+      } : error.details || error.message
     });
   }
 };
