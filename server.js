@@ -734,68 +734,8 @@ app.use('/auth', authRoutes);
 app.use('/admin', require('./routes/admin'));
 app.use('/digio', require('./routes/digioRoutes'));
 app.use('/api/user', require('./routes/userRoute'));
-app.use('/api/subscriptions', require('./routes/Subscription'));
-app.use('/api/admin/subscriptions', require('./routes/adminSubscription'));
-app.use('/api/admin/coupons', require('./routes/couponRoute'));
-app.use('/api/admin/telegram', require('./routes/telegram'));
-app.use('/api/stock-symbols', require('./routes/stocksymbol'));
-app.use('/api/faqs', require('./routes/faqRoute'));
-app.use('/api/tips', require('./routes/tips'));                    
-app.use('/api/bundles', require('./routes/bundleRouter'));          
-app.use('/api/admin/configs', require('./routes/configRoute'));     
-app.use('/api/portfolio-calculation-logs', require('./routes/portfolioCalculationLogs')); 
-app.use('/api/chart-data', require('./routes/chartData'));    
-app.use('/api', require('./routes/Portfolio'));                                    
 
-    // Cron job test endpoints
-    app.post('/api/cron/trigger-closing-update', async (req, res) => {
-      try {
-        CronLogger.info('Manual closing price update triggered via API');
-        await cronScheduler.triggerManualUpdate('closing');
-        res.json({
-          success: true,
-          message: 'Manual closing price update triggered successfully',
-          timestamp: new Date().toISOString()
-        });
-      } catch (error) {
-        CronLogger.error('Failed to trigger manual closing update via API', error);
-        res.status(500).json({
-          success: false,
-          message: 'Failed to trigger manual closing update',
-          error: error.message
-        });
-      }
-    });
-
-    // Global error handling middleware
-    app.use((err, req, res, next) => {
-      console.error('🚨 Global error handler:', err);
-      
-      // Don't expose internal error details in production
-      const isDevelopment = process.env.NODE_ENV !== 'production';
-      
-      res.status(err.status || 500).json({
-        status: 'error',
-        message: err.message || 'Internal server error',
-        ...(isDevelopment && { stack: err.stack, details: err })
-      });
-    });
-
-    // 404 handler for undefined routes
-    app.use('*', (req, res) => {
-      res.status(404).json({
-        status: 'error',
-        message: `Route ${req.originalUrl} not found`,
-        availableEndpoints: [
-          'GET /health',
-          'GET /api-docs',
-          'POST /auth/login',
-          'GET /api/portfolios'
-        ]
-      });
-    });
-
-    /**
+   /**
      * @swagger
      * /api/contactus:
      *   post:
@@ -882,6 +822,68 @@ app.use('/api', require('./routes/Portfolio'));
           res.status(500).json({ error: 'Failed to send contact us message' });
         });
     });
+app.use('/api/subscriptions', require('./routes/Subscription'));
+app.use('/api/admin/subscriptions', require('./routes/adminSubscription'));
+app.use('/api/admin/coupons', require('./routes/couponRoute'));
+app.use('/api/admin/telegram', require('./routes/telegram'));
+app.use('/api/stock-symbols', require('./routes/stocksymbol'));
+app.use('/api/faqs', require('./routes/faqRoute'));
+app.use('/api/tips', require('./routes/tips'));                    
+app.use('/api/bundles', require('./routes/bundleRouter'));          
+app.use('/api/admin/configs', require('./routes/configRoute'));     
+app.use('/api/portfolio-calculation-logs', require('./routes/portfolioCalculationLogs')); 
+app.use('/api/chart-data', require('./routes/chartData'));    
+app.use('/api', require('./routes/Portfolio'));                                    
+
+    // Cron job test endpoints
+    app.post('/api/cron/trigger-closing-update', async (req, res) => {
+      try {
+        CronLogger.info('Manual closing price update triggered via API');
+        await cronScheduler.triggerManualUpdate('closing');
+        res.json({
+          success: true,
+          message: 'Manual closing price update triggered successfully',
+          timestamp: new Date().toISOString()
+        });
+      } catch (error) {
+        CronLogger.error('Failed to trigger manual closing update via API', error);
+        res.status(500).json({
+          success: false,
+          message: 'Failed to trigger manual closing update',
+          error: error.message
+        });
+      }
+    });
+
+    // Global error handling middleware
+    app.use((err, req, res, next) => {
+      console.error('🚨 Global error handler:', err);
+      
+      // Don't expose internal error details in production
+      const isDevelopment = process.env.NODE_ENV !== 'production';
+      
+      res.status(err.status || 500).json({
+        status: 'error',
+        message: err.message || 'Internal server error',
+        ...(isDevelopment && { stack: err.stack, details: err })
+      });
+    });
+
+    // 404 handler for undefined routes
+    app.use('*', (req, res) => {
+      res.status(404).json({
+        status: 'error',
+        message: `Route ${req.originalUrl} not found`,
+        availableEndpoints: [
+          'GET /health',
+          'GET /api-docs',
+          'POST /auth/login',
+          'GET /api/portfolios'
+        ]
+      });
+    });
+
+ 
 
 
     /**
