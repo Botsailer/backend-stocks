@@ -168,9 +168,15 @@ router.delete(
 router.post(
   '/login',
   (req, res, next) => {
-    if (req.body.email && !req.body.username) {
-      req.body.username = req.body.email;
+    const identifier = (req.body.username || req.body.email || req.body.mobile || req.body.phone || '').toString().trim();
+    const password = req.body.password;
+    if (!identifier) {
+      return res.status(400).json({ success: false, error: 'Missing login identifier. Provide email, mobile (phone) or username.' });
     }
+    if (!password) {
+      return res.status(400).json({ success: false, error: 'Password is required.' });
+    }
+    req.body.username = identifier;
     next();
   },
   passport.authenticate('local', { session: false }),

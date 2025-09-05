@@ -128,10 +128,20 @@ router.post('/signup', async (req, res) => {
  */
 router.post(
   '/login',
+  // Normalize login identifier and provide graceful errors when missing
   (req, res, next) => {
-    if (req.body.email && !req.body.username) {
-      req.body.username = req.body.email;
+    const identifier = (req.body.username || req.body.email || req.body.mobile || req.body.phone || '').toString().trim();
+    const password = req.body.password;
+
+    if (!identifier) {
+      return res.status(400).json({ success: false, error: 'Missing login identifier. Please provide email, mobile (phone) or username.' });
     }
+    if (!password) {
+      return res.status(400).json({ success: false, error: 'Password is required.' });
+    }
+
+    // Normalize into username field so passport-local receives it
+    req.body.username = identifier;
     next();
   },
   passport.authenticate('local', { session: false }),

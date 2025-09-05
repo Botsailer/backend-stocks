@@ -11,16 +11,28 @@ module.exports = (passport) => {
     { usernameField: 'username', passwordField: 'password' },
     async (username, password, done) => {
       try {
-        const user = await db.findUser({
-          provider: 'local',
-          $or: [
-            { username: { $regex: new RegExp(`^${username}$`, 'i') } }, 
-            { email: { $regex: new RegExp(`^${username}$`, 'i') } }
-          ]
-        });
-        if (!user) return done(null, false);
+        // Defensive: username might be undefined/null — return a clear error
+        if (!username || typeof username !== 'string' || !username.trim()) {
+          return done(null, false, { message: 'Login identifier is required (email, mobile or username).' });
+        }
+        const identifier = username.trim();
+
+        // Detect if identifier looks like a phone number (digits, optional + and hyphens)
+        const phoneLike = /^\+?[0-9\- ]{6,20}$/.test(identifier);
+
+        // Build search criteria: username OR email OR phone
+        const orClauses = [
+          { username: { $regex: new RegExp(`^${identifier}$`, 'i') } },
+          { email: { $regex: new RegExp(`^${identifier}$`, 'i') } }
+        ];
+        if (phoneLike) {
+          orClauses.push({ phone: { $regex: new RegExp(`^${identifier.replace(/[\- ]/g, '')}$`, 'i') } });
+        }
+
+        const user = await db.findUser({ provider: 'local', $or: orClauses });
+        if (!user) return done(null, false, { message: 'Invalid credentials' });
         const match = await bcrypt.compare(password, user.password);
-        if (!match) return done(null, false);
+        if (!match) return done(null, false, { message: 'Invalid credentials' });
         return done(null, user);
       } catch (err) { return done(err); }
     }

@@ -587,7 +587,7 @@ exports.createDocumentForSigning = async (req, res) => {
     // Prepare payload exactly as per Postman collection
     const documentPayload = {
       signers: [{
-        identifier: signerEmail, // Use email as identifier
+        identifier: signerEmail, 
         name: signerName,
         sign_type: "aadhaar",
         reason: reason
