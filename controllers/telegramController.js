@@ -1,4 +1,4 @@
-const { TelegramService } = require('../services/tgservice');
+const TelegramService = require('../services/tgservice');
 const winston = require('winston');
 
 /**

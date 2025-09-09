@@ -961,4 +961,50 @@ router.post('/webhook/:token', telegramController.processWebhook);
  */
 router.get('/webhook/test', requireAdmin, telegramController.testWebhook);
 
+/**
+ * @swagger
+ * /api/admin/telegram/products:
+ *   get:
+ *     summary: Get all Telegram products
+ *     tags: [Telegram Management]
+ *     security:
+ *       - bearerAuth: []
+ *     responses:
+ *       200:
+ *         description: List of all Telegram products
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success:
+ *                   type: boolean
+ *                   example: true
+ *                 data:
+ *                   type: array
+ *                   items:
+ *                     type: object
+ *                     properties:
+ *                       id:
+ *                         type: string
+ *                       name:
+ *                         type: string
+ *                       description:
+ *                         type: string
+ *                       price:
+ *                         type: number
+ *                       active:
+ *                         type: boolean
+ *                 total:
+ *                   type: number
+ *                   description: Total number of products
+ *       401:
+ *         description: Not authenticated
+ *       403:
+ *         description: Not authorized as admin
+ *       500:
+ *         description: Server error
+ */
+router.get('/products', requireAdmin, telegramController.getAllProducts);
+
 module.exports = router;
