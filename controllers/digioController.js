@@ -5,6 +5,152 @@ const { getConfig } = require("../utils/configSettings");
 const { processWebhook, validateWebhookSignature, syncPendingDocuments, syncDocument } = require("../services/digioWebhookService");
 
 /**
+ * Admin controller to fetch a user's signed document from Digio
+ * Note: This endpoint requires admin privileges and costs money per document fetch
+ */
+exports.fetchUserSignedDocument = async (req, res) => {
+  const { userId } = req.params;
+  const { documentId } = req.query;
+
+  try {
+    const logger = req.app.get('logger') || console;
+    
+    // Input validation
+    if (!userId) {
+      return res.status(400).json({
+        success: false,
+        error: "userId is required"
+      });
+    }
+
+    // Find the signing record
+    let signingRecord;
+    try {
+      if (documentId) {
+        // If documentId provided, fetch that specific record
+        signingRecord = await DigioSign.findOne({
+          userId,
+          documentId,
+          isTemplate: false,
+          status: { $in: ['signed', 'completed'] }
+        }).sort({ signedAt: -1 });
+      } else {
+        // Otherwise get the latest signed document for this user
+        signingRecord = await DigioSign.findOne({
+          userId,
+          isTemplate: false,
+          status: { $in: ['signed', 'completed'] }
+        }).sort({ signedAt: -1 });
+      }
+
+      if (!signingRecord) {
+        return res.status(404).json({
+          success: false,
+          error: documentId 
+            ? `No signed document found with ID ${documentId} for user ${userId}` 
+            : `No signed documents found for user ${userId}`
+        });
+      }
+    } catch (dbError) {
+      logger.error('Database error fetching signing record:', {
+        error: dbError.message,
+        userId,
+        documentId
+      });
+      return res.status(500).json({
+        success: false,
+        error: "Failed to fetch signing record"
+      });
+    }
+
+    // Get Digio credentials
+    const DIGIO_API_BASE = await getConfig("DIGIO_API_BASE", "https://ext.digio.in:444");
+    const DIGIO_CLIENT_ID = await getConfig("DIGIO_CLIENT_ID");
+    const DIGIO_CLIENT_SECRET = await getConfig("DIGIO_CLIENT_SECRET");
+
+    if (!DIGIO_CLIENT_ID || !DIGIO_CLIENT_SECRET) {
+      logger.error('Missing Digio credentials');
+      return res.status(500).json({
+        success: false,
+        error: "Digio configuration error"
+      });
+    }
+
+    // Create Basic auth token
+    const authToken = Buffer.from(`${DIGIO_CLIENT_ID}:${DIGIO_CLIENT_SECRET}`).toString('base64');
+
+    try {
+      // Make request to Digio
+      const response = await axios({
+        method: 'GET',
+        url: `${DIGIO_API_BASE}/v2/client/document/download/${signingRecord.documentId}`,
+        headers: {
+          'Authorization': `Basic ${authToken}`,
+          'Accept': 'application/pdf'
+        },
+        responseType: 'arraybuffer'
+      });
+
+      // Set appropriate headers
+      res.setHeader('Content-Type', 'application/pdf');
+      res.setHeader('Content-Disposition', `attachment; filename="${signingRecord.fileName || 'signed-document.pdf'}"`);
+      
+      // Send the PDF
+      res.send(response.data);
+
+      // Log successful fetch
+      logger.info('Admin fetched signed document', {
+        adminId: req.user._id,
+        userId,
+        documentId: signingRecord.documentId,
+        size: response.data.length
+      });
+
+    } catch (apiError) {
+      logger.error('Error fetching from Digio API:', {
+        error: apiError.message,
+        documentId: signingRecord.documentId,
+        response: apiError.response?.data 
+          ? Buffer.from(apiError.response.data).toString()
+          : undefined
+      });
+      
+      // Check for specific error cases
+      if (apiError.response?.status === 404) {
+        return res.status(404).json({
+          success: false,
+          error: "Document not found in Digio"
+        });
+      } else if (apiError.response?.status === 401 || apiError.response?.status === 403) {
+        return res.status(500).json({
+          success: false,
+          error: "Authentication failed with Digio API"
+        });
+      }
+
+      return res.status(500).json({
+        success: false,
+        error: "Failed to download document from Digio"
+      });
+    }
+
+  } catch (error) {
+    const logger = req.app.get('logger') || console;
+    logger.error('Unexpected error in fetchUserSignedDocument:', {
+      error: error.message,
+      stack: error.stack,
+      userId,
+      documentId
+    });
+    
+    res.status(500).json({
+      success: false,
+      error: "Internal server error"
+    });
+  }
+};
+
+/**
  * Helper: make HTTP requests to Digio with proper authentication and error handling.
  */
 async function digioRequest(method, url, data = {}, headers = {}) {
@@ -635,6 +781,10 @@ exports.createDocumentForSigning = async (req, res) => {
       status: 'document_created',
       digioResponse: response,
       isTemplate: false, // This is a signing document, not a template
+      // optional product reference for per-product eSign tracking
+      productType: req.body.productType || null,
+      productId: req.body.productId || null,
+      productName: req.body.productName || null,
       createdAt: new Date(),
       updatedAt: new Date()
     });

@@ -1,6 +1,7 @@
 const express = require("express");
 const multer = require("multer");
 const router = express.Router();
+const requireAdmin = require("../middleware/requirreAdmin");
 
 // Configure multer for PDF uploads (memory storage)
 const upload = multer({
@@ -26,7 +27,8 @@ const {
   getStatus,
   webhook,
   syncDocument,
-  syncAllPending
+  syncAllPending,
+  fetchUserSignedDocument
 } = require("../controllers/digioController");
 const passport = require("passport");
 
@@ -589,5 +591,49 @@ router.post('/sync/:documentId', requireAuth, syncDocument);
  *         description: Sync failed
  */
 router.post('/sync-all', requireAuth, syncAllPending);
+
+/**
+ * @swagger
+ * /api/digio/admin/user/{userId}/document:
+ *   get:
+ *     tags: [Digio]
+ *     summary: Admin endpoint to fetch a user's signed document
+ *     description: |
+ *       Admin-only endpoint to fetch a user's signed document from Digio.
+ *       Note: This incurs a cost per document fetch, use judiciously.
+ *     parameters:
+ *       - in: path
+ *         name: userId
+ *         required: true
+ *         schema:
+ *           type: string
+ *         description: The ID of the user whose document to fetch
+ *       - in: query
+ *         name: documentId
+ *         schema:
+ *           type: string
+ *         description: Optional. Specific document ID to fetch. If not provided, fetches the latest signed document.
+ *     security:
+ *       - bearerAuth: []
+ *     responses:
+ *       200:
+ *         description: Returns the signed PDF document
+ *         content:
+ *           application/pdf:
+ *             schema:
+ *               type: string
+ *               format: binary
+ *       400:
+ *         description: Invalid request parameters
+ *       401:
+ *         description: Authentication required
+ *       403:
+ *         description: Not an admin
+ *       404:
+ *         description: User or document not found
+ *       500:
+ *         description: Server error or Digio API error
+ */
+router.get('/admin/user/:userId/document', requireAdmin, fetchUserSignedDocument);
 
 module.exports = router;

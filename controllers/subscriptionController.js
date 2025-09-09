@@ -594,7 +594,7 @@ exports.createOrder = async (req, res) => {
     }
 
     // ✨ ENHANCED: Check subscription status with renewal logic
-    const subscriptionStatus = await checkSubscriptionStatus(userId, productType, productId);
+  const subscriptionStatus = await checkSubscriptionStatus(userId, productType, productId);
     
     if (subscriptionStatus.hasActiveSubscription && !subscriptionStatus.canRenew) {
       return res.status(409).json({ 
@@ -602,6 +602,27 @@ exports.createOrder = async (req, res) => {
         error: subscriptionStatus.message,
         canRenewAfter: new Date(subscriptionStatus.existingSubscription.expiresAt.getTime() - (7 * 24 * 60 * 60 * 1000)),
         currentExpiry: subscriptionStatus.existingSubscription.expiresAt
+      });
+    }
+
+ 
+
+    const userEsignForProduct = await DigioSign.findOne({
+      userId: userId,
+      productType: productType,
+      productId: productId,
+      isTemplate: false,
+      status: { $in: ['signed', 'completed'] }
+    }).sort({ createdAt: -1 });
+
+    if (!userEsignForProduct) {
+      // Custom code for frontend to trigger eSign creation
+      return res.status(412).json({
+        success: false,
+        error: 'eSign required for this product before purchase',
+        code: 'ESIGN_REQUIRED',
+        productType,
+        productId
       });
     }
 
@@ -2074,6 +2095,19 @@ exports.verifyPayment = async (req, res) => {
 
     // Update user premium status
     await updateUserPremiumStatus(req.user._id);
+
+    // Mark any existing DigioSign records for this user+product as expired so resubscribe requires a fresh eSign
+    try {
+      const DigioSign = require('../models/DigioSign');
+      await DigioSign.updateMany({
+        userId: req.user._id,
+        productType: subscription.productType,
+        productId: subscription.productId,
+        status: { $in: ['signed', 'completed'] }
+      }, { status: 'expired', lastWebhookAt: new Date() });
+    } catch (e) {
+      logger.warn('Failed to update DigioSign records on subscription cancel', { error: e.message });
+    }
     
     logger.info('Payment verification completed successfully with coupon support', {
       userId: userId.toString(),

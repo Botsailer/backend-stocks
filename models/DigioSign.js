@@ -29,6 +29,11 @@ const digioSignSchema = new mongoose.Schema({
   fileSize: { type: Number }, // File size in bytes
   sourceUrl: { type: String }, // Source URL if fetched from config
   isTemplate: { type: Boolean, default: false }, // Whether this is a reusable template or signing document
+
+  // Product reference: which product (Portfolio or Bundle) this signing belongs to
+  productType: { type: String, enum: ['Portfolio', 'Bundle', null], default: null },
+  productId: { type: mongoose.Schema.Types.ObjectId, refPath: 'productType', default: null },
+  productName: { type: String, default: null },
   
   // Status tracking
   status: { 
