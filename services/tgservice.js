@@ -292,6 +292,86 @@ class TelegramService {
     logger.info('Telegram sync completed.', summary);
     return summary;
   }
+
+  /**
+   * Get all telegram groups
+   */
+  async getAllGroups() {
+    try {
+      if (!this.baseURL) {
+        throw new Error('Telegram API base URL not configured');
+      }
+
+      const response = await axios.get(`${this.baseURL}/groups`, {
+        headers: this.getHeaders()
+      });
+
+      if (response.data && Array.isArray(response.data.data)) {
+        return {
+          success: true,
+          data: response.data.data
+        };
+      }
+
+      logger.error('Invalid response format from Telegram API getAllGroups', {
+        response: response.data
+      });
+      return {
+        success: false,
+        error: 'Invalid response format from Telegram API'
+      };
+
+    } catch (error) {
+      logger.error('Error fetching telegram groups:', {
+        error: error.message,
+        stack: error.stack
+      });
+      return {
+        success: false,
+        error: error.message || 'Failed to fetch telegram groups'
+      };
+    }
+  }
+
+  /**
+   * Get all telegram products
+   */
+  async getAllProducts() {
+    try {
+      if (!this.baseURL) {
+        throw new Error('Telegram API base URL not configured');
+      }
+
+      const response = await axios.get(`${this.baseURL}/products`, {
+        headers: this.getHeaders()
+      });
+
+      if (response.data && Array.isArray(response.data.data)) {
+        return {
+          success: true,
+          data: response.data.data
+        };
+      }
+
+      logger.error('Invalid response format from Telegram API getAllProducts', {
+        response: response.data
+      });
+      return {
+        success: false,
+        error: 'Invalid response format from Telegram API'
+      };
+
+    } catch (error) {
+      logger.error('Error fetching telegram products:', {
+        error: error.message,
+        stack: error.stack
+      });
+      return {
+        success: false,
+        error: error.message || 'Failed to fetch telegram products'
+      };
+    }
+  }
 }
 
 module.exports = new TelegramService();
