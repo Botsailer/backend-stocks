@@ -455,6 +455,12 @@ const PortfolioSchema = new Schema({
     type: [youTubeLinkSchema],
     default: []
   },
+  telegramProductId: {
+    type: String,
+    required: false,
+    trim: true,
+    index: true
+  },
   lastRebalanceDate: {
     type: Date,
     required: false

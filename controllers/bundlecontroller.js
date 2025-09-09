@@ -101,51 +101,35 @@ exports.createBundle = asyncHandler(async (req, res) => {
 
   if (Array.isArray(portfolios) && portfolios.length > 0) {
     try {
-      const existingPortfolios = await Portfolio.find({ _id: { $in: portfolios } });
-      if (existingPortfolios.length !== portfolios.length) {
+      const portfoliosExist = await Portfolio.countDocuments({ _id: { $in: portfolios } });
+      if (portfoliosExist !== portfolios.length) {
+        bundleLogger.warn('Bundle creation failed: One or more portfolio IDs are invalid', { operation: 'CREATE', userId, userEmail, providedIds: portfolios });
         return res.status(400).json({ error: 'One or more portfolio IDs are invalid' });
       }
     } catch (error) {
-      return res.status(400).json({ error: 'Invalid portfolio IDs format' });
+      bundleLogger.error('Error validating portfolio IDs during bundle creation', { operation: 'CREATE', userId, userEmail, error: error.message });
+      return res.status(500).json({ error: 'Server error validating portfolios' });
     }
   }
 
-  // Create Telegram product for bundle (if enabled)
+  // Create Telegram product for bundle
   let telegramProductId = null;
   try {
-    const basePrice = monthlyPrice || monthlyemandateprice || yearlyPrice || yearlyemandateprice || 0;
+    const basePrice = monthlyPrice || monthlyemandateprice || yearlyPrice || 0;
     const telegramProduct = await TelegramService.createProduct({
       name: name.trim(),
       description: `Bundle access: ${description || name}`,
       price: basePrice,
-      category: category,
-      type: 'bundle'
     });
     
-    if (telegramProduct.success) {
-      telegramProductId = telegramProduct.product.id;
-      bundleLogger.info('Telegram product created for bundle', {
-        operation: 'CREATE',
-        userId,
-        userEmail,
-        details: {
-          telegramProductId,
-          bundleName: name,
-          groupId: telegramProduct.product.group_id
-        }
-      });
+    if (telegramProduct.success && telegramProduct.data.id) {
+      telegramProductId = telegramProduct.data.id;
+      bundleLogger.info('Telegram product created successfully for bundle', { bundleName: name, telegramProductId });
+    } else {
+      bundleLogger.warn('Failed to create Telegram product for bundle', { bundleName: name, error: telegramProduct.error });
     }
   } catch (telegramError) {
-    bundleLogger.warn('Telegram integration failed during bundle creation', {
-      operation: 'CREATE',
-      userId,
-      userEmail,
-      details: {
-        error: telegramError.message,
-        bundleName: name
-      }
-    });
-    // Don't fail bundle creation if Telegram integration fails
+    bundleLogger.error('Error creating Telegram product for bundle', { bundleName: name, error: telegramError.message });
   }
 
   const bundle = new Bundle({
@@ -158,7 +142,7 @@ exports.createBundle = asyncHandler(async (req, res) => {
     quarterlyemandateprice,
     yearlyemandateprice,
     yearlyPrice,
-    externalId: telegramProductId
+    telegramProductId
   });
 
   await bundle.save();

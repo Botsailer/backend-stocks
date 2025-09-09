@@ -111,236 +111,52 @@ exports.createPortfolio = asyncHandler(async (req, res) => {
   });
   
   try {
-    // Step 1: Validate required fields
-    const requiredFields = ['name', 'subscriptionFee', 'minInvestment', 'durationMonths'];
-    const missingFields = requiredFields.filter(field => !requestData[field]);
-    
-    if (missingFields.length > 0) {
-      portfolioLogger.warn('Portfolio creation failed - missing required fields', {
-        operation: 'CREATE',
-        userId,
-        details: { missingFields, providedFields: Object.keys(requestData) }
-      });
-      return res.status(400).json({ 
-        error: 'Missing required fields',
-        missingFields,
-        requiredFields
-      });
+    // Validate incoming data
+    if (!requestData.name || !requestData.minInvestment || !requestData.durationMonths || !requestData.subscriptionFee) {
+      portfolioLogger.warn('Portfolio creation failed: Missing required fields', { operation: 'CREATE', userId, userEmail });
+      return res.status(400).json({ error: 'Missing required fields' });
     }
 
-    // Step 2: Validate subscription fee structure
-    if (!Array.isArray(requestData.subscriptionFee) || requestData.subscriptionFee.length === 0) {
-      return res.status(400).json({ error: 'At least one subscription fee is required' });
-    }
-
-    const invalidFees = requestData.subscriptionFee.filter(fee => 
-      !fee.type || typeof fee.price !== 'number' || fee.price <= 0
-    );
-    
-    if (invalidFees.length > 0) {
-      return res.status(400).json({ 
-        error: 'Invalid subscription fee structure',
-        details: 'All fees must have type and price > 0'
-      });
-    }
-
-    // Step 2.5: Validate emandate subscription fee structure (optional)
-    if (requestData.emandateSubriptionFees) {
-      if (!Array.isArray(requestData.emandateSubriptionFees)) {
-        return res.status(400).json({ error: 'emandateSubriptionFees must be an array' });
-      }
-      
-      if (requestData.emandateSubriptionFees.length > 0) {
-        const invalidEmandateFees = requestData.emandateSubriptionFees.filter(fee => 
-          !fee.type || typeof fee.price !== 'number' || fee.price <= 0
-        );
-        
-        if (invalidEmandateFees.length > 0) {
-          return res.status(400).json({ 
-            error: 'Invalid emandate subscription fee structure',
-            details: 'All emandate fees must have type and price > 0'
-          });
-        }
-      }
-    }
-
-    //add telegram intigration bot here 
-    // Step 6.5: Create Telegram product and group (if enabled)
+    // Create Telegram product for portfolio
     let telegramProductId = null;
     try {
-      // Create product on Telegram service
+      const price = requestData.subscriptionFee.find(f => f.type === 'monthly')?.price || requestData.subscriptionFee[0]?.price || 0;
       const telegramProduct = await TelegramService.createProduct({
-        name: requestData.name.trim(),
-        description: `Premium portfolio access for ${requestData.name.trim()}`,
-        price: requestData.subscriptionFee[0]?.price || 0, // Use first subscription fee as base price
-        category: requestData.PortfolioCategory || 'Basic'
+        name: requestData.name,
+        description: requestData.description && requestData.description.length > 0 ? requestData.description[0].value : `${requestData.name} description`,
+        price: price
       });
       
-      if (telegramProduct.success) {
-        telegramProductId = telegramProduct.product.id;
-        portfolioLogger.info('Telegram product created successfully', {
-          operation: 'CREATE',
-          userId,
-          userEmail,
-          details: {
-            telegramProductId,
-            productName: telegramProduct.product.name,
-            groupId: telegramProduct.product.group_id
-          }
-        });
+      if (telegramProduct.success && telegramProduct.data.id) {
+        telegramProductId = telegramProduct.data.id;
+        portfolioLogger.info('Telegram product created successfully for portfolio', { portfolioName: requestData.name, telegramProductId });
+      } else {
+        portfolioLogger.warn('Failed to create Telegram product for portfolio', { portfolioName: requestData.name, error: telegramProduct.error });
       }
     } catch (telegramError) {
-      portfolioLogger.warn('Telegram integration failed during portfolio creation', {
-        operation: 'CREATE',
-        userId,
-        userEmail,
-        details: {
-          error: telegramError.message,
-          portfolioName: requestData.name
-        }
-      });
-      // Don't fail portfolio creation if Telegram integration fails
+      portfolioLogger.error('Error creating Telegram product for portfolio', { portfolioName: requestData.name, error: telegramError.message });
     }
 
+    const portfolio = new Portfolio({ ...requestData, telegramProductId });
+    await portfolio.save();
     
-
-
-    // Step 3: Calculate portfolio summary (for info only, don't block creation)
-    const portfolioSummary = PortfolioCalculationValidator.calculatePortfolioSummary({
-      holdings: requestData.holdings || [],
-      minInvestment: requestData.minInvestment,
-      currentMarketPrices: {} // Use buy prices for new portfolios
-    });
-
-    // SIMPLIFIED VALIDATION: Only check that total holdings don't exceed minInvestment
-    const totalHoldingsCost = (requestData.holdings || []).reduce((sum, holding) => {
-      return sum + (parseFloat(holding.buyPrice || 0) * parseFloat(holding.quantity || 0));
-    }, 0);
-
-    if (totalHoldingsCost > requestData.minInvestment) {
-      return res.status(400).json({ 
-        error: 'Total holdings cost exceeds minimum investment',
-        details: {
-          totalHoldingsCost: totalHoldingsCost,
-          minInvestment: requestData.minInvestment,
-          difference: totalHoldingsCost - requestData.minInvestment
-        }
-      });
-    }
-
-    // Step 4: REMOVED TAMPERING VALIDATION - Use backend calculations only
-    // Backend will handle all calculations, ignore frontend values
-
-    // Step 5: Validate benchmark symbol if provided
-    if (requestData.compareWith) {
-      const StockSymbol = require('../models/stockSymbol');
-      let symbolExists = false;
-      
-      if (/^[0-9a-fA-F]{24}$/.test(requestData.compareWith)) {
-        symbolExists = await StockSymbol.exists({ _id: requestData.compareWith });
-      } else {
-        symbolExists = await StockSymbol.exists({ symbol: requestData.compareWith });
-      }
-      
-      if (!symbolExists) {
-        return res.status(400).json({ 
-          error: `Benchmark symbol "${requestData.compareWith}" does not exist` 
-        });
-      }
-    }
-
-    // Step 6: Create portfolio with validated data
-    const portfolioData = {
-      name: requestData.name.trim(),
-      description: requestData.description || [],
-      subscriptionFee: requestData.subscriptionFee,
-      emandateSubriptionFees: requestData.emandateSubriptionFees,
-      minInvestment: portfolioSummary.minInvestment,
-      durationMonths: requestData.durationMonths,
-      
-      holdings: requestData.holdings || [],
-      PortfolioCategory: requestData.PortfolioCategory || 'Basic',
-      downloadLinks: requestData.downloadLinks || [],
-      youTubeLinks: requestData.youTubeLinks || [],
-      timeHorizon: requestData.timeHorizon || '',
-      rebalancing: requestData.rebalancing || '',
-      index: requestData.index || '',
-      details: requestData.details || '',
-      lastRebalanceDate: requestData.lastRebalanceDate,
-      nextRebalanceDate: requestData.nextRebalanceDate,
-      monthlyContribution: requestData.monthlyContribution || 0,
-      compareWith: requestData.compareWith || '',
-      
-      // Use backend-calculated values
-      cashBalance: portfolioSummary.cashBalance,
-      currentValue: portfolioSummary.totalPortfolioValueAtBuy,
-      
-      // Add Telegram integration fields
-      externalId: telegramProductId
-    };
-
-    // Debug logging before portfolio creation
-    portfolioLogger.debug('Portfolio creation details', {
-      operation: 'CREATE',
-      details: {
-        name: portfolioData.name,
-        minInvestment: portfolioData.minInvestment,
-        cashBalance: portfolioData.cashBalance,
-        totalValue: portfolioData.currentValue,
-        holdingsCount: portfolioData.holdings.length,
-        subscriptionFee: portfolioData.subscriptionFee,
-        emandateSubriptionFees: portfolioData.emandateSubriptionFees,
-        category: portfolioData.PortfolioCategory,
-        timeHorizon: portfolioData.timeHorizon,
-        durationMonths: portfolioData.durationMonths
-      }
-    });
-
-    // Log detailed holdings information
-    if (portfolioData.holdings && portfolioData.holdings.length > 0) {
-      portfolioLogger.debug('Initial portfolio holdings', {
-        operation: 'CREATE',
-        details: {
-          holdings: portfolioData.holdings.map(holding => ({
-            symbol: holding.symbol,
-            sector: holding.sector,
-            stockCapType: holding.stockCapType || 'Unknown',
-            buyPrice: holding.buyPrice,
-            quantity: holding.quantity,
-            totalValue: holding.buyPrice * holding.quantity,
-            minimumInvestmentValueStock: holding.minimumInvestmentValueStock,
-            weight: holding.weight || 0
-          }))
-        }
-      });
-    }
-
-    const portfolio = new Portfolio(portfolioData);
-    const savedPortfolio = await portfolio.save();
-
     portfolioLogger.info('Portfolio created successfully', {
       operation: 'CREATE',
-      portfolioId: savedPortfolio._id,
+      portfolioId: portfolio._id,
       userId,
       userEmail,
       details: {
-        portfolioName: savedPortfolio.name,
-        minInvestment: savedPortfolio.minInvestment,
-        durationMonths: savedPortfolio.durationMonths,
-        totalInvestment: portfolioSummary.totalActualInvestment,
-        cashBalance: savedPortfolio.cashBalance,
-        holdingsCount: savedPortfolio.holdings.length,
-        subscriptionFeeTypes: savedPortfolio.subscriptionFee.map(fee => fee.type),
-        emandateSubscriptionFeeTypes: savedPortfolio.emandateSubriptionFees.map(fee => fee.type),
-        createdAt: savedPortfolio.createdAt,
-        portfolioCategory: savedPortfolio.PortfolioCategory
+        portfolioName: portfolio.name,
+        holdingsCount: portfolio.holdings?.length || 0,
+        cashBalance: portfolio.cashBalance,
+        telegramIntegrated: !!telegramProductId,
+        timestamp: new Date().toISOString()
       }
     });
-
-    res.status(201).json(savedPortfolio);
     
+    res.status(201).json(portfolio);
+
   } catch (error) {
-    // Enhanced error logging
     portfolioLogger.error('Portfolio creation failed', {
       operation: 'CREATE',
       userId,
@@ -2071,7 +1887,7 @@ async function sendTelegramInviteEmail(user, product, inviteLink, expiresAt) {
       </div>
     `;
     
-    await emailQueue.addToQueue({
+    await emailQueue.addEmail({
       to: user.email,
       subject,
       text,

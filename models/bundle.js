@@ -58,6 +58,12 @@ const BundleSchema = new Schema({
     min: 0,
     default: null
   },
+  telegramProductId: {
+    type: String,
+    required: false,
+    trim: true,
+    index: true
+  },
 }, { 
   timestamps: true,
   toJSON: { virtuals: false },

@@ -489,7 +489,7 @@ const sendRenewalReminderEmail = async (user, subscription, portfolio) => {
   `;
   
   try {
-    await emailQueue.addToQueue({
+    await emailQueue.addEmail({
       to: user.email,
       subject,
       text,
@@ -548,7 +548,7 @@ const sendRenewalConfirmationEmail = async (user, subscription, portfolio, compe
   `;
   
   try {
-    await emailQueue.addToQueue({
+    await emailQueue.addEmail({
       to: user.email,
       subject,
       text,
@@ -1765,7 +1765,7 @@ exports.verifyPayment = async (req, res) => {
       }
 
       // Compute expiry and compensation
-      let expiryDate = calculateEndDate(planType);
+      let expiryDate;
       let compensationDays = 0;
       if (isRenewal === "true" && existingSubscriptionId) {
         const existing = await Subscription.findById(existingSubscriptionId);
@@ -1773,7 +1773,11 @@ exports.verifyPayment = async (req, res) => {
           const comp = calculateCompensatedEndDate(planType, existing.expiresAt);
           expiryDate = comp.endDate;
           compensationDays = comp.compensationDays;
+        } else {
+          expiryDate = calculateEndDate(planType);
         }
+      } else {
+        expiryDate = calculateEndDate(planType);
       }
 
       if (productType === "Bundle") {
@@ -2214,9 +2218,9 @@ exports.verifyEmandate = async (req, res) => {
       for (const sub of existingSubs) {
         if (sub.productType === "Portfolio") {
           try {
-            const telegramGroup = await TelegramService.getGroupMapping(sub.productId);
-            if (telegramGroup) {
-              const inviteResult = await TelegramService.generateInviteLink(sub.productId);
+            const product = await Portfolio.findById(sub.productId);
+            if (product && product.telegramProductId) {
+              const inviteResult = await TelegramService.generateInviteLink(req.user, product, sub);
               if (inviteResult.success) {
                 // Update subscription
                 await Subscription.findByIdAndUpdate(sub._id, {
@@ -2232,20 +2236,17 @@ exports.verifyEmandate = async (req, res) => {
                 });
                 
                 // Send email
-                const product = await Portfolio.findById(sub.productId);
-                if (product) {
-                  await sendTelegramInviteEmail(
-                    req.user, 
-                    product, 
-                    inviteResult.invite_link, 
-                    inviteResult.expires_at
-                  );
-                  
-                  logger.info('Telegram invite sent for eMandate, bill email will be queued separately', {
-                    subscriptionId: sub._id,
-                    userEmail: req.user.email
-                  });
-                }
+                await sendTelegramInviteEmail(
+                  req.user, 
+                  product, 
+                  inviteResult.invite_link, 
+                  inviteResult.expires_at
+                );
+                
+                logger.info('Telegram invite sent for eMandate, bill email will be queued separately', {
+                  subscriptionId: sub._id,
+                  userEmail: req.user.email
+                });
               }
             }
           } catch (error) {
@@ -2348,13 +2349,17 @@ exports.verifyEmandate = async (req, res) => {
       
       // Kick users from Telegram groups
       for (const sub of existingSubs) {
-        if (sub.telegram_user_id) {
-          try {
-            await TelegramService.kickUser(sub.productId, sub.telegram_user_id);
-            logger.info(`Kicked user ${sub.telegram_user_id} from product ${sub.productId}`);
-          } catch (error) {
-            logger.error(`Failed to kick user ${sub.telegram_user_id}:`, error);
-          }
+        if (sub.user) {
+            const user = await User.findById(sub.user);
+            const product = await Portfolio.findById(sub.productId) || await Bundle.findById(sub.productId);
+            if (user && product && product.telegramProductId) {
+                try {
+                    await TelegramService.kickUser(user.email, product.telegramProductId);
+                    logger.info(`Kicked user ${user.email} from product ${product.telegramProductId}`);
+                } catch (error) {
+                    logger.error(`Failed to kick user ${user.email}:`, error);
+                }
+            }
         }
       }
       
@@ -2386,7 +2391,7 @@ exports.verifyEmandate = async (req, res) => {
             <p style="color:#666; font-size:12px;">Automated notification</p>
           </div>
         `;
-        await emailQueue.addToQueue({
+        await emailQueue.addEmail({
           to: user.email,
           subject,
           text,
@@ -2581,30 +2586,25 @@ exports.cancelSubscription = async (req, res) => {
     );
     
     // Kick user from Telegram if applicable
-    if (subscription.telegram_user_id) {
-      try {
-        const kickResult = await TelegramService.kickUser(
-          subscription.productId,
-          subscription.telegram_user_id
-        );
-        
-        if (kickResult.success) {
-          logger.info(`Kicked Telegram user ${subscription.telegram_user_id} from product ${subscription.productId}`);
-          
-          // Update subscription status
-          await Subscription.updateOne(
-            { _id: subscription._id },
-            { telegram_kicked: true }
-          );
-        } else {
-          logger.warn(`Failed to kick Telegram user ${subscription.telegram_user_id}: ${kickResult.error}`);
+    if (subscription.user) {
+        const user = await User.findById(subscription.user);
+        const product = await Portfolio.findById(subscription.productId) || await Bundle.findById(subscription.productId);
+        if (user && product && product.telegramProductId) {
+            try {
+                const kickResult = await TelegramService.kickUser(user.email, product.telegramProductId);
+                
+                if (kickResult.success) {
+                    logger.info(`Kicked Telegram user ${user.email} from product ${product.telegramProductId}`);
+                } else {
+                    logger.warn(`Failed to kick Telegram user ${user.email}: ${kickResult.error}`);
+                }
+            } catch (error) {
+                logger.error('Telegram kick error on cancellation', {
+                subscriptionId: subscription._id,
+                error: error.message
+                });
+            }
         }
-      } catch (error) {
-        logger.error('Telegram kick error on cancellation', {
-          subscriptionId: subscription._id,
-          error: error.message
-        });
-      }
     }
     
     // Send cancellation confirmation
@@ -2660,7 +2660,7 @@ async function sendCancellationEmail(user, subscription, portfolio) {
       </div>
     `;
     
-    await emailQueue.addToQueue({
+    await emailQueue.addEmail({
       to: user.email,
       subject,
       text,
@@ -3056,7 +3056,7 @@ async function sendPaymentFailureEmail(user, subscriptionId, errorCode, errorDes
       </div>
     `;
     
-    await emailQueue.addToQueue({
+    await emailQueue.addEmail({
       to: user.email,
       subject,
       text,

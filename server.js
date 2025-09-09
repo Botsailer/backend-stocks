@@ -31,20 +31,19 @@ class LogCleanupService {
     this.isRunning = false;
   }
 
+
   async cleanupOldLogs() {
     if (this.isRunning) {
       console.log('⏳ Log cleanup already in progress, skipping...');
       return;
     }
-
     this.isRunning = true;
     const startTime = Date.now();
-    
     try {
       console.log(`🧹 Starting automated log cleanup (${this.maxAge} days retention)...`);
       console.log(`📁 Cleaning logs directory: ${this.logsDir}`);
       console.log(`🔒 Protected directory: ${this.mainlogDir} (transaction logs preserved)`);
-      
+
       // Ensure logs directory exists
       try {
         await fs.access(this.logsDir);
@@ -56,7 +55,7 @@ class LogCleanupService {
       }
 
       const files = await fs.readdir(this.logsDir);
-      const logFiles = files.filter(file => 
+      const logFiles = files.filter(file =>
         file.endsWith('.log') || file.endsWith('.txt') || file.includes('cron-')
       );
 
@@ -71,14 +70,9 @@ class LogCleanupService {
         try {
           const filePath = path.join(this.logsDir, file);
           const stats = await fs.stat(filePath);
-          
-          // Check file creation/modification date
           const fileDate = stats.birthtime || stats.mtime;
-          
           if (fileDate < cutoffDate) {
-            // Get file size before deletion for reporting
             const fileSizeKB = Math.round(stats.size / 1024);
-            
             await fs.unlink(filePath);
             cleanedCount++;
             cleanedFiles.push({
@@ -86,7 +80,6 @@ class LogCleanupService {
               age: Math.ceil((Date.now() - fileDate.getTime()) / (1000 * 60 * 60 * 24)),
               size: `${fileSizeKB}KB`
             });
-            
             console.log(`🗑️ Removed old log: ${file} (${fileSizeKB}KB, ${Math.ceil((Date.now() - fileDate.getTime()) / (1000 * 60 * 60 * 24))} days old)`);
           }
         } catch (error) {
@@ -120,17 +113,14 @@ class LogCleanupService {
       }
 
       return result;
-
     } catch (error) {
       console.error('❌ Log cleanup failed:', error.message);
-      
       // Silent fail - don't crash the system
       try {
         CronLogger.error('Log cleanup failed', { error: error.message });
       } catch (logError) {
         // Double silent fail
       }
-      
       return {
         success: false,
         error: error.message,
@@ -141,6 +131,7 @@ class LogCleanupService {
     }
   }
 
+  
   startAutomaticCleanup() {
     // Run daily at 2:00 AM
     cron.schedule('0 2 * * *', async () => {
@@ -834,6 +825,51 @@ app.use('/api/admin/configs', require('./routes/configRoute'));
 app.use('/api/portfolio-calculation-logs', require('./routes/portfolioCalculationLogs')); 
 app.use('/api/chart-data', require('./routes/chartData'));    
 app.use('/api', require('./routes/Portfolio'));                                    
+
+
+// --- API Request Counter (persistent) ---
+const apiRequestCounter = require('./api-request');
+// Middleware to increment counter for all valid API calls (not 404)
+app.use((req, res, next) => {
+  console.log('[COUNTER MIDDLEWARE] Called for:', req.method, req.originalUrl);
+  res.on('finish', () => {
+    if (
+      res.statusCode !== 404 && !(req.method === 'GET' && req.originalUrl.startsWith('/api/request-count'))
+    ) {
+      console.log('[COUNTER] Incrementing for:', req.method, req.originalUrl, 'Status:', res.statusCode);
+      apiRequestCounter.increment();
+    } else {
+      console.log('[COUNTER] Not incrementing for:', req.method, req.originalUrl, 'Status:', res.statusCode);
+    }
+  });
+  next();
+});
+/**
+// ...existing code...
+ * @swagger
+ * /api/request-count:
+ *   get:
+ *     summary: Get total API request count (excluding 404s)
+ *     description: Returns the number of API requests made (excluding 404 Not Found). This count persists across server restarts.
+ *     tags: [System]
+ *     responses:
+ *       200:
+ *         description: API request count retrieved successfully
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 count:
+ *                   type: integer
+ *                   example: 1234
+ *                 note:
+ *                   type: string
+ *                   example: "This count persists across server restarts."
+ */
+app.get('/api/request-count', (req, res) => {
+  res.json({ count: apiRequestCounter.getCount(), note: 'This count persists across server restarts.' });
+});
 
     // Cron job test endpoints
     app.post('/api/cron/trigger-closing-update', async (req, res) => {
