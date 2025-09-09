@@ -804,6 +804,58 @@ exports.getCart = async (req, res) => {
   }
 };
 
+// Verify eSign status for the authenticated user.
+// Expects an authenticated request. Optionally accepts a `token` in query/body to match sessionId/documentId.
+exports.verifyEsignStatus = async (req, res) => {
+  try {
+    const userId = req.user && req.user._id;
+    if (!userId) return res.status(401).json({ success: false, message: 'Unauthorized' });
+
+    const token = req.query.token || req.body.token || req.params.token;
+
+    // Query: prefer matching token/session/document if provided, otherwise return latest signing doc
+    const query = {
+      userId: userId,
+      isTemplate: false,
+      documentId: { $exists: true, $ne: null }
+    };
+
+    if (token) {
+      // token might be a sessionId or documentId
+      query.$or = [ { sessionId: token }, { documentId: token } ];
+    }
+
+    const esign = await DigioSign.findOne(query).sort({ createdAt: -1 });
+
+    if (!esign) {
+      return res.status(404).json({ success: false, message: 'No eSign request found.' });
+    }
+
+    const completed = ['signed', 'completed'].includes(esign.status);
+
+    if (completed) {
+      return res.json({
+        success: true,
+        message: 'eSign completed',
+        status: esign.status,
+        documentId: esign.documentId,
+        signedAt: esign.signedAt,
+        signedDocumentUrl: esign.signedDocumentUrl
+      });
+    }
+
+    return res.json({
+      success: false,
+      message: 'eSign not completed',
+      status: esign.status,
+      userFriendlyStatus: getUserFriendlyStatus(esign.status)
+    });
+  } catch (error) {
+    console.error('verifyEsignStatus error:', error);
+    res.status(500).json({ success: false, message: 'Internal server error' });
+  }
+};
+
 exports.addToCart = async (req, res) => {
   try {
     const { portfolioId } = req.body;

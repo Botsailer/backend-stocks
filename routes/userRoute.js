@@ -401,6 +401,30 @@ router.get('/profile', requireAuth, userController.getProfile);
  */
 router.put('/profile', requireAuth, userController.updateProfile);
 
+/**
+ * @swagger
+ * /api/user/esign/verify:
+ *   get:
+ *     summary: Verify the status of the authenticated user's eSign request
+ *     tags: [User Profile]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: query
+ *         name: token
+ *         schema:
+ *           type: string
+ *         description: Optional documentId or sessionId to look up a specific eSign request
+ *     responses:
+ *       200:
+ *         description: eSign status returned
+ *       401:
+ *         $ref: '#/components/responses/Unauthorized'
+ *       404:
+ *         description: No eSign request found
+ */
+router.get('/esign/verify', requireAuth, userController.verifyEsignStatus);
+
 // ======================
 //  Portfolio Routes
 // ======================
