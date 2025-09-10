@@ -330,9 +330,8 @@ router.get('/profile', requireAuth, userController.getProfile);
  *                 example: "John Doe"
  *               dateofBirth:
  *                 type: string
- *                 format: date
- *                 description: User's date of birth (required for complete profile)
- *                 example: "1990-01-01"
+ *                 description: User's date of birth in DD-MM-YYYY format (required for complete profile)
+ *                 example: "02-08-2003"
  *               phone:
  *                 type: string
  *                 description: User's phone number (required for complete profile)
@@ -353,7 +352,7 @@ router.get('/profile', requireAuth, userController.getProfile);
  *               value:
  *                 username: "johndoe123"
  *                 fullName: "John Doe"
- *                 dateofBirth: "1990-01-01"
+ *                 dateofBirth: "02-08-2003"
  *                 phone: "+1234567890"
  *                 pandetails: "ABCDE1234F"
  *     responses:

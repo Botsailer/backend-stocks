@@ -923,6 +923,16 @@ app.get('/api/request-count', (req, res) => {
     app.use((err, req, res, next) => {
       console.error('🚨 Global error handler:', err);
       
+      // Handle specific error cases with better user feedback
+      if (err.status === 409 && req.path.includes('/subscriptions/verify')) {
+        return res.status(409).json({
+          status: 'error',
+          code: 'PAYMENT_ALREADY_PROCESSED',
+          message: 'This payment has already been processed. Your subscription is active.',
+          userAction: 'Please check your email for Telegram invite links or visit your account dashboard.'
+        });
+      }
+      
       // Don't expose internal error details in production
       const isDevelopment = process.env.NODE_ENV !== 'production';
       

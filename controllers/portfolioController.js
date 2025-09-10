@@ -1836,8 +1836,40 @@ async function handleTelegramIntegration(user, productType, productId, subscript
           details: { portfolioId: productId, portfolioName: portfolio.name, externalId: portfolio.externalId }
         });
         
-        const inviteResult = await TelegramService.generateInviteLink(user, portfolio, subscription);
-        if (inviteResult.success) {
+        // Try up to 3 times if we encounter timeout errors
+        let inviteResult = null;
+        let retryAttempt = 0;
+        const maxRetries = 2;
+        
+        while (retryAttempt <= maxRetries) {
+          try {
+            inviteResult = await TelegramService.generateInviteLink(user, portfolio, subscription);
+            if (inviteResult.success) break;
+            
+            // If the error is not a timeout, don't retry
+            if (!inviteResult.error?.includes('timeout')) break;
+            
+            retryAttempt++;
+            portfolioLogger.warn(`Telegram API timeout, retrying (${retryAttempt}/${maxRetries})`, {
+              operation: 'PAYMENT_TELEGRAM_RETRY',
+              userId: user._id,
+              details: { portfolioId: productId, attempt: retryAttempt }
+            });
+            
+            // Wait before retrying
+            await new Promise(resolve => setTimeout(resolve, 2000));
+          } catch (retryError) {
+            portfolioLogger.error(`Error during retry ${retryAttempt}/${maxRetries}:`, {
+              error: retryError.message,
+              userId: user._id,
+              productId
+            });
+            retryAttempt++;
+            await new Promise(resolve => setTimeout(resolve, 2000));
+          }
+        }
+        
+        if (inviteResult?.success) {
           // Update subscription with invite link
           await Subscription.findByIdAndUpdate(subscription._id, {
             invite_link_url: inviteResult.invite_link,

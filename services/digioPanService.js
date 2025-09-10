@@ -12,7 +12,21 @@ async function digioPanVerify({ id_no, name, dob }) {
     err.code = 'INVALID_PAN_FORMAT';
     throw err;
   }
-  if (!/^\d{2}\/\d{2}\/\d{4}$/.test(dob)) {
+
+  // Convert date format from DD-MM-YYYY to DD/MM/YYYY if needed
+  let formattedDob = dob;
+  if (dob.includes('-')) {
+    formattedDob = dob.replace(/-/g, '/');
+  }
+
+  // Handle YYYY/MM/DD format and convert to DD/MM/YYYY
+  if (/^\d{4}\/\d{2}\/\d{2}$/.test(formattedDob)) {
+    const parts = formattedDob.split('/');
+    formattedDob = `${parts[2]}/${parts[1]}/${parts[0]}`;
+  }
+
+  // Validate the date format (DD/MM/YYYY)
+  if (!/^\d{2}\/\d{2}\/\d{4}$/.test(formattedDob)) {
     const err = new Error('INVALID_DOB_FORMAT');
     err.code = 'INVALID_DOB_FORMAT';
     throw err;
@@ -34,7 +48,7 @@ async function digioPanVerify({ id_no, name, dob }) {
   const payload = {
     id_no: pan,
     name,
-    dob,
+    dob: formattedDob,
     unique_request_id: `REQ_${Date.now()}`
   };
 

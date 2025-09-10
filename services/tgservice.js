@@ -57,7 +57,7 @@ class TelegramService {
       // create axios instance
       this.api = axios.create({
         baseURL: this.baseURL,
-        timeout: 30000,
+        timeout: 90000, // Increased timeout to 90 seconds to handle slow responses
         headers: {
           'Content-Type': 'application/json',
           'Authorization': `Bearer ${this.authToken}`,
@@ -264,13 +264,27 @@ class TelegramService {
      Subscription API
   ============================ */
 
-  async createSubscription(subscriptionData) {
+  async createSubscription(subscriptionData, retryCount = 0) {
     try {
       await this.initConfig();
       const res = await this.api.post('/subscribe', subscriptionData);
       return { success: true, data: res.data };
     } catch (error) {
-      logger.error('createSubscription failed', { error: error.message });
+      // If the error is a timeout and we haven't retried too many times, try again
+      if (error.message && error.message.includes('timeout') && retryCount < 2) {
+        logger.warn(`Telegram API timeout, retrying (${retryCount + 1}/2)...`, { 
+          subscriptionData: { email: subscriptionData.email, product_id: subscriptionData.product_id }
+        });
+        // Wait a bit before retrying
+        await new Promise(resolve => setTimeout(resolve, 2000));
+        return this.createSubscription(subscriptionData, retryCount + 1);
+      }
+      
+      logger.error('createSubscription failed', { 
+        error: error.message, 
+        retryAttempts: retryCount,
+        subscriptionData: { email: subscriptionData.email, product_id: subscriptionData.product_id } 
+      });
       return { success: false, error: error.response?.data || { message: error.message } };
     }
   }

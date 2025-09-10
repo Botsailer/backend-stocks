@@ -228,7 +228,11 @@ router.post("/checkout", requireAuth, subscriptionController.checkoutCart);
  *       500:
  *         description: Payment verification failed
  */
-router.post("/verify", requireAuth, subscriptionController.verifyPayment);
+// Add request logging middleware for better debugging
+router.post("/verify", requireAuth, (req, res, next) => {
+  console.log(`🔍 Processing payment verification for user ${req.user?._id} | Payment ID: ${req.body?.paymentId || 'N/A'} | Order ID: ${req.body?.orderId || 'N/A'}`);
+  next();
+}, subscriptionController.verifyPayment);
 
 /**
  * @swagger

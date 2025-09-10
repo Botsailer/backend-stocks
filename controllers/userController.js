@@ -237,12 +237,12 @@ exports.updateProfile = async (req, res) => {
       }
       
       const pan = updates.pandetails.trim().toUpperCase();
-      const dob = updates.panDob || req.body.dateofBirth; // expected DD/MM/YYYY
+      const dob = updates.panDob || req.body.dateofBirth; // expected DD-MM-YYYY
       const nameForPan = updates.fullName || currentUser.fullName || updates.name;
 
       if (!nameForPan || !dob) {
         return res.status(400).json({
-          error: 'fullName and dateofBirth (DD/MM/YYYY) are required to verify PAN before saving'
+          error: 'fullName and dateofBirth (DD-MM-YYYY) are required to verify PAN before saving'
         });
       }
 
