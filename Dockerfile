@@ -6,7 +6,7 @@ RUN apk add --no-cache python3 make g++
 
 WORKDIR /app
 COPY package*.json ./
-RUN npm ci --only=production && npm cache clean --force
+RUN npm install --omit=dev && npm cache clean --force
 
 # Production stage
 FROM node:18-alpine AS production
@@ -51,6 +51,4 @@ EXPOSE 3012
 HEALTHCHECK --interval=30s --timeout=10s --start-period=40s --retries=3 \
     CMD node -e "require('http').get('http://localhost:3012/health', (res) => { process.exit(res.statusCode === 200 ? 0 : 1) })" || exit 1
 
-# Use dumb-init for proper signal handling
-ENTRYPOINT ["dumb-init", "--"]
 CMD ["node", "server.js"]
