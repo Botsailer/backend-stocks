@@ -350,29 +350,56 @@ class TelegramService {
     try {
       await this.initConfig();
 
-      const user = await User.findById(userId);
-      const product = (await Portfolio.findById(productId)) || (await Bundle.findById(productId));
+      // Better error handling for missing parameters
+      if (!userId || !productId) {
+        logger.error('Missing userId or productId for kickUser', { userId, productId });
+        return { success: false, error: 'Missing userId or productId' };
+      }
 
-      if (!user || !product) {
-        logger.error('Could not find user or product for kicking', { userId, productId });
-        return { success: false, error: 'User or Product not found' };
+      const user = await User.findById(userId);
+      if (!user) {
+        logger.error('User not found for kicking', { userId });
+        return { success: false, error: 'User not found' };
+      }
+
+      // Try to find the product as either Portfolio or Bundle
+      const product = (await Portfolio.findById(productId)) || (await Bundle.findById(productId));
+      if (!product) {
+        logger.error('Product not found for kicking', { productId });
+        return { success: false, error: 'Product not found' };
       }
 
       if (!product.externalId) {
-        logger.warn('Cannot kick user: product not synced with Telegram', { productId });
+        logger.warn('Cannot kick user: product not synced with Telegram', { 
+          productId, 
+          productName: product.name,
+          productType: product.hasOwnProperty('holdings') ? 'Portfolio' : 'Bundle' 
+        });
         return { success: false, error: 'Product not synced with Telegram' };
+      }
+
+      if (!user.email) {
+        logger.error('User has no email for kicking', { userId });
+        return { success: false, error: 'User has no email' };
       }
 
       const result = await this.cancelSubscription(user.email, product.externalId);
       if (result.success) {
-        logger.info(`Successfully kicked user ${user.email} from product ${product.externalId}`);
+        logger.info(`Successfully kicked user ${user.email} from product ${product.name} (${product.externalId})`);
         return { success: true };
       } else {
-        logger.error('Failed to kick user', { userEmail: user.email, error: result.error });
+        logger.error('Failed to kick user', { 
+          userId: user._id,
+          userEmail: user.email, 
+          productId: product._id,
+          productName: product.name,
+          externalId: product.externalId,
+          error: result.error 
+        });
         return { success: false, error: result.error };
       }
     } catch (error) {
-      logger.error('kickUser exception', { error: error.message });
+      logger.error('kickUser exception', { userId, productId, error: error.message, stack: error.stack });
       return { success: false, error: error.message };
     }
   }

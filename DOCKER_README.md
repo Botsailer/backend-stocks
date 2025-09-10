@@ -1,3 +1,4 @@
+@ -1,177 +0,0 @@
 # Docker Setup for Backend Stocks Application
 
 This guide will help you containerize and run the Node.js backend application using Docker.

@@ -288,39 +288,120 @@ async function processExpiredSubscriptions() {
           logger.warn(`Missing email or productId for subscription ${sub._id}`);
         }
         
-        // TODO: Temporarily commented out kick functionality
-        // Attempt to kick user from Telegram group
-        // let kickResult = { success: false };
-        // if (sub.telegram_user_id) {
-        //   kickResult = await TelegramService.kickUser(sub.productId._id || sub.productId, sub.telegram_user_id);
-        //   
-        //   if (kickResult.success) {
-        //     kickSuccessCount++;
-        //     logger.info(`Kicked Telegram user ${sub.telegram_user_id} from product ${sub.productId._id || sub.productId}`);
-        //   } else {
-        //     logger.warn(`Failed to kick Telegram user ${sub.telegram_user_id}: ${kickResult.error}`);
-        //     
-        //     // Send admin notification for Telegram kick failure
-        //     await sendAdminNotification(
-        //       'Telegram Kick Failed',
-        //       `Failed to kick user from Telegram group for subscription ${sub._id}`,
-        //       {
-        //         subscriptionId: sub._id,
-        //         userEmail,
-        //         telegramUserId: sub.telegram_user_id,
-        //         productId: sub.productId._id || sub.productId,
-        //         productName,
-        //         error: kickResult.error
-        //       }
-        //     );
-        //   }
-        // }
+        // Attempt to kick user from Telegram group if they have a telegram_user_id
+        let kickResult = { success: false };
+        if (sub.telegram_user_id) {
+          logger.info(`Attempting to kick Telegram user ${sub.telegram_user_id} from product ${sub.productId._id || sub.productId}`);
+          
+          kickResult = await TelegramService.kickUser(sub.user._id || sub.user, sub.productId._id || sub.productId);
+          
+          if (kickResult.success) {
+            kickSuccessCount++;
+            logger.info(`Kicked Telegram user ${sub.telegram_user_id} from product ${sub.productId._id || sub.productId}`);
+          } else {
+            logger.warn(`Failed to kick Telegram user ${sub.telegram_user_id}: ${kickResult.error}`);
+            
+            // Send admin notification for Telegram kick failure
+            await sendAdminNotification(
+              'Telegram Kick Failed',
+              `Failed to kick user from Telegram group for subscription ${sub._id}`,
+              {
+                subscriptionId: sub._id,
+                userEmail,
+                telegramUserId: sub.telegram_user_id,
+                productId: sub.productId._id || sub.productId,
+                productName,
+                error: kickResult.error
+              }
+            );
+          }
+        }
         
         // Update subscription status
-        sub.status = 'expired';
-        sub.telegram_kicked = true;
-        sub.expiredAt = now;
-        await sub.save();
+        try {
+          // Use direct MongoDB update instead of Mongoose document save
+          const updateResult = await Subscription.updateOne(
+            { _id: sub._id },
+            { 
+              status: 'expired',
+              telegram_kicked: true, // Mark as kicked regardless of actual kick success
+              expiredAt: now
+            }
+          );
+          
+          if (updateResult.modifiedCount > 0) {
+            logger.info(`Updated subscription ${sub._id} status to expired and set telegram_kicked flag`, {
+              modifiedCount: updateResult.modifiedCount,
+              matchedCount: updateResult.matchedCount
+            });
+          } else {
+            logger.warn(`Failed to update subscription ${sub._id} - no documents modified`, {
+              modifiedCount: updateResult.modifiedCount,
+              matchedCount: updateResult.matchedCount
+            });
+            
+            // Try an alternative approach with findByIdAndUpdate
+            const updatedDoc = await Subscription.findByIdAndUpdate(
+              sub._id,
+              { 
+                status: 'expired',
+                telegram_kicked: true,
+                expiredAt: now
+              },
+              { new: true } // Return the updated document
+            );
+            
+            if (updatedDoc) {
+              logger.info(`Updated subscription ${sub._id} using findByIdAndUpdate`, {
+                status: updatedDoc.status,
+                telegram_kicked: updatedDoc.telegram_kicked,
+                expiredAt: updatedDoc.expiredAt
+              });
+            } else {
+              logger.error(`Failed to update subscription ${sub._id} using findByIdAndUpdate`);
+            }
+          }
+        } catch (saveError) {
+          logger.error(`Error updating subscription ${sub._id}:`, {
+            error: saveError.message,
+            stack: saveError.stack
+          });
+          
+          // If it's a validation error, try to fix known issues and update again
+          if (saveError.name === 'ValidationError') {
+            try {
+              // Fix category if it's invalid
+              let updateData = { 
+                status: 'expired',
+                telegram_kicked: true,
+                expiredAt: now
+              };
+              
+              if (saveError.errors?.category) {
+                logger.warn(`Invalid category found: ${sub.category}, fixing to 'premium'`);
+                updateData.category = 'premium';
+              }
+              
+              // Fix any other validation errors here
+              
+              // Try updating again with fixed data
+              const fixResult = await Subscription.updateOne(
+                { _id: sub._id },
+                updateData
+              );
+              
+              logger.info(`Fixed validation errors and updated subscription ${sub._id}`, {
+                modifiedCount: fixResult.modifiedCount,
+                matchedCount: fixResult.matchedCount
+              });
+            } catch (fixError) {
+              logger.error(`Failed to fix validation errors for subscription ${sub._id}:`, {
+                error: fixError.message,
+                stack: fixError.stack
+              });
+            }
+          }
+        }
         
         processedCount++;
         
@@ -348,13 +429,13 @@ async function processExpiredSubscriptions() {
       }
     }
     
-    logger.info(`Expired subscription processing complete. Processed: ${processedCount}, Cancelled: ${cancelSuccessCount}, Kicked: ${kickSuccessCount} (kick functionality disabled)`);
+    logger.info(`Expired subscription processing complete. Processed: ${processedCount}, Cancelled: ${cancelSuccessCount}, Kicked: ${kickSuccessCount}`);
     
     return {
       success: true,
       processedCount,
       cancelSuccessCount,
-      kickSuccessCount: 0 // Kick functionality disabled
+      kickSuccessCount
     };
     
   } catch (error) {

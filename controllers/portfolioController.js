@@ -17,6 +17,8 @@
 const { default: mongoose } = require('mongoose');
 const Portfolio = require('../models/modelPortFolio');
 const PriceLog = require('../models/PriceLog');
+const Bundle = require('../models/bundle');
+const Subscription = require('../models/subscription');
 const portfolioService = require('../services/portfolioservice');
 const { PortfolioCalculationValidator } = require('../utils/portfolioCalculationValidator');
 const transactionLogger = require('../utils/transactionLogger');

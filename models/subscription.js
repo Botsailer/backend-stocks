@@ -23,6 +23,20 @@ const SubscriptionSchema = new Schema({
     type: Schema.Types.ObjectId,
     ref: "Portfolio",
   },
+  // Telegram integration
+  telegram_kicked: {
+    type: Boolean,
+    default: false
+  },
+  telegram_user_id: {
+    type: String
+  },
+  invite_link_url: {
+    type: String
+  },
+  invite_link_expires_at: {
+    type: Date
+  },
   
   // Subscription details
   type: {

@@ -293,7 +293,7 @@ exports.verifyPAN = async (req, res) => {
     console.log('[PAN Verification] Calling Digio API with:', requestData);
 
     // Call Digio PAN verification API
-    const response = await digioRequest('POST', `${DIGIO_API_BASE}/v2/client/kyc/pan_verification`, requestData);
+    const response = await digioRequest('POST', `${DIGIO_API_BASE}/v3/client/kyc/fetch_id_data/PAN`, requestData);
 
     console.log('[PAN Verification] Digio Response:', response);
 
