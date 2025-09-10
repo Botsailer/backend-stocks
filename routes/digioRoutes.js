@@ -24,6 +24,7 @@ const {
   refetchPdfFromUrl,
   getLatestPdfData,
   createDocumentForSigning,
+  verifyEsignForProduct,
   getStatus,
   webhook,
   syncDocument,
@@ -374,6 +375,9 @@ router.get('/pdf/data', requireAuth, getLatestPdfData);
  *         description: Digio API not configured
  */
 router.post('/document/create', requireAuth, createDocumentForSigning);
+
+// Verify eSign status for specific product (JIT sync)
+router.get('/esign/verify', requireAuth, verifyEsignForProduct);
 
 /**
  * @swagger

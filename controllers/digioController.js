@@ -782,9 +782,9 @@ exports.createDocumentForSigning = async (req, res) => {
       digioResponse: response,
       isTemplate: false, // This is a signing document, not a template
       // optional product reference for per-product eSign tracking
-      productType: req.body.productType || null,
-      productId: req.body.productId || null,
-      productName: req.body.productName || null,
+      productType: req.body.productType || req.query.productType || null,
+      productId: req.body.productId || req.query.productId || null,
+      productName: req.body.productName || req.query.productName || null,
       createdAt: new Date(),
       updatedAt: new Date()
     });
@@ -836,6 +836,46 @@ exports.createDocumentForSigning = async (req, res) => {
         data: error.response.data
       } : error.details || error.message
     });
+  }
+};
+
+/**
+ * Verify eSign status for a specific product by just-in-time syncing the latest doc
+ * GET /digio/esign/verify?productType=...&productId=...
+ */
+exports.verifyEsignForProduct = async (req, res) => {
+  try {
+    const userId = req.user?.id;
+    const { productType, productId } = req.query;
+    if (!userId) return res.status(401).json({ success: false, error: 'Unauthorized' });
+    if (!productType || !productId) return res.status(400).json({ success: false, error: 'Missing productType/productId' });
+
+    // Find the most recent doc for this user+product
+    let doc = await DigioSign.findOne({ userId, productType, productId, isTemplate: false }).sort({ createdAt: -1 });
+    if (!doc) {
+      // Fallback: latest user's doc
+      doc = await DigioSign.findOne({ userId, isTemplate: false }).sort({ createdAt: -1 });
+    }
+    if (!doc) return res.status(404).json({ success: false, error: 'No eSign document found' });
+
+    // If already completed
+    if (['signed', 'completed'].includes(doc.status)) {
+      return res.json({ success: true, status: doc.status, documentId: doc.documentId });
+    }
+
+    // JIT sync
+    try {
+      const { syncDocument } = require('../services/digioWebhookService');
+      const syncResult = await syncDocument(doc.documentId);
+      const updated = syncResult?.document || doc;
+      const ok = ['signed', 'completed'].includes(updated.status);
+      return res.json({ success: ok, status: updated.status, documentId: updated.documentId });
+    } catch (e) {
+      return res.json({ success: false, status: doc.status, documentId: doc.documentId });
+    }
+  } catch (e) {
+    console.error('[verifyEsignForProduct] error:', e);
+    return res.status(500).json({ success: false, error: e.message });
   }
 };
 
