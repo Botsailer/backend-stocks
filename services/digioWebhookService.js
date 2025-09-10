@@ -464,7 +464,7 @@ async function syncDocument(documentId) {
 
     const basicAuth = Buffer.from(`${DIGIO_CLIENT_ID}:${DIGIO_CLIENT_SECRET}`).toString('base64');
 
-    const response = await axios.get(`${DIGIO_API_BASE}/v2/client/document/${doc.documentId}`, {
+  const response = await axios.get(`${DIGIO_API_BASE}/v2/client/document/${doc.documentId}`, {
       headers: {
         'Authorization': `Basic ${basicAuth}`,
         'Accept': 'application/json'
@@ -472,8 +472,9 @@ async function syncDocument(documentId) {
       timeout: 10000
     });
 
-    const remoteStatus = response.data?.status;
-    const mappedStatus = mapWebhookStatus(remoteStatus);
+  // Digio may return status under different keys. Prefer explicit status, else agreement_status.
+  const remoteStatusRaw = response.data?.status || response.data?.agreement_status || response.data?.signing_parties?.[0]?.status;
+  const mappedStatus = mapWebhookStatus(remoteStatusRaw);
     
     const updateData = {
       status: mappedStatus,
@@ -484,8 +485,10 @@ async function syncDocument(documentId) {
     if (['signed', 'completed'].includes(mappedStatus)) {
       updateData.signedAt = new Date();
       updateData.kycVerified = true;
-      if (response.data?.signed_url) {
-        updateData.signedDocumentUrl = response.data.signed_url;
+      // capture any signed document url fields
+      const signedUrl = response.data?.signed_url || response.data?.signed_document_url || response.data?.signing_parties?.[0]?.signed_document_url;
+      if (signedUrl) {
+        updateData.signedDocumentUrl = signedUrl;
       }
     }
 

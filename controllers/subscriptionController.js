@@ -644,13 +644,33 @@ exports.createOrder = async (req, res) => {
       }
 
       if (!userEsignForProduct) {
+        // Fallback: allow any recent signed/completed eSign for this user (within 30 days)
+        const thirtyDaysAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
+        const anySigned = await DigioSign.findOne({
+          userId: userId,
+          isTemplate: false,
+          status: { $in: ['signed', 'completed'] },
+          createdAt: { $gte: thirtyDaysAgo }
+        }).sort({ createdAt: -1 });
+
+        if (anySigned) {
+          userEsignForProduct = anySigned;
+        }
+      }
+
+      if (!userEsignForProduct) {
         // Custom code for frontend to trigger eSign creation
         return res.status(412).json({
           success: false,
           error: 'eSign required for this product before purchase',
           code: 'ESIGN_REQUIRED',
           productType,
-          productId
+          productId,
+          lastDocument: latestDoc ? {
+            documentId: latestDoc.documentId,
+            status: latestDoc.status,
+            authenticationUrl: latestDoc?.digioResponse?.signing_parties?.[0]?.authentication_url || latestDoc?.digioResponse?.authentication_url || null
+          } : null
         });
       }
     }
