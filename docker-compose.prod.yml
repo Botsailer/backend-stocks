@@ -38,9 +38,7 @@ services:
       options:
         max-size: "10m"
         max-file: "3"
-    security_opt:
-      - no-new-privileges:true
-    read_only: true
+
     tmpfs:
       - /tmp:noexec,nosuid,size=100m
 
