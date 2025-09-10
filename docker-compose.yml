@@ -1,0 +1,30 @@
+version: '3.8'
+
+services:
+  backend-stocks:
+    build: .
+    container_name: backend-stocks-app
+    ports:
+      - "3012:3012"
+    environment:
+      - NODE_ENV=production
+      - PORT=3012
+    env_file:
+      - .env
+    volumes:
+      - ./logs:/app/logs
+      - ./mainlog:/app/mainlog
+      - ./temp-logs:/app/temp-logs
+    restart: unless-stopped
+    networks:
+      - stocks-network
+    healthcheck:
+      test: ["CMD", "node", "-e", "require('http').get('http://localhost:3012/health', (res) => { process.exit(res.statusCode === 200 ? 0 : 1) })"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+networks:
+  stocks-network:
+    driver: bridge
