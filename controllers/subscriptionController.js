@@ -9,6 +9,7 @@ const Cart = require("../models/carts");
 const PaymentHistory = require("../models/paymenthistory");
 const Bundle = require("../models/bundle");
 const User = require("../models/user");
+const DigioSign = require("../models/DigioSign");
 const { getPaymentConfig } = require("../utils/configSettings");
 const { sendEmail } = require("../services/emailServices"); // Add your email service
 const TelegramService = require("../services/tgservice");
@@ -2098,7 +2099,6 @@ exports.verifyPayment = async (req, res) => {
 
     // Mark any existing DigioSign records for this user+product as expired so resubscribe requires a fresh eSign
     try {
-      const DigioSign = require('../models/DigioSign');
       await DigioSign.updateMany({
         userId: req.user._id,
         productType: subscription.productType,
