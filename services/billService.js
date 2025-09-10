@@ -584,5 +584,6 @@ module.exports = {
   sendBillEmail,
   generateAndSendBill,
   getUserBills,
-  COMPANY_INFO
+  COMPANY_INFO,
+  generateBillNumber  // Export the generateBillNumber function
 };
