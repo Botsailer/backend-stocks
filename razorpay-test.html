@@ -1,0 +1,182 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Razorpay Test Checkout + Verify</title>
+  <script src="https://checkout.razorpay.com/v1/checkout.js"></script>
+  <style>
+    :root { color-scheme: light dark; }
+    body { font-family: system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif; margin: 0; padding: 24px; }
+    .card { max-width: 880px; margin: 0 auto; border: 1px solid #ddd; border-radius: 12px; padding: 20px; background: #fff; box-shadow: 0 4px 16px rgba(0,0,0,.06); }
+    h1 { margin: 0 0 6px; font-size: 20px; }
+    p.helper { margin-top: 0; color: #666; font-size: 13px; }
+    .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+    label { font-size: 12px; color: #444; }
+    input, textarea, select { width: 100%; padding: 10px 12px; border-radius: 8px; border: 1px solid #ccc; font-size: 14px; }
+    code.inline { background: #f4f4f4; padding: 2px 6px; border-radius: 6px; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace; }
+    .row { display: flex; gap: 12px; align-items: center; }
+    .row > * { flex: 1; }
+    button { background: #111827; color: #fff; border: 0; border-radius: 8px; padding: 10px 14px; cursor: pointer; font-weight: 600; }
+    button.secondary { background: #2563eb; }
+    button:disabled { opacity: .6; cursor: not-allowed; }
+    .muted { color: #666; font-size: 12px; }
+    .ok { color: #065f46; }
+    .err { color: #991b1b; }
+    pre { background: #0b1020; color: #c7d2fe; padding: 12px; border-radius: 8px; overflow: auto; max-height: 280px; }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <h1>Razorpay Checkout (Local) + Verify</h1>
+    <p class="helper">Use this page to pay for an existing Razorpay Order and then call your backend <code class="inline">/api/subscriptions/verify</code> to confirm the payment.</p>
+
+    <div class="grid">
+      <div>
+        <label>Razorpay Key ID (public)</label>
+        <input id="key_id" placeholder="rzp_test_xxxxxxxx" />
+      </div>
+      <div>
+        <label>Order ID</label>
+        <input id="order_id" />
+      </div>
+      
+      <div>
+        <label>Customer Name</label>
+        <input id="cust_name" placeholder="John Doe" />
+      </div>
+      <div>
+        <label>Customer Email</label>
+        <input id="cust_email" placeholder="john@example.com" />
+      </div>
+      <div>
+        <label>Customer Contact</label>
+        <input id="cust_contact" placeholder="9999999999" />
+      </div>
+      <div>
+        <label>Notes (optional)</label>
+        <input id="notes" placeholder='{"purpose":"One-time"}' />
+      </div>
+
+      <div>
+        <label>Backend Verify URL</label>
+        <input id="verify_url" value="http://localhost:3012/api/subscriptions/verify" />
+      </div>
+      <div>
+        <label>Auth Token (JWT for your API)</label>
+        <input id="jwt" placeholder="Bearer token required by backend" />
+      </div>
+    </div>
+
+    <div style="height: 12px"></div>
+
+    <div class="row">
+      <button id="payBtn" class="secondary" onclick="openCheckout()">Pay with Razorpay</button>
+      <button id="verifyBtn" onclick="verifyPayment()" disabled>Verify on Backend</button>
+    </div>
+
+    <div style="height: 12px"></div>
+
+    <div class="grid">
+      <div>
+        <label>Razorpay Response (after payment)</label>
+        <textarea id="rzp_response" rows="6" readonly placeholder="Will appear after successful payment"></textarea>
+      </div>
+      <div>
+        <label>Backend Verify Response</label>
+        <textarea id="verify_response" rows="6" readonly placeholder="Will appear after verify call"></textarea>
+      </div>
+    </div>
+
+    <p class="muted">Tip: Ensure the order exists and the amount is set on the server side. CORS must be allowed by your backend (your app already uses CORS).</p>
+  </div>
+
+  <script>
+    // Pre-fill provided order id for convenience
+    (function preset() {
+      const givenOrderId = "order_RFu9efGIhJsRoh"; // from your message
+      document.getElementById('order_id').value = givenOrderId;
+    })();
+
+    function asJson(obj) {
+      try { return JSON.stringify(obj, null, 2); } catch { return String(obj); }
+    }
+
+    let lastPayment = null;
+
+    function openCheckout() {
+      const key_id = document.getElementById('key_id').value.trim();
+      const order_id = document.getElementById('order_id').value.trim();
+      const name = document.getElementById('cust_name').value.trim() || 'Test User';
+      const email = document.getElementById('cust_email').value.trim() || 'test@example.com';
+      const contact = document.getElementById('cust_contact').value.trim() || '9999999999';
+
+      if (!key_id) return alert('Enter Razorpay Key ID');
+      if (!order_id) return alert('Enter Order ID');
+
+      let parsedNotes = undefined;
+      const rawNotes = document.getElementById('notes').value.trim();
+      if (rawNotes) {
+        try { parsedNotes = JSON.parse(rawNotes); } catch { parsedNotes = { note: rawNotes }; }
+      }
+
+      const options = {
+        key: key_id,
+        order_id,
+        name: 'RangaOne Finance',
+        description: 'One-time payment',
+        prefill: { name, email, contact },
+        theme: { color: '#111827' },
+        notes: parsedNotes,
+        handler: function (response) {
+          // Capture response for verification
+          lastPayment = {
+            paymentId: response.razorpay_payment_id,
+            orderId: response.razorpay_order_id,
+            signature: response.razorpay_signature
+          };
+          document.getElementById('rzp_response').value = asJson(lastPayment);
+          // Enable verify button
+          document.getElementById('verifyBtn').disabled = false;
+        },
+        modal: {
+          ondismiss: function() {
+            console.log('Checkout closed');
+          }
+        }
+      };
+
+      try {
+        const rzp = new Razorpay(options);
+        rzp.open();
+      } catch (e) {
+        alert('Failed to open Razorpay: ' + e.message);
+      }
+    }
+
+    async function verifyPayment() {
+      const url = document.getElementById('verify_url').value.trim();
+      const jwt = document.getElementById('jwt').value.trim();
+
+      if (!lastPayment) return alert('Complete a payment first');
+      if (!url) return alert('Enter backend verify URL');
+      if (!jwt) return alert('Enter your API JWT token');
+
+      try {
+        const res = await fetch(url, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+              'Authorization': (jwt.startsWith('Bearer ') ? jwt : `Bearer ${jwt}`)
+          },
+          body: JSON.stringify(lastPayment)
+        });
+        const data = await res.json().catch(() => ({}));
+        document.getElementById('verify_response').value = asJson({ status: res.status, data });
+      } catch (e) {
+        document.getElementById('verify_response').value = asJson({ error: e.message });
+      }
+    }
+  </script>
+</body>
+</html>
