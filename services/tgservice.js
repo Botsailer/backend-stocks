@@ -555,6 +555,134 @@ class TelegramService {
       return { success: false, error: error.response?.data || { message: error.message } };
     }
   }
+
+  /* ============================
+     Missing Functions Implementation
+  ============================ */
+
+  /**
+   * Get product by ID
+   */
+  async getProductById(productId) {
+    try {
+      await this.initConfig();
+      const res = await this.api.get(`/products/${productId}`);
+      return { success: true, data: res.data };
+    } catch (error) {
+      logger.error('getProductById failed', { productId, error: error.message });
+      return { success: false, error: error.response?.data || { message: error.message } };
+    }
+  }
+
+  /**
+   * Get all users/subscriptions
+   */
+  async getAllUsers() {
+    try {
+      await this.initConfig();
+      const res = await this.api.get('/users');
+      const payload = Array.isArray(res.data) ? res.data : res.data?.data || res.data;
+      return { success: true, data: payload };
+    } catch (error) {
+      logger.error('getAllUsers failed', { error: error.message });
+      return { success: false, error: error.response?.data || { message: error.message } };
+    }
+  }
+
+  /**
+   * Get all subscriptions with optional filters
+   */
+  async getAllSubscriptions(options = {}) {
+    try {
+      await this.initConfig();
+      
+      // Build query parameters
+      const queryParams = new URLSearchParams();
+      if (options.email) queryParams.append('email', options.email);
+      if (options.product_id) queryParams.append('product_id', options.product_id);
+      if (options.status) queryParams.append('status', options.status);
+      
+      const queryString = queryParams.toString();
+      const url = queryString ? `/subscriptions?${queryString}` : '/subscriptions';
+      
+      const res = await this.api.get(url);
+      const payload = Array.isArray(res.data) ? res.data : res.data?.data || res.data;
+      return { success: true, data: payload };
+    } catch (error) {
+      logger.error('getAllSubscriptions failed', { options, error: error.message });
+      return { success: false, error: error.response?.data || { message: error.message } };
+    }
+  }
+
+  /**
+   * Cancel subscription by email
+   */
+  async cancelSubscriptionByEmail(email, productId) {
+    try {
+      await this.initConfig();
+      const res = await this.api.delete('/subscriptions', {
+        data: { email, product_id: productId }
+      });
+      return { success: true, data: res.data };
+    } catch (error) {
+      logger.error('cancelSubscriptionByEmail failed', { email, productId, error: error.message });
+      return { success: false, error: error.response?.data || { message: error.message } };
+    }
+  }
+
+  /**
+   * Cancel subscription by ID
+   */
+  async cancelSubscriptionById(subscriptionId) {
+    try {
+      await this.initConfig();
+      const res = await this.api.delete(`/subscriptions/${subscriptionId}`);
+      return { success: true, data: res.data };
+    } catch (error) {
+      logger.error('cancelSubscriptionById failed', { subscriptionId, error: error.message });
+      return { success: false, error: error.response?.data || { message: error.message } };
+    }
+  }
+
+  /**
+   * Create a new group
+   */
+  async createGroup(groupData) {
+    try {
+      await this.initConfig();
+      logger.info('Creating group on Telegram API', { groupData });
+      const res = await this.api.post('/groups', groupData);
+      logger.info('Group created successfully', { responseData: res.data });
+      return { success: true, data: res.data };
+    } catch (error) {
+      logger.error('createGroup failed', { groupData, error: error.message });
+      return { success: false, error: error.response?.data || { message: error.message } };
+    }
+  }
+
+  /**
+   * Process webhook data
+   */
+  async processWebhook(token, updateData) {
+    try {
+      await this.initConfig();
+      
+      // Verify token
+      if (token !== this.authToken) {
+        logger.warn('Invalid webhook token received');
+        return { success: false, error: 'Invalid token' };
+      }
+      
+      logger.info('Processing webhook update', { updateData });
+      
+      // Process the webhook data according to your business logic
+      // This is a placeholder - implement based on what webhooks you expect
+      return { success: true, message: 'Webhook processed successfully' };
+    } catch (error) {
+      logger.error('processWebhook failed', { error: error.message });
+      return { success: false, error: error.message };
+    }
+  }
 }
 
 module.exports = new TelegramService();
