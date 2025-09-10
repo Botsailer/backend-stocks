@@ -236,7 +236,7 @@ async function digioRequest(method, url, data = {}, headers = {}) {
 }
 
 /**
- * PAN Verification (KEPT AS IS - NO CHANGES)
+ * PAN Verification (MODIFIED LOGIC)
  */
 exports.verifyPAN = async (req, res) => {
   try {
@@ -297,12 +297,31 @@ exports.verifyPAN = async (req, res) => {
 
     console.log('[PAN Verification] Digio Response:', response);
 
-    // Return success response
-    res.json({
-      success: true,
-      message: 'PAN verification completed successfully.',
-      data: response
-    });
+    // Custom logic for success/failure
+    const nameMatch = response.name_as_per_pan_match === true;
+    const dobMatch = response.date_of_birth_match === true;
+
+    if (nameMatch && dobMatch) {
+      return res.json({
+        success: true,
+        message: 'PAN verification completed successfully.',
+        data: response
+      });
+    } else if (!nameMatch && dobMatch) {
+      return res.json({
+        success: false,
+        code: 'NAME_MISMATCH',
+        message: 'Please enter your full name including middle name as per your PAN card.',
+        data: response
+      });
+    } else {
+      return res.json({
+        success: false,
+        code: 'DETAILS_MISMATCH',
+        message: 'Name and date of birth do not match PAN records.',
+        data: response
+      });
+    }
 
   } catch (error) {
     console.error('[PAN Verification] Error:', error);
