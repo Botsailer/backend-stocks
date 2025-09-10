@@ -7,6 +7,7 @@ const Tip = require('../models/portfolioTips');
 const Bundle = require('../models/bundle');
 const { digioPanVerify } = require('../services/digioPanService');
 const DigioSign = require('../models/DigioSign');
+const { syncDocument } = require('../services/digioWebhookService');
 
 // Helper function to convert internal status to user-friendly status
 const getUserFriendlyStatus = (status) => {
@@ -805,13 +806,19 @@ exports.getCart = async (req, res) => {
 };
 
 // Verify eSign status for the authenticated user.
-// Expects an authenticated request. Optionally accepts a `token` in query/body to match sessionId/documentId.
+// Expects an authenticated request.
+// Accepts optional identifiers to locate the correct record:
+// - token: documentId or sessionId
+// - productType & productId: check eSign for a specific product
+// This endpoint now performs a just-in-time sync with Digio to avoid stale status.
 exports.verifyEsignStatus = async (req, res) => {
   try {
     const userId = req.user && req.user._id;
     if (!userId) return res.status(401).json({ success: false, message: 'Unauthorized' });
 
     const token = req.query.token || req.body.token || req.params.token;
+    const productType = req.query.productType || req.body.productType || req.params.productType || null;
+    const productId = req.query.productId || req.body.productId || req.params.productId || null;
 
     // Query: prefer matching token/session/document if provided, otherwise return latest signing doc
     const query = {
@@ -825,10 +832,21 @@ exports.verifyEsignStatus = async (req, res) => {
       query.$or = [ { sessionId: token }, { documentId: token } ];
     }
 
-    const esign = await DigioSign.findOne(query).sort({ createdAt: -1 });
+    if (productType && productId) {
+      query.productType = productType;
+      query.productId = productId;
+    }
+
+    let esign = await DigioSign.findOne(query).sort({ createdAt: -1 });
 
     if (!esign) {
-      return res.status(404).json({ success: false, message: 'No eSign request found.' });
+      // If specific product requested, try fallback to user's most recent doc
+      if (productType && productId) {
+        esign = await DigioSign.findOne({ userId, isTemplate: false }).sort({ createdAt: -1 });
+      }
+      if (!esign) {
+        return res.status(404).json({ success: false, message: 'No eSign request found.' });
+      }
     }
 
     const completed = ['signed', 'completed'].includes(esign.status);
@@ -840,7 +858,35 @@ exports.verifyEsignStatus = async (req, res) => {
         status: esign.status,
         documentId: esign.documentId,
         signedAt: esign.signedAt,
-        signedDocumentUrl: esign.signedDocumentUrl
+        signedDocumentUrl: esign.signedDocumentUrl,
+        authenticationUrl: esign?.digioResponse?.authentication_url || null
+      });
+    }
+
+    // Perform a just-in-time sync with Digio for freshest status
+    try {
+      if (esign.documentId) {
+        const syncResult = await syncDocument(esign.documentId);
+        if (syncResult?.document) {
+          esign = syncResult.document; // use updated doc
+        }
+      }
+    } catch (syncErr) {
+      // soft-fail: return current status if sync fails
+      console.warn('verifyEsignStatus sync failed:', syncErr.message);
+    }
+
+    const nowCompleted = ['signed', 'completed'].includes(esign.status);
+
+    if (nowCompleted) {
+      return res.json({
+        success: true,
+        message: 'eSign completed',
+        status: esign.status,
+        documentId: esign.documentId,
+        signedAt: esign.signedAt,
+        signedDocumentUrl: esign.signedDocumentUrl,
+        authenticationUrl: esign?.digioResponse?.authentication_url || null
       });
     }
 
@@ -848,7 +894,8 @@ exports.verifyEsignStatus = async (req, res) => {
       success: false,
       message: 'eSign not completed',
       status: esign.status,
-      userFriendlyStatus: getUserFriendlyStatus(esign.status)
+      userFriendlyStatus: getUserFriendlyStatus(esign.status),
+      authenticationUrl: esign?.digioResponse?.authentication_url || null
     });
   } catch (error) {
     console.error('verifyEsignStatus error:', error);

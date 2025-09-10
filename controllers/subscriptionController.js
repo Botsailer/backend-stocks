@@ -608,7 +608,7 @@ exports.createOrder = async (req, res) => {
 
  
 
-    const userEsignForProduct = await DigioSign.findOne({
+    let userEsignForProduct = await DigioSign.findOne({
       userId: userId,
       productType: productType,
       productId: productId,
@@ -617,14 +617,42 @@ exports.createOrder = async (req, res) => {
     }).sort({ createdAt: -1 });
 
     if (!userEsignForProduct) {
-      // Custom code for frontend to trigger eSign creation
-      return res.status(412).json({
-        success: false,
-        error: 'eSign required for this product before purchase',
-        code: 'ESIGN_REQUIRED',
-        productType,
-        productId
-      });
+      // Try to find the most recent DigioSign record for this user+product in any pending state
+      let latestDoc = await DigioSign.findOne({
+        userId: userId,
+        productType: productType,
+        productId: productId,
+        isTemplate: false
+      }).sort({ createdAt: -1 });
+
+      // As a fallback, if product linkage wasn't stored, pick latest user's doc
+      if (!latestDoc) {
+        latestDoc = await DigioSign.findOne({ userId: userId, isTemplate: false }).sort({ createdAt: -1 });
+      }
+
+      // If we have a document, attempt a just-in-time sync with Digio
+      if (latestDoc && latestDoc.documentId) {
+        try {
+          const { syncDocument } = require('../services/digioWebhookService');
+          const syncResult = await syncDocument(latestDoc.documentId);
+          if (syncResult?.document && ['signed', 'completed'].includes(syncResult.document.status)) {
+            userEsignForProduct = syncResult.document;
+          }
+        } catch (e) {
+          logger.warn('Digio JIT sync failed during order creation', { error: e.message });
+        }
+      }
+
+      if (!userEsignForProduct) {
+        // Custom code for frontend to trigger eSign creation
+        return res.status(412).json({
+          success: false,
+          error: 'eSign required for this product before purchase',
+          code: 'ESIGN_REQUIRED',
+          productType,
+          productId
+        });
+      }
     }
 
     // Get product info and original amount
