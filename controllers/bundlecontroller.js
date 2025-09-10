@@ -122,11 +122,11 @@ exports.createBundle = asyncHandler(async (req, res) => {
       price: basePrice,
     });
     
-    if (telegramProduct.success && telegramProduct.data.id) {
-      telegramProductId = telegramProduct.data.id;
+    if (telegramProduct && telegramProduct.id) {
+      telegramProductId = telegramProduct.id;
       bundleLogger.info('Telegram product created successfully for bundle', { bundleName: name, telegramProductId });
     } else {
-      bundleLogger.warn('Failed to create Telegram product for bundle', { bundleName: name, error: telegramProduct.error });
+      bundleLogger.warn('Failed to create Telegram product for bundle', { bundleName: name, response: telegramProduct });
     }
   } catch (telegramError) {
     bundleLogger.error('Error creating Telegram product for bundle', { bundleName: name, error: telegramError.message });
@@ -142,7 +142,7 @@ exports.createBundle = asyncHandler(async (req, res) => {
     quarterlyemandateprice,
     yearlyemandateprice,
     yearlyPrice,
-    telegramProductId
+    externalId: telegramProductId, // Use externalId to be consistent with model
   });
 
   await bundle.save();

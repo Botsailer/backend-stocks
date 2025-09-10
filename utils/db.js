@@ -28,9 +28,12 @@ async function createAdmin(data) {
 }
 
 async function disconnect() {
-  await mongoose.disconnect();
-  console.log('Disconnected from database');
-  child.unref(); 
+  try {
+    await mongoose.disconnect();
+    console.log('Disconnected from database');
+  } catch (error) {
+    console.error('Error disconnecting from database:', error);
+  }
 }
 
 async function findUser(query) {

@@ -127,17 +127,15 @@ exports.createPortfolio = asyncHandler(async (req, res) => {
         price: price
       });
       
-      if (telegramProduct.success && telegramProduct.data.id) {
-        telegramProductId = telegramProduct.data.id;
+      if (telegramProduct && telegramProduct.id) {
+        telegramProductId = telegramProduct.id;
         portfolioLogger.info('Telegram product created successfully for portfolio', { portfolioName: requestData.name, telegramProductId });
-      } else {
-        portfolioLogger.warn('Failed to create Telegram product for portfolio', { portfolioName: requestData.name, error: telegramProduct.error });
       }
     } catch (telegramError) {
       portfolioLogger.error('Error creating Telegram product for portfolio', { portfolioName: requestData.name, error: telegramError.message });
     }
 
-    const portfolio = new Portfolio({ ...requestData, telegramProductId });
+    const portfolio = new Portfolio({ ...requestData, externalId: telegramProductId });
     await portfolio.save();
     
     portfolioLogger.info('Portfolio created successfully', {
@@ -1640,7 +1638,7 @@ exports.generateTelegramInvite = asyncHandler(async (req, res) => {
     }
 
     // Generate invite link
-    const inviteResult = await TelegramService.generateInviteLink(portfolio.externalId);
+    const inviteResult = await TelegramService.generateInviteLink(req.user, portfolio, activeSubscription);
     
     if (inviteResult.success) {
       // Update subscription with invite link details
@@ -1817,7 +1815,7 @@ async function handleTelegramIntegration(user, productType, productId, subscript
     try {
       const portfolio = await Portfolio.findById(productId);
       if (portfolio && portfolio.externalId) {
-        const inviteResult = await TelegramService.generateInviteLink(portfolio.externalId);
+        const inviteResult = await TelegramService.generateInviteLink(user, portfolio, subscription);
         
         if (inviteResult.success) {
           // Update subscription with invite link

@@ -17,7 +17,13 @@ const logger = winston.createLogger({
     winston.format.json()
   ),
   transports: [
-    new winston.transports.File({ filename: 'logs/telegram-service.log' })
+    new winston.transports.File({ filename: 'logs/telegram-service.log' }),
+    new winston.transports.Console({
+      format: winston.format.combine(
+        winston.format.colorize(),
+        winston.format.simple()
+      )
+    })
   ],
 });
 
@@ -106,11 +112,15 @@ class TelegramService {
   async createProduct(productData) {
     try {
       await this.initConfig();
+      logger.info('Creating product on Telegram API', { productData });
       const res = await this.api.post('/products', productData);
-      return { success: true, data: res.data };
+      logger.info('Product created successfully', { responseData: res.data });
+      // Return the data directly, assuming the calling function will handle it
+      return res.data;
     } catch (error) {
-      logger.error('createProduct failed', { error: error.message });
-      return { success: false, error: error.response?.data || { message: error.message } };
+      logger.error('createProduct failed', { productData, error: error.message, responseData: error.response?.data });
+      // Re-throw the error to be caught by the controller
+      throw error;
     }
   }
 
@@ -128,11 +138,15 @@ class TelegramService {
   async updateProduct(productId, productData) {
     try {
       await this.initConfig();
+      logger.info('Updating product on Telegram API', { productId, productData });
       const res = await this.api.put(`/products/${productId}`, productData);
+      logger.info('Product updated successfully', { productId, responseData: res.data });
       return { success: true, data: res.data };
     } catch (error) {
-      logger.error('updateProduct failed', { productId, error: error.message });
-      return { success: false, error: error.response?.data || { message: error.message } };
+      const status = error.response?.status;
+      const responseData = error.response?.data || { message: error.message };
+      logger.error('updateProduct failed', { productId, productData, error: error.message, status, responseData });
+      return { success: false, error: { status, data: responseData } };
     }
   }
 
@@ -180,6 +194,42 @@ class TelegramService {
       return { success: true, data: payload };
     } catch (error) {
       logger.error('getUnmappedGroups failed', { error: error.message });
+      return { success: false, error: error.response?.data || { message: error.message } };
+    }
+  }
+
+  async getGroupStatus(productId) {
+    try {
+      await this.initConfig();
+      const res = await this.api.get(`/products/${productId}/group`);
+      
+      // Handle the response structure
+      const groupData = res.data;
+      
+      return { 
+        success: true, 
+        group: {
+          active: groupData?.is_active || groupData?.active || false,
+          id: groupData?.telegram_group_id || groupData?.id || null,
+          name: groupData?.telegram_group_name || groupData?.name || null,
+          ...groupData
+        }
+      };
+    } catch (error) {
+      logger.error('getGroupStatus failed', { productId, error: error.message });
+      
+      // If the product doesn't have a group mapped, return a default inactive status
+      if (error.response?.status === 404) {
+        return { 
+          success: true, 
+          group: { 
+            active: false, 
+            id: null, 
+            name: null 
+          } 
+        };
+      }
+      
       return { success: false, error: error.response?.data || { message: error.message } };
     }
   }
@@ -244,14 +294,14 @@ class TelegramService {
 
   /**
    * generateInviteLink(user, product, subscription)
-   * - product.telegramProductId must exist (synced)
+   * - product.externalId must exist (synced)
    * - subscription.expiresAt assumed to be a Date object (or convertible)
    */
   async generateInviteLink(user, product, subscription) {
     try {
       await this.initConfig();
 
-      if (!product?.telegramProductId) {
+      if (!product?.externalId) {
         logger.warn('Cannot generate invite link: product not synced with Telegram', { productId: product?._id });
         return { success: false, error: 'Product not synced with Telegram' };
       }
@@ -264,7 +314,7 @@ class TelegramService {
 
       const subData = {
         email: user.email,
-        product_id: product.telegramProductId,
+        product_id: product.externalId,
         expiration_datetime: expires.toISOString(),
       };
 
@@ -273,7 +323,7 @@ class TelegramService {
         logger.info('Successfully created Telegram subscription and obtained invite link', {
           userId: user._id,
           productId: product._id,
-          telegramProductId: product.telegramProductId,
+          telegramProductId: product.externalId,
         });
 
         return {
@@ -308,14 +358,14 @@ class TelegramService {
         return { success: false, error: 'User or Product not found' };
       }
 
-      if (!product.telegramProductId) {
+      if (!product.externalId) {
         logger.warn('Cannot kick user: product not synced with Telegram', { productId });
         return { success: false, error: 'Product not synced with Telegram' };
       }
 
-      const result = await this.cancelSubscription(user.email, product.telegramProductId);
+      const result = await this.cancelSubscription(user.email, product.externalId);
       if (result.success) {
-        logger.info(`Successfully kicked user ${user.email} from product ${product.telegramProductId}`);
+        logger.info(`Successfully kicked user ${user.email} from product ${product.externalId}`);
         return { success: true };
       } else {
         logger.error('Failed to kick user', { userEmail: user.email, error: result.error });
@@ -336,22 +386,56 @@ class TelegramService {
     try {
       await this.initConfig();
 
-      const portfolios = await Portfolio.find({}).select('name description subscriptionFee emandateSubriptionFees telegramProductId');
-      const bundles = await Bundle.find({}).select('name description monthlyPrice yearlyPrice telegramProductId');
+      // 1. Fetch all remote products first to avoid duplicates
+      const remoteProductsResult = await this.getAllProducts();
+      if (!remoteProductsResult.success) {
+        logger.error('syncWithTelegram failed: Could not fetch remote products.');
+        return { success: false, error: 'Could not fetch remote products.' };
+      }
+      const remoteProductMap = new Map(remoteProductsResult.data.map(p => [p.name, p]));
+      logger.info(`Found ${remoteProductMap.size} existing products on Telegram service.`);
+
+      const portfolios = await Portfolio.find({}).select('name description subscriptionFee emandateSubriptionFees telegramProductId externalId');
+      const bundles = await Bundle.find({}).select('name description monthlyPrice yearlyPrice telegramProductId externalId');
 
       let createdCount = 0;
       let updatedCount = 0;
       let failedCount = 0;
 
+      const allItems = [
+        ...portfolios.map(p => ({ ...p.toObject(), type: 'portfolio' })),
+        ...bundles.map(b => ({ ...b.toObject(), type: 'bundle' }))
+      ];
+
       const processItem = async (item, type) => {
+        const model = type === 'portfolio' ? Portfolio : Bundle;
         try {
           let price = 0;
           if (type === 'portfolio') {
             const monthlyFee = Array.isArray(item.subscriptionFee) ? item.subscriptionFee.find(f => f.type === 'monthly') : null;
-            const emandateMonthlyFee = Array.isArray(item.emandateSubriptionFees) ? item.emandateSubriptionFees.find(f => f.type === 'monthly') : null;
-            price = monthlyFee?.price || emandateMonthlyFee?.price || item.subscriptionFee?.[0]?.price || 0;
+            if (monthlyFee?.price > 0) {
+              price = monthlyFee.price;
+            } else {
+              const emandateMonthlyFee = Array.isArray(item.emandateSubriptionFees) ? item.emandateSubriptionFees.find(f => f.type === 'monthly') : null;
+              if (emandateMonthlyFee?.price > 0) {
+                price = emandateMonthlyFee.price;
+              } else {
+                const quarterlyFee = Array.isArray(item.subscriptionFee) ? item.subscriptionFee.find(f => f.type === 'quarterly') : null;
+                if (quarterlyFee?.price > 0) {
+                  price = Math.round(quarterlyFee.price / 3);
+                } else {
+                  price = item.subscriptionFee?.[0]?.price || item.emandateSubriptionFees?.[0]?.price || 0;
+                }
+              }
+            }
           } else { // bundle
-            price = item.monthlyPrice || item.yearlyPrice || 0;
+            price = item.monthlyPrice || Math.round(item.yearlyPrice / 12) || 0;
+          }
+
+          if (price <= 0 || price > 50000) {
+            logger.warn(`Invalid price calculated for ${type}: ${price}, skipping item`, { itemName: item.name });
+            // We don't count this as a failure, just a skip.
+            return;
           }
 
           const description = item.description && item.description.length > 0
@@ -361,56 +445,59 @@ class TelegramService {
           const productData = {
             name: item.name,
             description,
-            price,
+            // price, // Price is still disabled as per previous findings
           };
 
-          let result;
-          if (item.telegramProductId) {
-            result = await this.updateProduct(item.telegramProductId, productData);
-            if (result.success) updatedCount++;
-            else {
-              failedCount++;
-              logger.error('Failed to update telegram product', { itemName: item.name, result });
-            }
-          } else {
-            result = await this.createProduct(productData);
-            if (result.success && (result.data?.id || result.data?.product_id || result.data?._id)) {
-              // attempt common id fields returned by different APIs
-              const newId = result.data.id || result.data.product_id || result.data._id;
-              item.telegramProductId = newId;
-              await item.save();
-              createdCount++;
+          // 2. Check if product exists on remote by name
+          const existingRemoteProduct = remoteProductMap.get(item.name);
+          const localExternalId = item.externalId;
+
+          if (existingRemoteProduct) {
+            logger.info(`Updating existing Telegram product by name: '${item.name}'`, { remoteId: existingRemoteProduct.id });
+            const result = await this.updateProduct(existingRemoteProduct.id, productData);
+            
+            if (result.success) {
+              updatedCount++;
+              logger.info(`Successfully updated Telegram product`, { itemName: item.name });
+              // 3. Ensure local ID matches the remote ID
+              if (String(localExternalId) !== String(existingRemoteProduct.id)) {
+                await model.findByIdAndUpdate(item._id, { externalId: existingRemoteProduct.id, telegramProductId: null });
+                logger.info(`Corrected local externalId for '${item.name}' to ${existingRemoteProduct.id}`);
+              }
             } else {
               failedCount++;
-              logger.error('Failed to create Telegram product for item', { itemName: item.name, error: result.error });
+              logger.error(`Failed to update telegram product`, { itemName: item.name, error: result.error });
+            }
+          } else {
+            // 4. If it doesn't exist remotely, create it
+            logger.info(`Creating new Telegram product`, { itemName: item.name });
+            const newProduct = await this.createProduct(productData);
+            if (newProduct && newProduct.id) {
+              createdCount++;
+              await model.findByIdAndUpdate(item._id, { externalId: newProduct.id, telegramProductId: null });
+              logger.info(`Successfully created Telegram product`, { itemName: item.name, newId: newProduct.id });
+            } else {
+              failedCount++;
+              logger.error(`Failed to create Telegram product for item`, { itemName: item.name, error: newProduct });
             }
           }
-        } catch (err) {
+        } catch (e) {
           failedCount++;
-          logger.error('Exception while syncing item', { itemName: item.name, error: err.message });
+          logger.error(`Exception while syncing item`, { itemName: item.name, error: e.message });
         }
       };
 
-      for (const p of portfolios) {
-        // sequential to avoid spamming remote API — change to Promise.all with concurrency if desired
-        // Keep sequential to be safe with rate limits.
-        // If you want concurrency, consider using p-map or Promise.allSettled with a concurrency limiter.
-        // For now stick to sequential.
-        // eslint-disable-next-line no-await-in-loop
-        await processItem(p, 'portfolio');
+      for (const item of allItems) {
+        await processItem(item, item.type);
       }
 
-      for (const b of bundles) {
-        // eslint-disable-next-line no-await-in-loop
-        await processItem(b, 'bundle');
-      }
-
+      const success = failedCount === 0;
       const summary = {
-        success: failedCount === 0,
+        success,
         created: createdCount,
         updated: updatedCount,
         failed: failedCount,
-        total: portfolios.length + bundles.length,
+        total: allItems.length,
       };
 
       logger.info('Telegram sync completed.', summary);
@@ -439,6 +526,32 @@ class TelegramService {
       return { success: true, data: payload, total: payload.length };
     } catch (error) {
       logger.error('Error fetching telegram products', { error: error.message });
+      return { success: false, error: error.response?.data || { message: error.message } };
+    }
+  }
+
+  /**
+   * Test Telegram webhook configuration by calling getWebhookInfo
+   */
+  async testWebhook() {
+    try {
+      await this.initConfig();
+      
+      // Use direct axios call to Telegram Bot API
+      const botApiUrl = `https://api.telegram.org/bot${this.authToken}/getWebhookInfo`;
+      const res = await axios.get(botApiUrl);
+      
+      if (res.data.ok) {
+        return { 
+          success: true, 
+          ...res.data.result 
+        };
+      } else {
+        logger.error('Telegram Bot API returned not ok', { response: res.data });
+        return { success: false, error: 'Telegram Bot API returned error' };
+      }
+    } catch (error) {
+      logger.error('Error testing webhook', { error: error.message });
       return { success: false, error: error.response?.data || { message: error.message } };
     }
   }

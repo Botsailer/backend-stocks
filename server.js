@@ -3,7 +3,7 @@ const passport = require('passport');
 const cors = require('cors');
 const app = express();
 const config = require('./config/config');
-const dbAdapter = require('./utils/db'); 
+const dbAdapter = require('./utils/db');
 const authRoutes = require('./routes/authRoutes');
 const setupSwagger = require('./swaggerOptions');
 const cronController = require('./controllers/portfoliocroncontroller');
@@ -13,6 +13,16 @@ const { startSubscriptionCleanupJob } = require('./services/subscriptioncron');
 // Import the new cron scheduler
 const { CronScheduler, CronLogger } = require('./utils/cornscheduler');
 const { default: mongoose } = require('mongoose');
+
+// Setup global Winston default transport to prevent "no transports" warnings
+const winston = require('winston');
+winston.add(new winston.transports.Console({
+  level: 'info',
+  format: winston.format.combine(
+    winston.format.timestamp(),
+    winston.format.simple()
+  )
+}));
 
 // Import log cleanup utilities
 const fs = require('fs').promises;

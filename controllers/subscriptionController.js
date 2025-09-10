@@ -2253,7 +2253,7 @@ exports.verifyEmandate = async (req, res) => {
         if (sub.productType === "Portfolio") {
           try {
             const product = await Portfolio.findById(sub.productId);
-            if (product && product.telegramProductId) {
+            if (product && product.externalId) {
               const inviteResult = await TelegramService.generateInviteLink(req.user, product, sub);
               if (inviteResult.success) {
                 // Update subscription
@@ -2386,10 +2386,10 @@ exports.verifyEmandate = async (req, res) => {
         if (sub.user) {
             const user = await User.findById(sub.user);
             const product = await Portfolio.findById(sub.productId) || await Bundle.findById(sub.productId);
-            if (user && product && product.telegramProductId) {
+            if (user && product && product.externalId) {
                 try {
-                    await TelegramService.kickUser(user.email, product.telegramProductId);
-                    logger.info(`Kicked user ${user.email} from product ${product.telegramProductId}`);
+                    await TelegramService.kickUser(user._id, sub.productId);
+                    logger.info(`Kicked user ${user.email} from product ${product.externalId}`);
                 } catch (error) {
                     logger.error(`Failed to kick user ${user.email}:`, error);
                 }
@@ -2623,12 +2623,12 @@ exports.cancelSubscription = async (req, res) => {
     if (subscription.user) {
         const user = await User.findById(subscription.user);
         const product = await Portfolio.findById(subscription.productId) || await Bundle.findById(subscription.productId);
-        if (user && product && product.telegramProductId) {
+        if (user && product && product.externalId) {
             try {
-                const kickResult = await TelegramService.kickUser(user.email, product.telegramProductId);
+                const kickResult = await TelegramService.kickUser(user._id, subscription.productId);
                 
                 if (kickResult.success) {
-                    logger.info(`Kicked Telegram user ${user.email} from product ${product.telegramProductId}`);
+                    logger.info(`Kicked Telegram user ${user.email} from product ${product.externalId}`);
                 } else {
                     logger.warn(`Failed to kick Telegram user ${user.email}: ${kickResult.error}`);
                 }
