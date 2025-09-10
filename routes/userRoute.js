@@ -427,6 +427,38 @@ router.put('/profile', requireAuth, userController.updateProfile);
  */
 router.get('/esign/verify', requireAuth, userController.verifyEsignStatus);
 
+/**
+ * @swagger
+ * /api/user/states:
+ *   get:
+ *     summary: Get list of Indian states
+ *     description: Returns all valid Indian states that can be used in the user profile
+ *     tags: [User Profile]
+ *     responses:
+ *       200:
+ *         description: List of Indian states
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: array
+ *               items:
+ *                 type: string
+ *               example: ["Maharashtra", "Karnataka", "Delhi"]
+ */
+router.get('/states', (req, res) => {
+  // List of Indian states (should match the enum in the model)
+  const indianStates = [
+    'Andhra Pradesh', 'Arunachal Pradesh', 'Assam', 'Bihar', 'Chhattisgarh', 'Goa', 'Gujarat', 
+    'Haryana', 'Himachal Pradesh', 'Jharkhand', 'Karnataka', 'Kerala', 'Madhya Pradesh', 
+    'Maharashtra', 'Manipur', 'Meghalaya', 'Mizoram', 'Nagaland', 'Odisha', 'Punjab', 'Rajasthan', 
+    'Sikkim', 'Tamil Nadu', 'Telangana', 'Tripura', 'Uttar Pradesh', 'Uttarakhand', 'West Bengal',
+    'Andaman and Nicobar Islands', 'Chandigarh', 'Dadra and Nagar Haveli and Daman and Diu', 
+    'Delhi', 'Jammu and Kashmir', 'Ladakh', 'Lakshadweep', 'Puducherry'
+  ];
+  
+  res.json(indianStates);
+});
+
 // ======================
 //  Portfolio Routes
 // ======================

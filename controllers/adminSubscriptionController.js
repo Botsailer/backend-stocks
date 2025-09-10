@@ -313,3 +313,23 @@ exports.deleteSubscription = async (req, res) => {
     return res.status(500).json({ error: 'Failed to delete subscription' });
   }
 };
+
+/**
+ * Process expired subscriptions immediately
+ * This allows admins to force the system to check and kick expired users
+ * from Telegram groups without waiting for the scheduled cron job
+ */
+exports.processExpiredSubscriptions = async (req, res) => {
+  try {
+    const subscriptionCronService = require('../services/subscriptioncron');
+    const result = await subscriptionCronService.forceProcessExpiredSubscriptions();
+    
+    return res.status(200).json({ 
+      message: 'Expired subscription processing triggered successfully',
+      result
+    });
+  } catch (err) {
+    console.error('Admin processExpiredSubscriptions error:', err);
+    return res.status(500).json({ error: 'Failed to process expired subscriptions' });
+  }
+};

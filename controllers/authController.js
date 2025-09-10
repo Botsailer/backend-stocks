@@ -11,7 +11,8 @@ const {
 } = require('../config/config').jwt;
 
 exports.signup = async (req, res) => {
-  const { username, email, password, phone, mainUserId } = req.body;
+  const { username, email, password, phone, state, mainUserId } = req.body;
+  
   if (!username || !email || !password || !phone) {
     return res.status(400).json({ error: 'Missing required fields: username, email, password, phone are required.' });
   }
@@ -21,11 +22,11 @@ exports.signup = async (req, res) => {
     provider: 'local'
   });
   if (exists) {
-    return res.status(400).json({ error: 'User already exists' });
+    return res.status(400).json({ error: 'User already exists with this username or email' });
   }
 
   const hashed = await bcrypt.hash(password, 10);
-  const user = await db.createUser({
+  const userData = {
     username,
     email,
     password: hashed,
@@ -33,7 +34,14 @@ exports.signup = async (req, res) => {
     provider: 'local',
     mainUserId: mainUserId || null,
     changedPasswordAt: Date.now()
-  });
+  };
+  
+  // Add state if provided
+  if (state) {
+    userData.state = state;
+  }
+  
+  const user = await db.createUser(userData);
 
   // Generate email-verification token
   const verifyToken = jwt.sign(

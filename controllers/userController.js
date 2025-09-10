@@ -139,7 +139,7 @@ exports.getProfile = async (req, res) => {
       idType: { $in: ['esign', 'document', 'document_signing', 'pdf_auto_fetched'] }
     }).sort({ createdAt: -1 });
 
-    const requiredFields = ['fullName', 'phone', 'pandetails'];
+    const requiredFields = ['fullName', 'phone', 'pandetails', 'state', 'dateOfBirth'];
     const isComplete = requiredFields.every(field => user[field] && user[field] !== null);
     
     const hasActiveSubscription = await Subscription.exists({
@@ -199,16 +199,36 @@ exports.updateProfile = async (req, res) => {
                              'panUpdatedByUser', 'panUpdatedAt'];
     restrictedFields.forEach(field => delete updates[field]);
 
-    if (updates.username) {
-      const existingUser = await User.findOne({ 
-        username: updates.username,
-        _id: { $ne: userId }
-      });
-      if (existingUser) {
-        return res.status(400).json({ error: 'Username already taken' });
+    // Handle state field if provided
+    if (updates.state) {
+      // List of Indian states (should match the enum in the model)
+      const indianStates = [
+        'Andhra Pradesh', 'Arunachal Pradesh', 'Assam', 'Bihar', 'Chhattisgarh', 'Goa', 'Gujarat', 
+        'Haryana', 'Himachal Pradesh', 'Jharkhand', 'Karnataka', 'Kerala', 'Madhya Pradesh', 
+        'Maharashtra', 'Manipur', 'Meghalaya', 'Mizoram', 'Nagaland', 'Odisha', 'Punjab', 'Rajasthan', 
+        'Sikkim', 'Tamil Nadu', 'Telangana', 'Tripura', 'Uttar Pradesh', 'Uttarakhand', 'West Bengal',
+        'Andaman and Nicobar Islands', 'Chandigarh', 'Dadra and Nagar Haveli and Daman and Diu', 
+        'Delhi', 'Jammu and Kashmir', 'Ladakh', 'Lakshadweep', 'Puducherry'
+      ];
+      
+      if (!indianStates.includes(updates.state)) {
+        return res.status(400).json({ error: `Invalid state. Must be one of: ${indianStates.join(', ')}` });
+      }
+    }
+    
+    // Handle date of birth
+    if (updates.dateOfBirth) {
+      try {
+        updates.dateOfBirth = new Date(updates.dateOfBirth);
+        if (isNaN(updates.dateOfBirth.getTime())) {
+          throw new Error('Invalid date format');
+        }
+      } catch (error) {
+        return res.status(400).json({ error: 'Invalid date format for dateOfBirth. Use YYYY-MM-DD format.' });
       }
     }
 
+    // Check if email is being updated
     if (updates.email) {
       const existingUser = await User.findOne({ 
         email: updates.email,
@@ -218,6 +238,17 @@ exports.updateProfile = async (req, res) => {
         return res.status(400).json({ error: 'Email already registered' });
       }
       updates.emailVerified = false;
+    }
+    
+    // Check if username is being updated
+    if (updates.username) {
+      const existingUser = await User.findOne({ 
+        username: updates.username,
+        _id: { $ne: userId }
+      });
+      if (existingUser) {
+        return res.status(400).json({ error: 'Username already taken' });
+      }
     }
 
     if (updates.pandetails && updates.pandetails.trim() !== '') {
@@ -237,17 +268,45 @@ exports.updateProfile = async (req, res) => {
       }
       
       const pan = updates.pandetails.trim().toUpperCase();
-      const dob = updates.panDob || req.body.dateofBirth; // expected DD-MM-YYYY
+      
+      // Get date of birth - required for PAN verification
+      // Try to get it from the request in different formats
+      const dob = updates.dateOfBirth || updates.panDob || req.body.dateofBirth; // expected DD-MM-YYYY
       const nameForPan = updates.fullName || currentUser.fullName || updates.name;
 
       if (!nameForPan || !dob) {
         return res.status(400).json({
-          error: 'fullName and dateofBirth (DD-MM-YYYY) are required to verify PAN before saving'
+          error: 'fullName and dateOfBirth are required to verify PAN before saving'
         });
       }
 
+      // If dateOfBirth is provided in a date format, convert to required format for PAN verification
+      let formattedDob = dob;
+      if (dob instanceof Date) {
+        const day = String(dob.getDate()).padStart(2, '0');
+        const month = String(dob.getMonth() + 1).padStart(2, '0');
+        const year = dob.getFullYear();
+        formattedDob = `${day}-${month}-${year}`;
+      } else if (typeof dob === 'string' && dob.includes('-')) {
+        // Try to parse the date string and convert to DD-MM-YYYY if needed
+        try {
+          const dateObj = new Date(dob);
+          if (!isNaN(dateObj.getTime())) {
+            const day = String(dateObj.getDate()).padStart(2, '0');
+            const month = String(dateObj.getMonth() + 1).padStart(2, '0');
+            const year = dateObj.getFullYear();
+            formattedDob = `${day}-${month}-${year}`;
+            
+            // Save the date of birth in the user's profile
+            updates.dateOfBirth = dateObj;
+          }
+        } catch (error) {
+          console.error('Error parsing date:', error);
+        }
+      }
+
       try {
-        const verifyResp = await digioPanVerify({ id_no: pan, name: nameForPan, dob });
+        const verifyResp = await digioPanVerify({ id_no: pan, name: nameForPan, dob: formattedDob });
         updates.pandetails = pan;
         updates.panVerified = true;
         updates.panVerificationStatus = 'verified';
@@ -287,7 +346,7 @@ exports.updateProfile = async (req, res) => {
       return res.status(404).json({ error: 'User not found' });
     }
 
-    const requiredFields = ['fullName', 'phone'];
+    const requiredFields = ['fullName', 'phone', 'pandetails', 'state', 'dateOfBirth'];
     const isComplete = requiredFields.every(field => updatedUser[field] && updatedUser[field] !== null);
 
     res.json({

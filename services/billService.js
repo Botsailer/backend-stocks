@@ -82,8 +82,39 @@ async function generateBill(subscriptionId, paymentDetails = {}) {
     }
 
     // Prepare customer details
-    const customerDetails = {
-      name: subscription.user.fullName || subscription.user.username,
+      // Make sure we have a valid email address to avoid validation failures
+    if (!subscription.user || !subscription.user.email) {
+      logger.warn('User missing email for bill generation', {
+        subscriptionId: subscription._id,
+        userId: subscription.user?._id || 'unknown'
+      });
+      
+      // If email is missing, fetch it from the user model directly
+      if (subscription.user && subscription.user._id) {
+        try {
+          const User = require('../models/user');
+          const fullUser = await User.findById(subscription.user._id);
+          if (fullUser && fullUser.email) {
+            logger.info('Retrieved user email from database for bill generation', {
+              userId: subscription.user._id,
+              email: fullUser.email
+            });
+            subscription.user.email = fullUser.email;
+          } else {
+            throw new Error('User email is required for bill generation');
+          }
+        } catch (err) {
+          logger.error('Failed to retrieve user email for bill generation', {
+            userId: subscription.user._id,
+            error: err.message
+          });
+          throw new Error('User email is required for bill generation');
+        }
+      } else {
+        throw new Error('User email is required for bill generation');
+      }
+    }    const customerDetails = {
+      name: subscription.user.fullName || subscription.user.username || 'Customer',
       email: subscription.user.email,
       phone: subscription.user.phone || '',
       panDetails: subscription.user.pandetails || ''

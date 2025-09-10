@@ -37,6 +37,13 @@ const SubscriptionSchema = new Schema({
   invite_link_expires_at: {
     type: Date
   },
+  kickAttemptCount: {
+    type: Number,
+    default: 0
+  },
+  lastKickAttempt: {
+    type: Date
+  },
   
   // Subscription details
   type: {

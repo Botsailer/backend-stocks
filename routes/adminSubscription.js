@@ -351,4 +351,39 @@ router.put('/:id', adminCtl.updateSubscription);
  */
 router.delete('/:id', adminCtl.deleteSubscription);
 
+/**
+ * @swagger
+ * /admin/subscriptions/process-expired:
+ *   post:
+ *     tags: [AdminSubscriptions]
+ *     summary: Force process expired subscriptions
+ *     description: Manually triggers the processing of expired subscriptions to kick users from Telegram groups
+ *     security:
+ *       - bearerAuth: []
+ *     responses:
+ *       200:
+ *         description: Expired subscription processing triggered successfully
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 message:
+ *                   type: string
+ *                   example: Expired subscription processing triggered successfully
+ *                 result:
+ *                   type: object
+ *                   properties:
+ *                     success:
+ *                       type: boolean
+ *                       example: true
+ *       401:
+ *         description: Unauthorized
+ *       403:
+ *         description: Admin only
+ *       500:
+ *         description: Server error
+ */
+router.post('/process-expired', adminCtl.processExpiredSubscriptions);
+
 module.exports = router;

@@ -212,11 +212,23 @@ async function processExpiredSubscriptions() {
     const now = new Date();
     logger.info(`Starting expired subscription processing at ${now.toISOString()}`);
     
-    // Find subscriptions that expired but haven't been processed
+    // Find subscriptions that expired but haven't been successfully processed
+    // Either they're active and expired, or they're marked as expired but the telegram kick wasn't successful
     const expiredSubs = await Subscription.find({
-      status: 'active',
-      expiresAt: { $lt: now },
-      telegram_kicked: { $ne: true } // Only unprocessed
+      $or: [
+        { status: 'active', expiresAt: { $lt: now } },
+        { 
+          status: 'expired', 
+          telegram_kicked: { $ne: true },
+          // Limit to subscriptions that haven't had too many kick attempts
+          $or: [
+            { kickAttemptCount: { $lt: 3 } },
+            { kickAttemptCount: { $exists: false } }
+          ],
+          // Only retry subscriptions that expired within the last 30 days
+          expiredAt: { $gt: new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000) }
+        }
+      ]
     }).populate({
       path: 'productId',
       refPath: 'productType'
@@ -248,14 +260,25 @@ async function processExpiredSubscriptions() {
           // Get correct product ID for cancellation
           let productId = null;
           
-          if (sub.productId.externalId) {
-            // Use the external ID if available
-            productId = sub.productId.externalId;
-            logger.info(`Using externalId for Telegram cancellation: ${productId}`);
-          } else {
-            // Fall back to MongoDB ID
-            productId = sub.productId._id || sub.productId;
-            logger.info(`Using MongoDB ID for Telegram cancellation: ${productId}`);
+          if (sub.productId) {
+            if (typeof sub.productId.externalId === 'string' && sub.productId.externalId.trim() !== '') {
+              // Use the external ID if available and valid
+              productId = sub.productId.externalId;
+              logger.info(`Using externalId for Telegram cancellation: ${productId}, user: ${userEmail}`);
+            } else if (sub.productId._id) {
+              // Fall back to MongoDB ID
+              productId = sub.productId._id.toString();
+              logger.info(`Using MongoDB ID for Telegram cancellation: ${productId}, user: ${userEmail}`);
+            } else if (typeof sub.productId === 'string') {
+              // Handle case where productId is already a string
+              productId = sub.productId;
+              logger.info(`Using string productId for Telegram cancellation: ${productId}, user: ${userEmail}`);
+            }
+          }
+          
+          if (!productId) {
+            logger.error(`Cannot determine product ID for Telegram cancellation, subscription: ${sub._id}, user: ${userEmail}`);
+            productId = sub.productId ? (sub.productId._id ? sub.productId._id.toString() : sub.productId.toString()) : null;
           }
           
           cancelResult = await TelegramService.cancelSubscription(
@@ -319,13 +342,18 @@ async function processExpiredSubscriptions() {
         
         // Update subscription status
         try {
+          // Set telegram_kicked based on success of the cancel operation
+          const wasKicked = cancelResult.success || kickResult.success;
+          
           // Use direct MongoDB update instead of Mongoose document save
           const updateResult = await Subscription.updateOne(
             { _id: sub._id },
             { 
               status: 'expired',
-              telegram_kicked: true, // Mark as kicked regardless of actual kick success
-              expiredAt: now
+              telegram_kicked: wasKicked, // Only mark as kicked if the operation was successful
+              expiredAt: now,
+              kickAttemptCount: (sub.kickAttemptCount || 0) + 1,
+              lastKickAttempt: now
             }
           );
           
@@ -799,10 +827,42 @@ const startSubscriptionCleanupJob = () => {
 startSubscriptionCleanupJob();
 cleanupExpiredSubscriptions();
 
+/**
+ * Force processing of expired subscriptions manually
+ * This function allows administrators to immediately process expired subscriptions
+ * without waiting for the scheduled cron job
+ * @returns {Promise<Object>} Result with success status
+ */
+async function forceProcessExpiredSubscriptions() {
+  logger.info('Manually triggering expired subscription processing');
+  try {
+    await processExpiredSubscriptions();
+    logger.info('Manual expired subscription processing completed');
+    return { 
+      success: true, 
+      message: 'Expired subscription processing completed', 
+      timestamp: new Date().toISOString() 
+    };
+  } catch (error) {
+    logger.error('Manual expired subscription processing failed', { 
+      error: error.message,
+      stack: error.stack
+    });
+    // Return information about the error but still resolve the promise
+    return { 
+      success: false, 
+      error: error.message,
+      message: 'Expired subscription processing failed but was logged',
+      timestamp: new Date().toISOString()
+    };
+  }
+}
+
 // Export functions
 module.exports = {
   startSubscriptionCleanupJob,
   cleanupExpiredSubscriptions,
   enhancedCleanupExpiredSubscriptions,
-  processExpiredSubscriptions
+  processExpiredSubscriptions,
+  forceProcessExpiredSubscriptions
 };

@@ -267,6 +267,29 @@ class TelegramService {
   async createSubscription(subscriptionData, retryCount = 0) {
     try {
       await this.initConfig();
+      
+      // Validate required fields for Telegram API
+      if (!subscriptionData.email) {
+        logger.error('createSubscription failed: Missing email', { 
+          subscriptionData: { product_id: subscriptionData.product_id } 
+        });
+        return { 
+          success: false, 
+          error: { message: 'Email is required for Telegram subscription' } 
+        };
+      }
+      
+      if (!subscriptionData.product_id) {
+        logger.error('createSubscription failed: Missing product_id', { 
+          subscriptionData: { email: subscriptionData.email } 
+        });
+        return { 
+          success: false, 
+          error: { message: 'Product ID is required for Telegram subscription' } 
+        };
+      }
+      
+      // Make the API call
       const res = await this.api.post('/subscribe', subscriptionData);
       return { success: true, data: res.data };
     } catch (error) {
@@ -289,15 +312,47 @@ class TelegramService {
     }
   }
 
-  async cancelSubscription(email, productId) {
+  async cancelSubscription(email, productId, retryCount = 0) {
     try {
       await this.initConfig();
+      
+      // Log the attempt with better details
+      logger.info('Attempting to cancel subscription', { 
+        email, 
+        productId, 
+        attempt: retryCount + 1,
+        timestamp: new Date().toISOString()
+      });
+      
       const res = await this.api.delete('/subscriptions', {
         data: { email, product_id: productId }
       });
+      
+      logger.info('Successfully cancelled subscription', { 
+        email, 
+        productId, 
+        timestamp: new Date().toISOString() 
+      });
+      
       return { success: true, data: res.data };
     } catch (error) {
-      logger.error('cancelSubscription failed', { email, productId, error: error.message });
+      // If the error is a timeout and we haven't retried too many times, try again
+      if (error.message && error.message.includes('timeout') && retryCount < 2) {
+        logger.warn(`Telegram API timeout during cancelSubscription, retrying (${retryCount + 1}/2)...`, { 
+          email,
+          productId
+        });
+        // Wait a bit before retrying
+        await new Promise(resolve => setTimeout(resolve, 2000));
+        return this.cancelSubscription(email, productId, retryCount + 1);
+      }
+      
+      logger.error('cancelSubscription failed', { 
+        email, 
+        productId, 
+        error: error.message,
+        retryAttempts: retryCount
+      });
       return { success: false, error: error.response?.data || { message: error.message } };
     }
   }
