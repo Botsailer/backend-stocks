@@ -595,12 +595,21 @@ exports.createOrder = async (req, res) => {
     }
 
     // ✨ ENHANCED: Check subscription status with renewal logic
-  const subscriptionStatus = await checkSubscriptionStatus(userId, productType, productId);
+    const subscriptionStatus = await checkSubscriptionStatus(userId, productType, productId);
     
+    // Prevent resubscription if user already has an active subscription that's not within renewal window
     if (subscriptionStatus.hasActiveSubscription && !subscriptionStatus.canRenew) {
+      logger.warn('Prevented duplicate subscription creation', {
+        userId: userId.toString(),
+        productType,
+        productId: productId.toString(),
+        existingExpiry: subscriptionStatus.existingSubscription.expiresAt,
+        daysUntilExpiry: subscriptionStatus.daysUntilExpiry
+      });
+      
       return res.status(409).json({ 
         success: false, 
-        error: subscriptionStatus.message,
+        error: `You already have an active subscription for this product that expires in ${subscriptionStatus.daysUntilExpiry} days. You can renew it starting 7 days before expiry.`,
         canRenewAfter: new Date(subscriptionStatus.existingSubscription.expiresAt.getTime() - (7 * 24 * 60 * 60 * 1000)),
         currentExpiry: subscriptionStatus.existingSubscription.expiresAt
       });
@@ -1020,16 +1029,18 @@ exports.createEmandate = async (req, res) => {
 
     const subscriptionStatus = await checkSubscriptionStatus(userId, productType, productId);
     
+    // Prevent resubscription if user already has an active subscription that's not within renewal window
     if (subscriptionStatus.hasActiveSubscription && !subscriptionStatus.canRenew) {
       logger.warn("EMandate creation blocked: Active subscription exists", {
         userId: userId.toString(),
         productType,
         productId: productId.toString(),
-        existingExpiry: subscriptionStatus.existingSubscription.expiresAt
+        existingExpiry: subscriptionStatus.existingSubscription.expiresAt,
+        daysUntilExpiry: subscriptionStatus.daysUntilExpiry
       });
       return res.status(409).json({ 
         success: false, 
-        error: subscriptionStatus.message,
+        error: `You already have an active subscription for this product that expires in ${subscriptionStatus.daysUntilExpiry} days. You can renew it starting 7 days before expiry.`,
         code: "ACTIVE_SUBSCRIPTION_EXISTS",
         canRenewAfter: new Date(subscriptionStatus.existingSubscription.expiresAt.getTime() - (7 * 24 * 60 * 60 * 1000)),
         currentExpiry: subscriptionStatus.existingSubscription.expiresAt
@@ -2162,10 +2173,13 @@ exports.verifyPayment = async (req, res) => {
           isCartCheckout: notes.cartCheckout === "true"
         });
         
-        // Ensure we generate a bill number before sending the bill
-        const billNumber = await require('../services/billService').generateBillNumber();
+        // Directly import the billService module to access the generateBillNumber function
+        const billService = require('../services/billService');
         
-        const bill = await generateAndSendBill(newSubscriptions[0]._id, {
+        // Generate bill number
+        const billNumber = await billService.generateBillNumber();
+        
+        const bill = await billService.generateAndSendBill(newSubscriptions[0]._id, {
           paymentId,
           orderId,
           billNumber, // Explicitly provide bill number
@@ -2207,70 +2221,136 @@ exports.verifyPayment = async (req, res) => {
       responseData.billError = billError.message;
     }
     
-    // Enhanced Telegram integration
+    // Enhanced and unified Telegram integration approach
+    const allTelegramInvites = [];
+    
     if (notes.cartCheckout === "true") {
-      // For cart checkout, handle Telegram for each portfolio subscription
-      const allTelegramInvites = [];
+      // For cart checkout, handle Telegram for each individual subscription
+      logger.info('Processing Telegram invites for cart checkout', {
+        userId: req.user._id.toString(),
+        userEmail: req.user.email,
+        subscriptionsCount: newSubscriptions.length
+      });
+      
       for (const subscription of newSubscriptions) {
         try {
           const telegramInvites = await handleTelegramIntegration(
             req.user, 
-            "Portfolio", 
+            subscription.productType, // Use the actual product type from subscription
             subscription.productId, 
             subscription
           );
-          allTelegramInvites.push(...telegramInvites);
+          
+          if (telegramInvites && telegramInvites.length > 0) {
+            allTelegramInvites.push(...telegramInvites);
+            logger.info('Telegram invites generated for cart item', {
+              subscriptionId: subscription._id.toString(),
+              productType: subscription.productType,
+              productId: subscription.productId.toString(),
+              inviteCount: telegramInvites.length
+            });
+          }
         } catch (error) {
           logger.error('Telegram integration error for cart item', {
-            subscriptionId: subscription._id,
-            portfolioId: subscription.productId,
-            error: error.message
+            subscriptionId: subscription._id.toString(),
+            productType: subscription.productType,
+            productId: subscription.productId.toString(),
+            error: error.message,
+            stack: error.stack
           });
         }
       }
-      
-      if (allTelegramInvites.length > 0) {
-        responseData.telegramInviteLinks = allTelegramInvites;
-        responseData.telegramMessage = `You have access to ${allTelegramInvites.length} Telegram group${allTelegramInvites.length > 1 ? 's' : ''}. Check your email for invite links.`;
-      }
     } else if (notes.productType === "Bundle") {
-      // For bundle one-time payments, generate invite for each portfolio subscription created
-      const bundleInvites = [];
-      for (const subscription of newSubscriptions) {
-        if (subscription.productType === "Portfolio") {
-          try {
-            const invites = await handleTelegramIntegration(
-              req.user,
-              "Portfolio",
-              subscription.productId,
-              subscription
-            );
-            bundleInvites.push(...invites);
-          } catch (error) {
-            logger.error('Telegram integration error for bundle item', {
-              subscriptionId: subscription._id,
-              portfolioId: subscription.productId,
-              error: error.message
-            });
-          }
+      // For bundle payments, use the enhanced bundle handling in handleTelegramIntegration
+      logger.info('Processing Telegram invites for bundle purchase', {
+        userId: req.user._id.toString(),
+        userEmail: req.user.email,
+        bundleId: notes.productId
+      });
+      
+      try {
+        // The enhanced handleTelegramIntegration now handles both the bundle itself and its portfolios
+        const bundleInvites = await handleTelegramIntegration(
+          req.user,
+          "Bundle",
+          notes.productId,
+          newSubscriptions[0] // Use the first subscription for bundle processing
+        );
+        
+        if (bundleInvites && bundleInvites.length > 0) {
+          allTelegramInvites.push(...bundleInvites);
+          logger.info('Generated Telegram invites for bundle', {
+            userId: req.user._id.toString(),
+            userEmail: req.user.email,
+            bundleId: notes.productId,
+            inviteCount: bundleInvites.length
+          });
+        } else {
+          logger.warn('No Telegram invite links generated for bundle', {
+            userId: req.user._id.toString(),
+            userEmail: req.user.email,
+            bundleId: notes.productId
+          });
         }
-      }
-      if (bundleInvites.length > 0) {
-        responseData.telegramInviteLinks = bundleInvites;
-        responseData.telegramMessage = `You have access to ${bundleInvites.length} Telegram group${bundleInvites.length > 1 ? 's' : ''}. Check your email for invite links.`;
+      } catch (error) {
+        logger.error('Telegram integration error for bundle', {
+          userId: req.user._id.toString(),
+          userEmail: req.user.email,
+          bundleId: notes.productId,
+          error: error.message,
+          stack: error.stack
+        });
       }
     } else {
-      // Single portfolio purchase
-      const telegramInvites = await handleTelegramIntegration(
-        req.user,
-        notes.productType,
-        notes.productId,
-        newSubscriptions[0]
-      );
-      if (telegramInvites && telegramInvites.length > 0) {
-        responseData.telegramInviteLinks = telegramInvites;
-        responseData.telegramMessage = `You have access to ${telegramInvites.length} Telegram group${telegramInvites.length > 1 ? 's' : ''}. Check your email for invite links.`;
+      // Single product purchase (e.g., a portfolio)
+      logger.info('Processing Telegram invites for single product purchase', {
+        userId: req.user._id.toString(),
+        userEmail: req.user.email,
+        productType: notes.productType,
+        productId: notes.productId
+      });
+      
+      try {
+        const telegramInvites = await handleTelegramIntegration(
+          req.user,
+          notes.productType,
+          notes.productId,
+          newSubscriptions[0]
+        );
+        
+        if (telegramInvites && telegramInvites.length > 0) {
+          allTelegramInvites.push(...telegramInvites);
+          logger.info('Generated Telegram invites for single product', {
+            userId: req.user._id.toString(),
+            userEmail: req.user.email,
+            productType: notes.productType,
+            productId: notes.productId,
+            inviteCount: telegramInvites.length
+          });
+        } else {
+          logger.warn('No Telegram invite links generated for product', {
+            userId: req.user._id.toString(),
+            userEmail: req.user.email,
+            productType: notes.productType,
+            productId: notes.productId
+          });
+        }
+      } catch (error) {
+        logger.error('Telegram integration error for single product', {
+          userId: req.user._id.toString(),
+          userEmail: req.user.email,
+          productType: notes.productType,
+          productId: notes.productId,
+          error: error.message,
+          stack: error.stack
+        });
       }
+    }
+    
+    // Add Telegram invite links to response data
+    if (allTelegramInvites.length > 0) {
+      responseData.telegramInviteLinks = allTelegramInvites;
+      responseData.telegramMessage = `You have access to ${allTelegramInvites.length} Telegram group${allTelegramInvites.length > 1 ? 's' : ''}. Check your email for invite links.`;
     }
 
     // Update user premium status
@@ -2430,52 +2510,52 @@ exports.verifyEmandate = async (req, res) => {
         await session.endSession();
       }
 
-      // Generate Telegram invites for portfolio subscriptions
+      // Generate Telegram invites for all subscriptions - both portfolios and bundles
       for (const sub of existingSubs) {
-        if (sub.productType === "Portfolio") {
-          try {
-            const product = await Portfolio.findById(sub.productId);
-            if (product && product.externalId) {
-              const inviteResult = await TelegramService.generateInviteLink(req.user, product, sub);
-              if (inviteResult.success) {
-                // Update subscription
-                await Subscription.findByIdAndUpdate(sub._id, {
-                  invite_link_url: inviteResult.invite_link,
-                  invite_link_expires_at: inviteResult.expires_at
-                });
-                
-                // Add to response
-                telegramInviteLinks.push({
-                  productId: sub.productId,
-                  invite_link: inviteResult.invite_link,
-                  expires_at: inviteResult.expires_at
-                });
-                
-                // Send email
-                await sendTelegramInviteEmail(
-                  req.user, 
-                  product, 
-                  inviteResult.invite_link, 
-                  inviteResult.expires_at
-                );
-                
-                logger.info('Telegram invite sent for eMandate, bill email will be queued separately', {
-                  subscriptionId: sub._id,
-                  userEmail: req.user.email
-                });
-              }
-            }
-          } catch (error) {
-            logger.error('Telegram integration error:', {
+        try {
+          // Use the handleTelegramIntegration function for both Portfolio and Bundle products
+          const invites = await handleTelegramIntegration(
+            req.user,
+            sub.productType,
+            sub.productId,
+            sub
+          );
+          
+          if (invites && invites.length > 0) {
+            telegramInviteLinks.push(...invites);
+            logger.info('Telegram invite(s) generated for eMandate subscription', {
               subscriptionId: sub._id,
-              error: error.message
+              userEmail: req.user.email,
+              productType: sub.productType,
+              productId: sub.productId.toString(),
+              inviteCount: invites.length
+            });
+          } else {
+            logger.warn('No Telegram invites generated for eMandate subscription', {
+              subscriptionId: sub._id,
+              userEmail: req.user.email,
+              productType: sub.productType,
+              productId: sub.productId.toString()
             });
           }
+        } catch (error) {
+          logger.error('Telegram integration error for eMandate:', {
+            subscriptionId: sub._id,
+            productType: sub.productType,
+            productId: sub.productId.toString(),
+            error: error.message,
+            stack: error.stack
+          });
         }
       }
 
-      // Generate bills for activated subscriptions
+      // Generate bills for activated subscriptions with improved error handling
       let billsGenerated = 0;
+      const billErrors = [];
+      
+      // Directly import the billService to ensure we have the correct reference
+      const billService = require('../services/billService');
+      
       for (const sub of existingSubs) {
         try {
           logger.info('Starting eMandate bill generation with coupon info', {
@@ -2485,14 +2565,20 @@ exports.verifyEmandate = async (req, res) => {
             discountApplied
           });
           
-          const bill = await generateAndSendBill(sub._id, {
+          // Generate bill number directly using the billService
+          const billNumber = await billService.generateBillNumber();
+          
+          // Generate and send the bill
+          const bill = await billService.generateAndSendBill(sub._id, {
             paymentId: null, // eMandate doesn't have immediate payment ID
             orderId: null,
+            billNumber, // Explicitly provide the bill number
             subscriptionId: subscription_id,
             originalAmount: originalAmount,
             discountApplied,
             finalAmount: finalAmount,
-            couponCode
+            couponCode,
+            isEmandate: true
           });
           
           logger.info('Bill generated for eMandate subscription with coupon info', {
@@ -2500,16 +2586,27 @@ exports.verifyEmandate = async (req, res) => {
             billId: bill._id,
             billNumber: bill.billNumber,
             razorpaySubscriptionId: subscription_id,
-            couponCode: couponCode || 'none'
+            couponCode: couponCode || 'none',
+            productType: sub.productType,
+            productId: sub.productId.toString(),
+            userEmail: req.user.email
           });
           
           billsGenerated++;
         } catch (billError) {
+          billErrors.push({
+            subscriptionId: sub._id.toString(),
+            error: billError.message
+          });
+          
           logger.error('Failed to generate bill for eMandate subscription', {
             subscriptionId: sub._id,
+            productType: sub.productType,
+            productId: sub.productId.toString(),
             error: billError.message,
             stack: billError.stack,
-            razorpaySubscriptionId: subscription_id
+            razorpaySubscriptionId: subscription_id,
+            userEmail: req.user.email
           });
         }
       }
@@ -2532,13 +2629,20 @@ exports.verifyEmandate = async (req, res) => {
 
       await updateUserPremiumStatus(userId);
       
+      // Enhanced response with more details
       const responseData = {
         success: true,
         message: `eMandate ${status}. Activated ${activatedCount} subscriptions${isRenewal ? " (Renewal)" : ""}${couponCode ? ` with coupon ${couponCode}` : ""}`,
         subscriptionStatus: status,
         activatedSubscriptions: activatedCount,
         isRenewal,
+        emandate_type: emandateType,
+        billsGenerated: billsGenerated,
         telegramInviteLinks,
+        billErrors: billErrors.length > 0 ? billErrors : undefined,
+        telegramMessage: telegramInviteLinks.length > 0 
+          ? `You have access to ${telegramInviteLinks.length} Telegram group${telegramInviteLinks.length > 1 ? 's' : ''}. Check your email for invite links.` 
+          : undefined,
         requiresAction: ["pending", "created"].includes(status)
       };
 

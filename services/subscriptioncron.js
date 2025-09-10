@@ -245,11 +245,22 @@ async function processExpiredSubscriptions() {
         // Attempt to cancel subscription via API
         let cancelResult = { success: false };
         if (userEmail && sub.productId) {
+          // Get correct product ID for cancellation
+          let productId = null;
+          
+          if (sub.productId.externalId) {
+            // Use the external ID if available
+            productId = sub.productId.externalId;
+            logger.info(`Using externalId for Telegram cancellation: ${productId}`);
+          } else {
+            // Fall back to MongoDB ID
+            productId = sub.productId._id || sub.productId;
+            logger.info(`Using MongoDB ID for Telegram cancellation: ${productId}`);
+          }
+          
           cancelResult = await TelegramService.cancelSubscription(
             userEmail,
-            sub.productId._id || sub.productId,
-            productName,
-            sub.expiresAt
+            productId
           );
           
           if (cancelResult.success) {
