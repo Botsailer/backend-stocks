@@ -1810,57 +1810,66 @@ exports.getTelegramGroupStatus = asyncHandler(async (req, res) => {
  */
 async function handleTelegramIntegration(user, productType, productId, subscription) {
   const telegramInvites = [];
-  
-  if (productType === 'Portfolio') {
-    try {
+
+  try {
+    if (productType === 'Portfolio') {
       const portfolio = await Portfolio.findById(productId);
       if (portfolio && portfolio.externalId) {
         const inviteResult = await TelegramService.generateInviteLink(user, portfolio, subscription);
-        
         if (inviteResult.success) {
-          // Update subscription with invite link
           await Subscription.findByIdAndUpdate(subscription._id, {
             invite_link_url: inviteResult.invite_link,
             invite_link_expires_at: inviteResult.expires_at
           });
-          
           telegramInvites.push({
-            productId: productId,
+            productId,
             product_name: portfolio.name,
             invite_link: inviteResult.invite_link,
             expires_at: inviteResult.expires_at
           });
-          
-          // Send email with invite link
           await sendTelegramInviteEmail(user, portfolio, inviteResult.invite_link, inviteResult.expires_at);
-          
-          portfolioLogger.info('Telegram invite generated for payment verification', {
+          portfolioLogger.info('Telegram invite generated for portfolio', {
             operation: 'PAYMENT_TELEGRAM',
             userId: user._id,
             userEmail: user.email,
-            details: {
-              portfolioId: productId,
-              portfolioName: portfolio.name,
-              subscriptionId: subscription._id,
-              telegramProductId: portfolio.externalId
-            }
+            details: { portfolioId: productId, portfolioName: portfolio.name, subscriptionId: subscription._id, telegramProductId: portfolio.externalId }
           });
         }
       }
-    } catch (error) {
-      portfolioLogger.error('Telegram integration error during payment verification', {
-        operation: 'PAYMENT_TELEGRAM',
-        userId: user._id,
-        userEmail: user.email,
-        details: {
-          error: error.message,
-          productId,
-          productType
+    } else if (productType === 'Bundle') {
+      const bundle = await Bundle.findById(productId);
+      if (bundle && bundle.externalId) {
+        const inviteResult = await TelegramService.generateInviteLink(user, bundle, subscription);
+        if (inviteResult.success) {
+          await Subscription.findByIdAndUpdate(subscription._id, {
+            invite_link_url: inviteResult.invite_link,
+            invite_link_expires_at: inviteResult.expires_at
+          });
+          telegramInvites.push({
+            productId,
+            product_name: bundle.name,
+            invite_link: inviteResult.invite_link,
+            expires_at: inviteResult.expires_at
+          });
+          await sendTelegramInviteEmail(user, bundle, inviteResult.invite_link, inviteResult.expires_at);
+          portfolioLogger.info('Telegram invite generated for bundle', {
+            operation: 'PAYMENT_TELEGRAM',
+            userId: user._id,
+            userEmail: user.email,
+            details: { bundleId: productId, bundleName: bundle.name, subscriptionId: subscription._id, telegramProductId: bundle.externalId }
+          });
         }
-      });
+      }
     }
+  } catch (error) {
+    portfolioLogger.error('Telegram integration error during payment verification', {
+      operation: 'PAYMENT_TELEGRAM',
+      userId: user._id,
+      userEmail: user.email,
+      details: { error: error.message, productId, productType }
+    });
   }
-  
+
   return telegramInvites;
 }
 

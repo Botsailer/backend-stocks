@@ -336,6 +336,20 @@ router.get('/pdf/data', requireAuth, getLatestPdfData);
  *                 type: boolean
  *                 description: Whether to send sign link
  *                 example: true
+ *               productType:
+ *                 type: string
+ *                 enum: [Portfolio, Bundle]
+ *                 description: Optional product type to associate the eSign with
+ *                 example: "Bundle"
+ *               productId:
+ *                 type: string
+ *                 format: objectid
+ *                 description: Optional product ID to associate the eSign with
+ *                 example: "68c1c39321ad3a7f1f7e1be2"
+ *               productName:
+ *                 type: string
+ *                 description: Optional product name (for convenience)
+ *                 example: "Growth Bundle"
  *     responses:
  *       200:
  *         description: Document created successfully
@@ -361,10 +375,31 @@ router.get('/pdf/data', requireAuth, getLatestPdfData);
  *                       type: string
  *                     signerName:
  *                       type: string
+ *                     signerPhone:
+ *                       type: string
+ *                     status:
+ *                       type: string
+ *                       example: "document_created"
+ *                     reason:
+ *                       type: string
+ *                     authenticationUrl:
+ *                       type: string
+ *                       description: URL for signer to complete eSign process
  *                     signUrl:
  *                       type: string
  *                     expireInDays:
  *                       type: number
+ *                     productType:
+ *                       type: string
+ *                       enum: [Portfolio, Bundle]
+ *                     productId:
+ *                       type: string
+ *                     productName:
+ *                       type: string
+ *                     pdfSource:
+ *                       type: string
+ *                       enum: [auto_fetched, existing_template]
+ *                       description: Source of the PDF used for signing
  *       400:
  *         description: Invalid input parameters
  *       401:
@@ -376,7 +411,64 @@ router.get('/pdf/data', requireAuth, getLatestPdfData);
  */
 router.post('/document/create', requireAuth, createDocumentForSigning);
 
-// Verify eSign status for specific product (JIT sync)
+/**
+ * @swagger
+ * /digio/esign/verify:
+ *   get:
+ *     summary: Verify eSign status for a specific product (JIT sync)
+ *     tags: [Document Signing]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: query
+ *         name: productType
+ *         required: true
+ *         schema:
+ *           type: string
+ *           enum: [Portfolio, Bundle]
+ *         description: Product type to check eSign status for
+ *         example: "Bundle"
+ *       - in: query
+ *         name: productId
+ *         required: true
+ *         schema:
+ *           type: string
+ *           format: objectid
+ *         description: Product ID to check eSign status for
+ *         example: "68c1c39321ad3a7f1f7e1be2"
+ *     responses:
+ *       200:
+ *         description: eSign status fetched successfully
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success:
+ *                   type: boolean
+ *                   description: True if document is signed or completed
+ *                 status:
+ *                   type: string
+ *                   enum: [initiated, sent, viewed, signed, completed, expired, declined, failed]
+ *                   description: Current status of the eSign document
+ *                 documentId:
+ *                   type: string
+ *                   description: Digio document ID
+ *                 authenticationUrl:
+ *                   type: string
+ *                   description: URL for completing eSign process (only present when not signed)
+ *                 signUrl:
+ *                   type: string
+ *                   description: Direct signing URL (if available)
+ *       400:
+ *         description: Missing required productType/productId parameters
+ *       401:
+ *         description: Authentication required
+ *       404:
+ *         description: No eSign document found for user/product
+ *       500:
+ *         description: Server error
+ */
 router.get('/esign/verify', requireAuth, verifyEsignForProduct);
 
 /**

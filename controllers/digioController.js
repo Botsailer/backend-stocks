@@ -860,7 +860,13 @@ exports.verifyEsignForProduct = async (req, res) => {
 
     // If already completed
     if (['signed', 'completed'].includes(doc.status)) {
-      return res.json({ success: true, status: doc.status, documentId: doc.documentId });
+      return res.json({ 
+        success: true, 
+        status: doc.status, 
+        documentId: doc.documentId,
+        authenticationUrl: doc.digioResponse?.authentication_url || null,
+        signUrl: doc.digioResponse?.sign_url || null
+      });
     }
 
     // JIT sync
@@ -869,9 +875,24 @@ exports.verifyEsignForProduct = async (req, res) => {
       const syncResult = await syncDocument(doc.documentId);
       const updated = syncResult?.document || doc;
       const ok = ['signed', 'completed'].includes(updated.status);
-      return res.json({ success: ok, status: updated.status, documentId: updated.documentId });
+
+      // Optionally fetch remote for auth URL if still not signed
+      let authenticationUrl = doc.digioResponse?.authentication_url || null;
+      let signUrl = doc.digioResponse?.sign_url || null;
+      if (!ok) {
+        try {
+          const DIGIO_API_BASE = await getConfig('DIGIO_API_BASE', 'https://ext.digio.in:444');
+          const remote = await digioRequest('GET', `${DIGIO_API_BASE}/v2/client/document/${doc.documentId}`);
+          authenticationUrl = remote?.authentication_url || authenticationUrl;
+          signUrl = remote?.sign_url || signUrl;
+        } catch (e) {
+          // ignore remote fetch failure
+        }
+      }
+
+      return res.json({ success: ok, status: updated.status, documentId: updated.documentId, authenticationUrl, signUrl });
     } catch (e) {
-      return res.json({ success: false, status: doc.status, documentId: doc.documentId });
+      return res.json({ success: false, status: doc.status, documentId: doc.documentId, authenticationUrl: doc.digioResponse?.authentication_url || null, signUrl: doc.digioResponse?.sign_url || null });
     }
   } catch (e) {
     console.error('[verifyEsignForProduct] error:', e);

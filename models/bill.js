@@ -91,8 +91,8 @@ const BillSchema = new Schema({
   toJSON: { virtuals: true }
 });
 
-// Generate bill number
-BillSchema.pre('save', async function(next) {
+// Generate bill number before validation so required validator passes
+BillSchema.pre('validate', async function(next) {
   if (!this.billNumber) {
     try {
       const year = new Date().getFullYear();

@@ -9,6 +9,22 @@ const fs = require('fs');
 const path = require('path');
 const { generateSimplePDF } = require('../utils/simplePDF');
 
+// Helper: generate a bill number (safety net in service layer)
+async function generateBillNumber() {
+  try {
+    const now = new Date();
+    const year = now.getFullYear();
+    const month = String(now.getMonth() + 1).padStart(2, '0');
+    const start = new Date(year, now.getMonth(), 1);
+    const end = new Date(year, now.getMonth() + 1, 1);
+    const Bill = require('../models/bill');
+    const count = await Bill.countDocuments({ billDate: { $gte: start, $lt: end } });
+    return `INV-${year}${month}-${String(count + 1).padStart(4, '0')}`;
+  } catch (e) {
+    return `INV-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
+  }
+}
+
 // Logger setup
 const logger = winston.createLogger({
   level: 'info',
@@ -166,6 +182,9 @@ async function generateBill(subscriptionId, paymentDetails = {}) {
       status: paymentDetails.paymentId ? 'paid' : 'sent',
       isRenewal: subscription.isRenewal || false
     };
+
+  // Safety net: assign billNumber if not provided by caller
+  billData.billNumber = paymentDetails.billNumber || await generateBillNumber();
 
     const bill = new Bill(billData);
     
@@ -418,7 +437,7 @@ ${COMPANY_INFO.email}
     const { getSmtpConfig } = require('../utils/configSettings');
     
     const config = await getSmtpConfig();
-    const transporter = nodemailer.createTransporter({
+  const transporter = nodemailer.createTransport({
       host: config.host,
       port: Number(config.port),
       secure: Number(config.port) === 465,
@@ -473,7 +492,11 @@ ${COMPANY_INFO.email}
  */
 async function generateAndSendBill(subscriptionId, paymentDetails = {}) {
   try {
-    logger.info('Starting bill generation and email process', { subscriptionId });
+    logger.info('Starting bill generation and email process', { 
+      subscriptionId,
+      billNumber: paymentDetails.billNumber || 'to be generated', 
+      paymentId: paymentDetails.paymentId || 'none'
+    });
 
     // Generate bill
     const bill = await generateBill(subscriptionId, paymentDetails);

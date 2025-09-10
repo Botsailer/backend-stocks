@@ -608,6 +608,7 @@ exports.createOrder = async (req, res) => {
 
  
 
+    // ENHANCED: Find user's eSign for this specific product
     let userEsignForProduct = await DigioSign.findOne({
       userId: userId,
       productType: productType,
@@ -615,6 +616,14 @@ exports.createOrder = async (req, res) => {
       isTemplate: false,
       status: { $in: ['signed', 'completed'] }
     }).sort({ createdAt: -1 });
+
+    // ENHANCED: Log the eSign lookup attempt
+    logger.info('Looking up eSign for product purchase', {
+      userId: userId.toString(),
+      productType,
+      productId: productId.toString(),
+      foundSpecificEsign: !!userEsignForProduct
+    });
 
     if (!userEsignForProduct) {
       // Try to find the most recent DigioSign record for this user+product in any pending state
@@ -625,18 +634,66 @@ exports.createOrder = async (req, res) => {
         isTemplate: false
       }).sort({ createdAt: -1 });
 
+      // Log the pending doc lookup attempt
+      logger.info('Looking for pending eSign for product', {
+        userId: userId.toString(),
+        productType,
+        productId: productId.toString(),
+        foundPendingDoc: !!latestDoc
+      });
+
       // As a fallback, if product linkage wasn't stored, pick latest user's doc
       if (!latestDoc) {
         latestDoc = await DigioSign.findOne({ userId: userId, isTemplate: false }).sort({ createdAt: -1 });
+        
+        // If we found a generic document (no product association), log it
+        if (latestDoc) {
+          logger.info('Found non-product-specific eSign document', {
+            userId: userId.toString(),
+            documentId: latestDoc.documentId,
+            status: latestDoc.status,
+            createdAt: latestDoc.createdAt
+          });
+        }
       }
 
       // If we have a document, attempt a just-in-time sync with Digio
       if (latestDoc && latestDoc.documentId) {
         try {
+          logger.info('Attempting JIT sync of eSign status', {
+            userId: userId.toString(),
+            documentId: latestDoc.documentId,
+            currentStatus: latestDoc.status
+          });
+          
           const { syncDocument } = require('../services/digioWebhookService');
           const syncResult = await syncDocument(latestDoc.documentId);
+          
           if (syncResult?.document && ['signed', 'completed'].includes(syncResult.document.status)) {
             userEsignForProduct = syncResult.document;
+            
+            // ENHANCED: If we successfully found and synced a document that was signed,
+            // but it wasn't associated with this product yet, update it now
+            if (!userEsignForProduct.productType || !userEsignForProduct.productId) {
+              userEsignForProduct = await DigioSign.findByIdAndUpdate(
+                userEsignForProduct._id,
+                {
+                  productType: productType,
+                  productId: productId,
+                  productName: productType === 'Portfolio' ? 
+                    (await Portfolio.findById(productId))?.name : 
+                    (await Bundle.findById(productId))?.name
+                },
+                { new: true }
+              );
+              
+              logger.info('Updated product association for eSign document', {
+                userId: userId.toString(),
+                documentId: userEsignForProduct.documentId,
+                productType,
+                productId: productId.toString()
+              });
+            }
           }
         } catch (e) {
           logger.warn('Digio JIT sync failed during order creation', { error: e.message });
@@ -654,12 +711,57 @@ exports.createOrder = async (req, res) => {
         }).sort({ createdAt: -1 });
 
         if (anySigned) {
-          userEsignForProduct = anySigned;
+          logger.info('Found recent signed eSign document for user', {
+            userId: userId.toString(),
+            documentId: anySigned.documentId,
+            status: anySigned.status,
+            createdAt: anySigned.createdAt,
+            signedAt: anySigned.signedAt
+          });
+          
+          // ENHANCED: Update the product association for this eSign
+          userEsignForProduct = await DigioSign.findByIdAndUpdate(
+            anySigned._id,
+            {
+              productType: productType,
+              productId: productId,
+              productName: productType === 'Portfolio' ? 
+                (await Portfolio.findById(productId))?.name : 
+                (await Bundle.findById(productId))?.name
+            },
+            { new: true }
+          );
+          
+          logger.info('Updated recent eSign with product association', {
+            userId: userId.toString(),
+            documentId: userEsignForProduct.documentId,
+            productType,
+            productId: productId.toString()
+          });
         }
       }
 
       if (!userEsignForProduct) {
-        // Custom code for frontend to trigger eSign creation
+        // Get user-friendly status for the last document to show in the frontend
+        let userFriendlyStatus = 'not_started';
+        let authUrl = null;
+        
+        if (latestDoc) {
+          // Convert technical status to user-friendly status
+          if (['signed', 'completed'].includes(latestDoc.status)) {
+            userFriendlyStatus = 'completed';
+          } else if (['viewed', 'sent', 'initiated', 'document_created'].includes(latestDoc.status)) {
+            userFriendlyStatus = 'pending';
+            // Get authentication URL from various possible locations in the response
+            authUrl = latestDoc?.digioResponse?.signing_parties?.[0]?.authentication_url || 
+                      latestDoc?.digioResponse?.authentication_url || 
+                      latestDoc?.digioResponse?.sign_url || null;
+          } else {
+            userFriendlyStatus = 'failed'; // expired, declined, failed
+          }
+        }
+        
+        // Custom response for frontend to trigger eSign creation/continuation
         return res.status(412).json({
           success: false,
           error: 'eSign required for this product before purchase',
@@ -669,7 +771,8 @@ exports.createOrder = async (req, res) => {
           lastDocument: latestDoc ? {
             documentId: latestDoc.documentId,
             status: latestDoc.status,
-            authenticationUrl: latestDoc?.digioResponse?.signing_parties?.[0]?.authentication_url || latestDoc?.digioResponse?.authentication_url || null
+            userFriendlyStatus,
+            authenticationUrl: authUrl
           } : null
         });
       }
@@ -2059,9 +2162,13 @@ exports.verifyPayment = async (req, res) => {
           isCartCheckout: notes.cartCheckout === "true"
         });
         
+        // Ensure we generate a bill number before sending the bill
+        const billNumber = await require('../services/billService').generateBillNumber();
+        
         const bill = await generateAndSendBill(newSubscriptions[0]._id, {
           paymentId,
           orderId,
+          billNumber, // Explicitly provide bill number
           originalAmount: parseFloat(notes.originalAmount || notes.originalTotal) || 0,
           discountApplied: parseFloat(notes.discountApplied) || 0,
           finalAmount: parseFloat(notes.finalAmount || notes.finalTotal) || 0,
@@ -2100,21 +2207,8 @@ exports.verifyPayment = async (req, res) => {
       responseData.billError = billError.message;
     }
     
-    // Enhanced Telegram integration for portfolios (not applicable for cart checkout)
-    if (notes.cartCheckout !== "true") {
-      const telegramInvites = await handleTelegramIntegration(
-        req.user, 
-        notes.productType, 
-        notes.productId, 
-        newSubscriptions[0]
-      );
-      
-      // Add Telegram links to response
-      if (telegramInvites && telegramInvites.length > 0) {
-        responseData.telegramInviteLinks = telegramInvites;
-        responseData.telegramMessage = `You have access to ${telegramInvites.length} Telegram group${telegramInvites.length > 1 ? 's' : ''}. Check your email for invite links.`;
-      }
-    } else {
+    // Enhanced Telegram integration
+    if (notes.cartCheckout === "true") {
       // For cart checkout, handle Telegram for each portfolio subscription
       const allTelegramInvites = [];
       for (const subscription of newSubscriptions) {
@@ -2139,7 +2233,44 @@ exports.verifyPayment = async (req, res) => {
         responseData.telegramInviteLinks = allTelegramInvites;
         responseData.telegramMessage = `You have access to ${allTelegramInvites.length} Telegram group${allTelegramInvites.length > 1 ? 's' : ''}. Check your email for invite links.`;
       }
-      
+    } else if (notes.productType === "Bundle") {
+      // For bundle one-time payments, generate invite for each portfolio subscription created
+      const bundleInvites = [];
+      for (const subscription of newSubscriptions) {
+        if (subscription.productType === "Portfolio") {
+          try {
+            const invites = await handleTelegramIntegration(
+              req.user,
+              "Portfolio",
+              subscription.productId,
+              subscription
+            );
+            bundleInvites.push(...invites);
+          } catch (error) {
+            logger.error('Telegram integration error for bundle item', {
+              subscriptionId: subscription._id,
+              portfolioId: subscription.productId,
+              error: error.message
+            });
+          }
+        }
+      }
+      if (bundleInvites.length > 0) {
+        responseData.telegramInviteLinks = bundleInvites;
+        responseData.telegramMessage = `You have access to ${bundleInvites.length} Telegram group${bundleInvites.length > 1 ? 's' : ''}. Check your email for invite links.`;
+      }
+    } else {
+      // Single portfolio purchase
+      const telegramInvites = await handleTelegramIntegration(
+        req.user,
+        notes.productType,
+        notes.productId,
+        newSubscriptions[0]
+      );
+      if (telegramInvites && telegramInvites.length > 0) {
+        responseData.telegramInviteLinks = telegramInvites;
+        responseData.telegramMessage = `You have access to ${telegramInvites.length} Telegram group${telegramInvites.length > 1 ? 's' : ''}. Check your email for invite links.`;
+      }
     }
 
     // Update user premium status
@@ -2147,14 +2278,17 @@ exports.verifyPayment = async (req, res) => {
 
     // Mark any existing DigioSign records for this user+product as expired so resubscribe requires a fresh eSign
     try {
-      await DigioSign.updateMany({
-        userId: req.user._id,
-        productType: subscription.productType,
-        productId: subscription.productId,
-        status: { $in: ['signed', 'completed'] }
-      }, { status: 'expired', lastWebhookAt: new Date() });
+      const subRef = newSubscriptions && newSubscriptions.length > 0 ? newSubscriptions[0] : null;
+      if (subRef) {
+        await DigioSign.updateMany({
+          userId: req.user._id,
+          productType: subRef.productType,
+          productId: subRef.productId,
+          status: { $in: ['signed', 'completed'] }
+        }, { status: 'expired', lastWebhookAt: new Date() });
+      }
     } catch (e) {
-      logger.warn('Failed to update DigioSign records on subscription cancel', { error: e.message });
+      logger.warn('Failed to update DigioSign records after payment verification', { error: e.message });
     }
     
     logger.info('Payment verification completed successfully with coupon support', {
