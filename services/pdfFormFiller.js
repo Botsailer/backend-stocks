@@ -92,30 +92,37 @@ class PDFFormFiller {
       const fields = form.getFields();
       let filledCount = 0;
 
-      fields.forEach(field => {
-        const fieldName = field.getName();
-        const fieldType = field.constructor.name;
-        
-        this.logger.info(`Found field: ${fieldName} (${fieldType})`);
-        
-        // Try to match field name with our mappings
-        const value = this.findMatchingValue(fieldName, fieldMappings);
-        
-        if (value && fieldType === 'PDFTextField') {
-          try {
-            field.setText(value);
-            filledCount++;
-            this.logger.info(`Filled field ${fieldName} with: ${value}`);
-          } catch (fillError) {
-            this.logger.warn(`Failed to fill field ${fieldName}:`, fillError.message);
-          }
-        }
-      });
+      this.logger.info(`Found ${fields.length} form fields in PDF`);
 
-      // If no form fields found, add text overlay
+      if (fields.length > 0) {
+        // Try to fill form fields if they exist
+        fields.forEach(field => {
+          const fieldName = field.getName();
+          const fieldType = field.constructor.name;
+          
+          this.logger.info(`Found field: ${fieldName} (${fieldType})`);
+          
+          // Try to match field name with our mappings
+          const value = this.findMatchingValue(fieldName, fieldMappings);
+          
+          if (value && fieldType === 'PDFTextField') {
+            try {
+              field.setText(value);
+              filledCount++;
+              this.logger.info(`Filled field ${fieldName} with: ${value}`);
+            } catch (fillError) {
+              this.logger.warn(`Failed to fill field ${fieldName}:`, fillError.message);
+            }
+          }
+        });
+      }
+
+      // Always add text overlay for PDFs without form fields or as backup
       if (filledCount === 0) {
-        this.logger.info('No form fields found, adding text overlay');
+        this.logger.info('No form fields filled or no form fields found, adding text overlay');
         await this.addTextOverlay(pdfDoc, formData);
+      } else {
+        this.logger.info(`Successfully filled ${filledCount} form fields`);
       }
 
       // Flatten the form to prevent further editing
@@ -159,31 +166,94 @@ class PDFFormFiller {
 
   /**
    * Add text overlay if no form fields are available
+   * Based on the SEBI agreement PDF layout analysis
    */
   async addTextOverlay(pdfDoc, formData) {
     const pages = pdfDoc.getPages();
-    const firstPage = pages[0];
-    const { width, height } = firstPage.getSize();
+    
+    // We need to find page 2 where the client details section is located
+    // Based on the attached image, it's in section "2. CLIENT DETAILS"
+    let targetPage = pages[1]; // Page 2 (0-indexed)
+    
+    if (!targetPage && pages.length > 0) {
+      targetPage = pages[0]; // Fallback to first page
+    }
+    
+    const { width, height } = targetPage.getSize();
+    
+    this.logger.info(`Adding text overlay to page, dimensions: ${width}x${height}`);
 
-    // Common positions for form fields (adjust based on your PDF layout)
+    // Based on the SEBI PDF layout analysis and coordinate calculation
+    // The form fields are located in section "2. CLIENT DETAILS" on page 2
+    // Y coordinates are calculated from bottom of page (PDF coordinate system)
+    
+    const baseY = height - 260; // Starting Y position for first field
+    const lineSpacing = 30; // Space between form lines
+    
     const overlayPositions = [
-      { text: formData.fullName, x: 200, y: height - 150 }, // Full Name
-      { text: formData.pan, x: 300, y: height - 180 },      // PAN
-      { text: formData.dateOfBirth, x: 200, y: height - 210 }, // DOB
-      { text: formData.email, x: 250, y: height - 240 },    // Email
-      { text: formData.state, x: 250, y: height - 270 }     // State
+      // Full Name: line appears in CLIENT DETAILS section
+      { 
+        text: formData.fullName, 
+        x: 260, // After "Full Name: " text
+        y: baseY, // First field position
+        label: 'Full Name'
+      },
+      
+      // PAN: next line after Full Name
+      { 
+        text: formData.pan, 
+        x: 385, // After "Permanent Account Number (PAN): " text
+        y: baseY - lineSpacing, 
+        label: 'PAN'
+      },
+      
+      // Date of Birth: next line after PAN
+      { 
+        text: formData.dateOfBirth, 
+        x: 285, // After "Date of Birth: " text
+        y: baseY - (lineSpacing * 2),
+        label: 'Date of Birth'
+      },
+      
+      // Email Address: next line after DOB
+      { 
+        text: formData.email, 
+        x: 305, // After "Email Address: " text
+        y: baseY - (lineSpacing * 3),
+        label: 'Email'
+      },
+      
+      // State/City: next line after Email
+      { 
+        text: formData.state, 
+        x: 280, // After "State/City: " text
+        y: baseY - (lineSpacing * 4),
+        label: 'State'
+      }
     ];
 
-    overlayPositions.forEach(({ text, x, y }) => {
-      if (text) {
-        firstPage.drawText(text, {
-          x: x,
-          y: y,
-          size: 10,
-          color: rgb(0, 0, 0) // Black color
-        });
+    overlayPositions.forEach(({ text, x, y, label }) => {
+      if (text && text.trim()) {
+        try {
+          targetPage.drawText(text, {
+            x: x,
+            y: y,
+            size: 11, // Slightly larger font to match document
+            color: rgb(0, 0, 0), // Black color
+            // Use a standard font that's likely to be available
+            font: undefined // Will use default font
+          });
+          
+          this.logger.info(`Added ${label}: "${text}" at position (${x}, ${y})`);
+        } catch (drawError) {
+          this.logger.warn(`Failed to draw ${label} text:`, drawError.message);
+        }
+      } else {
+        this.logger.warn(`Skipping empty ${label} field`);
       }
     });
+    
+    this.logger.info('Text overlay completed');
   }
 
   /**
