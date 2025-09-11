@@ -3,6 +3,7 @@ const DigioSign = require("../models/DigioSign");
 const User = require("../models/user");
 const { getConfig } = require("../utils/configSettings");
 const { processWebhook, validateWebhookSignature, syncPendingDocuments, syncDocument } = require("../services/digioWebhookService");
+const pdfFormFiller = require("../services/pdfFormFiller");
 
 /**
  * Admin controller to fetch a user's signed document from Digio
@@ -749,6 +750,47 @@ exports.createDocumentForSigning = async (req, res) => {
     // Get Digio configuration
     const DIGIO_API_BASE = await getConfig("DIGIO_API_BASE", "https://ext.digio.in:444");
     
+    // 🚀 PERSONALIZE PDF WITH USER DATA
+    let personalizedPdfBase64 = template.fileBase64;
+    let personalizedFileName = template.fileName;
+    
+    try {
+      console.log('[DIGIO] Personalizing PDF with user data...');
+      
+      // Get full user data for PDF personalization
+      const user = await User.findById(userId);
+      if (!user) {
+        return res.status(404).json({
+          success: false,
+          error: "User not found for PDF personalization"
+        });
+      }
+      
+      // Convert base64 to buffer for processing
+      const templateBuffer = Buffer.from(template.fileBase64, 'base64');
+      
+      // Fill PDF form with user data
+      const personalizedPdfBuffer = await pdfFormFiller.fillPdfForm(templateBuffer, user);
+      
+      // Convert back to base64
+      personalizedPdfBase64 = personalizedPdfBuffer.toString('base64');
+      
+      // Update filename to indicate personalization
+      const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+      personalizedFileName = `personalized_${user.username || user._id}_${timestamp}.pdf`;
+      
+      console.log('[DIGIO] PDF personalized successfully', {
+        userId: user._id,
+        userName: user.fullName || user.username,
+        originalSize: templateBuffer.length,
+        personalizedSize: personalizedPdfBuffer.length
+      });
+      
+    } catch (personalizationError) {
+      console.warn('[DIGIO] PDF personalization failed, using original template:', personalizationError.message);
+      // Continue with original template if personalization fails
+    }
+    
     // Prepare payload exactly as per Postman collection
     const documentPayload = {
       signers: [{
@@ -764,8 +806,8 @@ exports.createDocumentForSigning = async (req, res) => {
       include_authentication_url: true,
       customer_notification_mode:"all",
       send_sign_link: sendSignLink,
-      file_name: template.fileName,
-      file_data: template.fileBase64
+      file_name: personalizedFileName,
+      file_data: personalizedPdfBase64
     };
     
     // If phone is provided, you can use it as identifier instead
