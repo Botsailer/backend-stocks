@@ -1808,146 +1808,328 @@ exports.getTelegramGroupStatus = asyncHandler(async (req, res) => {
 });
 
 /**
- * Handle Telegram integration for payment verification
+ * Handle Telegram integration for payment verification with robust error handling
  */
 async function handleTelegramIntegration(user, productType, productId, subscription) {
   const telegramInvites = [];
+  const errors = [];
 
   try {
     // Handle portfolio subscription
     if (productType === 'Portfolio') {
-      const portfolio = await Portfolio.findById(productId);
-      if (!portfolio) {
-        portfolioLogger.warn('Portfolio not found during Telegram integration', {
-          operation: 'PAYMENT_TELEGRAM',
-          userId: user._id,
-          userEmail: user.email,
-          details: { portfolioId: productId, subscriptionId: subscription._id }
-        });
-        return telegramInvites;
+      const inviteResult = await generatePortfolioInviteLink(user, productId, subscription);
+      if (inviteResult.success) {
+        telegramInvites.push(inviteResult.data);
+      } else {
+        errors.push(inviteResult.error);
       }
+    } 
+    // Handle bundle subscription
+    else if (productType === 'Bundle') {
+      const bundleResults = await generateBundleInviteLinks(user, productId, subscription);
+      telegramInvites.push(...bundleResults.invites);
+      errors.push(...bundleResults.errors);
+    }
+
+    // Log summary
+    portfolioLogger.info('Telegram integration completed', {
+      operation: 'PAYMENT_TELEGRAM_SUMMARY',
+      userId: user._id,
+      userEmail: user.email,
+      details: {
+        productType,
+        productId: productId.toString(),
+        totalInvites: telegramInvites.length,
+        totalErrors: errors.length,
+        invites: telegramInvites.map(invite => ({
+          productName: invite.product_name,
+          productType: invite.product_type,
+          hasInviteLink: !!invite.invite_link
+        })),
+        errors: errors.map(error => ({
+          productName: error.productName,
+          reason: error.reason,
+          message: error.message
+        }))
+      }
+    });
+
+    // Send consolidated email with all successful invites and error notifications
+    if (telegramInvites.length > 0 || errors.length > 0) {
+      await sendConsolidatedTelegramEmail(user, telegramInvites, errors);
+    }
+
+  } catch (error) {
+    portfolioLogger.error('Critical error in Telegram integration', {
+      operation: 'PAYMENT_TELEGRAM_CRITICAL',
+      userId: user._id,
+      userEmail: user.email,
+      details: { 
+        error: error.message, 
+        stack: error.stack, 
+        productId: productId.toString(), 
+        productType 
+      }
+    });
+    
+    errors.push({
+      productName: 'System Error',
+      productType: productType,
+      reason: 'SYSTEM_ERROR',
+      message: `Critical error during Telegram integration: ${error.message}`
+    });
+  }
+
+  return { invites: telegramInvites, errors };
+}
+
+/**
+ * Generate invite link for a single portfolio with retry logic and proper error handling
+ */
+async function generatePortfolioInviteLink(user, portfolioId, subscription) {
+  try {
+    const portfolio = await Portfolio.findById(portfolioId);
+    if (!portfolio) {
+      const error = {
+        productName: 'Unknown Portfolio',
+        productType: 'Portfolio',
+        productId: portfolioId.toString(),
+        reason: 'PORTFOLIO_NOT_FOUND',
+        message: `Portfolio with ID ${portfolioId} not found in database`
+      };
       
-      // Check if portfolio has external Telegram ID
-      if (portfolio.externalId) {
-        portfolioLogger.info('Generating Telegram invite for portfolio', {
-          operation: 'PAYMENT_TELEGRAM',
-          userId: user._id,
-          userEmail: user.email,
-          details: { portfolioId: productId, portfolioName: portfolio.name, externalId: portfolio.externalId }
-        });
+      portfolioLogger.warn('Portfolio not found during Telegram integration', {
+        operation: 'PAYMENT_TELEGRAM_ERROR',
+        userId: user._id,
+        userEmail: user.email,
+        details: error
+      });
+      
+      return { success: false, error };
+    }
+
+    // Check if portfolio has external Telegram ID
+    if (!portfolio.externalId) {
+      const error = {
+        productName: portfolio.name,
+        productType: 'Portfolio',
+        productId: portfolioId.toString(),
+        reason: 'PRODUCT_NOT_MAPPED',
+        message: `Portfolio "${portfolio.name}" is not mapped to any Telegram group. Please contact admin to map this portfolio.`
+      };
+      
+      portfolioLogger.warn('Portfolio has no externalId for Telegram integration', {
+        operation: 'PAYMENT_TELEGRAM_ERROR',
+        userId: user._id,
+        userEmail: user.email,
+        details: error
+      });
+      
+      return { success: false, error };
+    }
+
+    portfolioLogger.info('Generating Telegram invite for portfolio', {
+      operation: 'PAYMENT_TELEGRAM_START',
+      userId: user._id,
+      userEmail: user.email,
+      details: { 
+        portfolioId: portfolioId.toString(), 
+        portfolioName: portfolio.name, 
+        externalId: portfolio.externalId 
+      }
+    });
+
+    // Try up to 3 times with exponential backoff for timeout errors
+    let inviteResult = null;
+    let lastError = null;
+    const maxRetries = 3;
+    
+    for (let attempt = 0; attempt < maxRetries; attempt++) {
+      try {
+        inviteResult = await TelegramService.generateInviteLink(user, portfolio, subscription);
         
-        // Try up to 3 times if we encounter timeout errors
-        let inviteResult = null;
-        let retryAttempt = 0;
-        const maxRetries = 2;
-        
-        while (retryAttempt <= maxRetries) {
-          try {
-            inviteResult = await TelegramService.generateInviteLink(user, portfolio, subscription);
-            if (inviteResult.success) break;
-            
-            // If the error is not a timeout, don't retry
-            if (!inviteResult.error?.includes('timeout')) break;
-            
-            retryAttempt++;
-            portfolioLogger.warn(`Telegram API timeout, retrying (${retryAttempt}/${maxRetries})`, {
-              operation: 'PAYMENT_TELEGRAM_RETRY',
-              userId: user._id,
-              details: { portfolioId: productId, attempt: retryAttempt }
-            });
-            
-            // Wait before retrying
-            await new Promise(resolve => setTimeout(resolve, 2000));
-          } catch (retryError) {
-            portfolioLogger.error(`Error during retry ${retryAttempt}/${maxRetries}:`, {
-              error: retryError.message,
-              userId: user._id,
-              productId
-            });
-            retryAttempt++;
-            await new Promise(resolve => setTimeout(resolve, 2000));
-          }
-        }
-        
-        if (inviteResult?.success) {
+        if (inviteResult.success) {
           // Update subscription with invite link
           await Subscription.findByIdAndUpdate(subscription._id, {
             invite_link_url: inviteResult.invite_link,
             invite_link_expires_at: inviteResult.expires_at
           });
           
-          // Add to invite list
-          telegramInvites.push({
-            productId,
-            product_name: portfolio.name,
-            product_type: 'Portfolio',
-            invite_link: inviteResult.invite_link,
-            expires_at: inviteResult.expires_at
-          });
-          
-          // Send email with invite
-          await sendTelegramInviteEmail(user, portfolio, inviteResult.invite_link, inviteResult.expires_at);
-          
           portfolioLogger.info('Telegram invite generated successfully for portfolio', {
-            operation: 'PAYMENT_TELEGRAM',
+            operation: 'PAYMENT_TELEGRAM_SUCCESS',
             userId: user._id,
             userEmail: user.email,
             details: { 
-              portfolioId: productId, 
+              portfolioId: portfolioId.toString(), 
               portfolioName: portfolio.name, 
-              subscriptionId: subscription._id, 
+              subscriptionId: subscription._id.toString(), 
               telegramProductId: portfolio.externalId,
-              inviteLink: inviteResult.invite_link,
-              expiresAt: inviteResult.expires_at
+              inviteLink: inviteResult.invite_link ? 'Generated' : 'Missing',
+              expiresAt: inviteResult.expires_at,
+              attempt: attempt + 1
             }
           });
+          
+          return {
+            success: true,
+            data: {
+              productId: portfolioId,
+              product_name: portfolio.name,
+              product_type: 'Portfolio',
+              invite_link: inviteResult.invite_link,
+              expires_at: inviteResult.expires_at
+            }
+          };
         } else {
-          portfolioLogger.error('Failed to generate Telegram invite for portfolio', {
-            operation: 'PAYMENT_TELEGRAM',
+          lastError = inviteResult.error;
+          
+          // Check if it's a timeout or retryable error
+          const isRetryable = lastError && (
+            lastError.includes('timeout') || 
+            lastError.includes('ECONNRESET') || 
+            lastError.includes('network') ||
+            lastError.includes('502') ||
+            lastError.includes('503') ||
+            lastError.includes('504')
+          );
+          
+          if (!isRetryable || attempt === maxRetries - 1) {
+            break; // Don't retry for non-retryable errors or last attempt
+          }
+          
+          const waitTime = Math.pow(2, attempt) * 1000; // Exponential backoff: 1s, 2s, 4s
+          portfolioLogger.warn(`Telegram API retryable error, retrying in ${waitTime}ms`, {
+            operation: 'PAYMENT_TELEGRAM_RETRY',
             userId: user._id,
-            userEmail: user.email,
             details: { 
-              portfolioId: productId, 
-              portfolioName: portfolio.name, 
-              error: inviteResult.error 
+              portfolioId: portfolioId.toString(), 
+              portfolioName: portfolio.name,
+              attempt: attempt + 1, 
+              maxRetries,
+              error: lastError,
+              waitTime
             }
           });
+          
+          await new Promise(resolve => setTimeout(resolve, waitTime));
         }
-      } else {
-        portfolioLogger.warn('Portfolio has no externalId for Telegram integration', {
-          operation: 'PAYMENT_TELEGRAM',
+      } catch (retryError) {
+        lastError = retryError.message;
+        portfolioLogger.error(`Error during retry ${attempt + 1}/${maxRetries}:`, {
+          operation: 'PAYMENT_TELEGRAM_RETRY_ERROR',
           userId: user._id,
-          userEmail: user.email,
-          details: { portfolioId: productId, portfolioName: portfolio.name }
-        });
-      }
-    } 
-    // Handle bundle subscription
-    else if (productType === 'Bundle') {
-      const bundle = await Bundle.findById(productId).populate('portfolios');
-      
-      if (!bundle) {
-        portfolioLogger.warn('Bundle not found during Telegram integration', {
-          operation: 'PAYMENT_TELEGRAM',
-          userId: user._id,
-          userEmail: user.email,
-          details: { bundleId: productId, subscriptionId: subscription._id }
-        });
-        return telegramInvites;
-      }
-      
-      // First check if bundle itself has a Telegram external ID (for direct bundle access)
-      if (bundle.externalId) {
-        portfolioLogger.info('Generating Telegram invite for bundle main group', {
-          operation: 'PAYMENT_TELEGRAM',
-          userId: user._id,
-          userEmail: user.email,
-          details: { 
-            bundleId: productId, 
-            bundleName: bundle.name, 
-            externalId: bundle.externalId
+          details: {
+            portfolioId: portfolioId.toString(),
+            portfolioName: portfolio.name,
+            error: retryError.message,
+            attempt: attempt + 1
           }
         });
+        
+        if (attempt < maxRetries - 1) {
+          const waitTime = Math.pow(2, attempt) * 1000;
+          await new Promise(resolve => setTimeout(resolve, waitTime));
+        }
+      }
+    }
+    
+    // All retries failed
+    const error = {
+      productName: portfolio.name,
+      productType: 'Portfolio',
+      productId: portfolioId.toString(),
+      reason: getErrorReason(lastError),
+      message: `Failed to generate Telegram invite for "${portfolio.name}". ${getErrorMessage(lastError)}`
+    };
+    
+    portfolioLogger.error('Failed to generate Telegram invite for portfolio after retries', {
+      operation: 'PAYMENT_TELEGRAM_FAILED',
+      userId: user._id,
+      userEmail: user.email,
+      details: {
+        ...error,
+        finalError: lastError,
+        attemptsUsed: maxRetries
+      }
+    });
+    
+    return { success: false, error };
+    
+  } catch (error) {
+    const errorDetails = {
+      productName: 'Portfolio Error',
+      productType: 'Portfolio',
+      productId: portfolioId.toString(),
+      reason: 'SYSTEM_ERROR',
+      message: `System error while processing portfolio: ${error.message}`
+    };
+    
+    portfolioLogger.error('System error in generatePortfolioInviteLink', {
+      operation: 'PAYMENT_TELEGRAM_SYSTEM_ERROR',
+      userId: user._id,
+      details: {
+        ...errorDetails,
+        stack: error.stack
+      }
+    });
+    
+    return { success: false, error: errorDetails };
+  }
+}
+
+/**
+ * Generate invite links for a bundle and all its portfolios
+ */
+async function generateBundleInviteLinks(user, bundleId, subscription) {
+  const invites = [];
+  const errors = [];
+  
+  try {
+    const bundle = await Bundle.findById(bundleId).populate('portfolios');
+    
+    if (!bundle) {
+      errors.push({
+        productName: 'Unknown Bundle',
+        productType: 'Bundle',
+        productId: bundleId.toString(),
+        reason: 'BUNDLE_NOT_FOUND',
+        message: `Bundle with ID ${bundleId} not found in database`
+      });
+      
+      portfolioLogger.warn('Bundle not found during Telegram integration', {
+        operation: 'PAYMENT_TELEGRAM_ERROR',
+        userId: user._id,
+        userEmail: user.email,
+        details: { bundleId: bundleId.toString(), subscriptionId: subscription._id.toString() }
+      });
+      
+      return { invites, errors };
+    }
+
+    portfolioLogger.info('Starting bundle Telegram integration', {
+      operation: 'PAYMENT_TELEGRAM_BUNDLE_START',
+      userId: user._id,
+      userEmail: user.email,
+      details: {
+        bundleId: bundleId.toString(),
+        bundleName: bundle.name,
+        hasExternalId: !!bundle.externalId,
+        portfolioCount: bundle.portfolios?.length || 0
+      }
+    });
+
+    // 1. Generate invite for bundle itself (if it has externalId)
+    if (bundle.externalId) {
+      portfolioLogger.info('Generating Telegram invite for bundle main group', {
+        operation: 'PAYMENT_TELEGRAM_BUNDLE_MAIN',
+        userId: user._id,
+        userEmail: user.email,
+        details: { 
+          bundleId: bundleId.toString(), 
+          bundleName: bundle.name, 
+          externalId: bundle.externalId
+        }
+      });
         
         const bundleInviteResult = await TelegramService.generateInviteLink(user, bundle, subscription);
         if (bundleInviteResult.success) {
@@ -1958,7 +2140,7 @@ async function handleTelegramIntegration(user, productType, productId, subscript
           });
           
           // Add to invite list
-          telegramInvites.push({
+          invites.push({
             productId,
             product_name: bundle.name,
             product_type: 'Bundle',
@@ -2015,7 +2197,7 @@ async function handleTelegramIntegration(user, productType, productId, subscript
               const portfolioInviteResult = await TelegramService.generateInviteLink(user, portfolio, subscription);
               if (portfolioInviteResult.success) {
                 // Add to invite list
-                telegramInvites.push({
+                invites.push({
                   productId: portfolio._id,
                   product_name: portfolio.name,
                   parent_bundle_id: bundle._id,
@@ -2070,26 +2252,132 @@ async function handleTelegramIntegration(user, productType, productId, subscript
             });
           }
         }
-      } else if (!bundle.externalId) {
-        // Bundle has no portfolios AND no externalId itself
-        portfolioLogger.warn('Bundle has no portfolios and no externalId for Telegram integration', {
-          operation: 'PAYMENT_TELEGRAM',
+      } else {
+        portfolioLogger.info('Bundle has no portfolios', {
+          operation: 'PAYMENT_TELEGRAM_BUNDLE_NO_PORTFOLIOS',
           userId: user._id,
-          userEmail: user.email,
-          details: { bundleId: productId, bundleName: bundle.name }
+          details: { bundleId: bundleId.toString(), bundleName: bundle.name, hasExternalId: !!bundle.externalId }
         });
+        
+        // If bundle has no portfolios but has externalId, generate invite for the bundle itself
+        if (bundle.externalId) {
+          portfolioLogger.info('Generating Telegram invite for bundle (no portfolios case)', {
+            operation: 'PAYMENT_TELEGRAM_BUNDLE_MAIN_NO_PORTFOLIOS',
+            userId: user._id,
+            userEmail: user.email,
+            details: { 
+              bundleId: bundleId.toString(), 
+              bundleName: bundle.name, 
+              externalId: bundle.externalId
+            }
+          });
+          
+          try {
+            const bundleInviteResult = await TelegramService.generateInviteLink(user, bundle, subscription);
+            if (bundleInviteResult.success) {
+              // Update subscription with invite link
+              await Subscription.findByIdAndUpdate(subscription._id, {
+                invite_link_url: bundleInviteResult.invite_link,
+                invite_link_expires_at: bundleInviteResult.expires_at
+              });
+              
+              // Add to invite list
+              invites.push({
+                productId: bundleId,
+                product_name: bundle.name,
+                product_type: 'Bundle',
+                invite_link: bundleInviteResult.invite_link,
+                expires_at: bundleInviteResult.expires_at
+              });
+              
+              // Send email with invite
+              await sendTelegramInviteEmail(user, bundle, bundleInviteResult.invite_link, bundleInviteResult.expires_at);
+              
+              portfolioLogger.info('Telegram invite generated successfully for bundle (no portfolios)', {
+                operation: 'PAYMENT_TELEGRAM_SUCCESS',
+                userId: user._id,
+                userEmail: user.email,
+                details: { 
+                  bundleId: bundleId.toString(), 
+                  bundleName: bundle.name, 
+                  externalId: bundle.externalId
+                }
+              });
+            } else {
+              errors.push({
+                productName: bundle.name,
+                productType: 'Bundle',
+                productId: bundleId.toString(),
+                reason: 'TELEGRAM_API_ERROR',
+                message: `Failed to generate Telegram invite for bundle: ${bundleInviteResult.error || 'Unknown error'}`
+              });
+              
+              portfolioLogger.warn('Failed to generate Telegram invite for bundle (no portfolios)', {
+                operation: 'PAYMENT_TELEGRAM_ERROR',
+                userId: user._id,
+                userEmail: user.email,
+                details: { 
+                  bundleId: bundleId.toString(), 
+                  bundleName: bundle.name, 
+                  externalId: bundle.externalId,
+                  error: bundleInviteResult.error
+                }
+              });
+            }
+          } catch (bundleError) {
+            errors.push({
+              productName: bundle.name,
+              productType: 'Bundle',
+              productId: bundleId.toString(),
+              reason: 'SYSTEM_ERROR',
+              message: `System error while generating bundle Telegram invite: ${bundleError.message}`
+            });
+            
+            portfolioLogger.error('System error generating bundle Telegram invite (no portfolios)', {
+              operation: 'PAYMENT_TELEGRAM_SYSTEM_ERROR',
+              userId: user._id,
+              details: {
+                bundleId: bundleId.toString(),
+                bundleName: bundle.name,
+                externalId: bundle.externalId,
+                error: bundleError.message,
+                stack: bundleError.stack
+              }
+            });
+          }
+        } else {
+          // If bundle has no portfolios and no externalId, it's a configuration issue
+          errors.push({
+            productName: bundle.name,
+            productType: 'Bundle',
+            productId: bundleId.toString(),
+            reason: 'BUNDLE_NOT_CONFIGURED',
+            message: `Bundle "${bundle.name}" has no portfolios and is not mapped to any Telegram group. Please contact admin to configure this bundle.`
+          });
+        }
       }
-    }
+    
   } catch (error) {
-    portfolioLogger.error('Telegram integration error during payment verification', {
-      operation: 'PAYMENT_TELEGRAM',
+    errors.push({
+      productName: 'Bundle System Error',
+      productType: 'Bundle',
+      productId: bundleId.toString(),
+      reason: 'SYSTEM_ERROR',
+      message: `System error while processing bundle: ${error.message}`
+    });
+    
+    portfolioLogger.error('System error in generateBundleInviteLinks', {
+      operation: 'PAYMENT_TELEGRAM_BUNDLE_SYSTEM_ERROR',
       userId: user._id,
-      userEmail: user.email,
-      details: { error: error.message, stack: error.stack, productId, productType }
+      details: {
+        bundleId: bundleId.toString(),
+        error: error.message,
+        stack: error.stack
+      }
     });
   }
-
-  return telegramInvites;
+  
+  return { invites, errors };
 }
 
 async function sendTelegramInviteEmail(user, product, inviteLink, expiresAt) {
@@ -2171,6 +2459,219 @@ async function sendTelegramInviteEmail(user, product, inviteLink, expiresAt) {
         productName: product.name,
         error: error.message,
         stack: error.stack
+      }
+    });
+  }
+}
+
+/**
+ * Get error reason code from error message
+ */
+function getErrorReason(error) {
+  if (!error) return 'UNKNOWN_ERROR';
+  
+  const errorString = typeof error === 'string' ? error : error.message || JSON.stringify(error);
+  
+  if (errorString.includes('not mapped') || errorString.includes('Product is not mapped')) {
+    return 'PRODUCT_NOT_MAPPED';
+  }
+  if (errorString.includes('timeout') || errorString.includes('ECONNRESET')) {
+    return 'NETWORK_TIMEOUT';
+  }
+  if (errorString.includes('network') || errorString.includes('ENOTFOUND')) {
+    return 'NETWORK_ERROR';
+  }
+  if (errorString.includes('502') || errorString.includes('503') || errorString.includes('504')) {
+    return 'SERVER_ERROR';
+  }
+  if (errorString.includes('401') || errorString.includes('unauthorized')) {
+    return 'AUTHORIZATION_ERROR';
+  }
+  if (errorString.includes('400') || errorString.includes('bad request')) {
+    return 'BAD_REQUEST';
+  }
+  if (errorString.includes('not found') || errorString.includes('404')) {
+    return 'NOT_FOUND';
+  }
+  
+  return 'API_ERROR';
+}
+
+/**
+ * Get user-friendly error message from error
+ */
+function getErrorMessage(error) {
+  if (!error) return 'Unknown error occurred.';
+  
+  const errorString = typeof error === 'string' ? error : error.message || JSON.stringify(error);
+  
+  if (errorString.includes('not mapped') || errorString.includes('Product is not mapped')) {
+    return 'The product is not linked to a Telegram group. Please contact support to resolve this.';
+  }
+  if (errorString.includes('timeout')) {
+    return 'Request timed out. Please try again later.';
+  }
+  if (errorString.includes('network') || errorString.includes('ENOTFOUND') || errorString.includes('ECONNRESET')) {
+    return 'Network connection issue. Please check your internet connection and try again.';
+  }
+  if (errorString.includes('502') || errorString.includes('503') || errorString.includes('504')) {
+    return 'Telegram service is temporarily unavailable. Please try again in a few minutes.';
+  }
+  if (errorString.includes('401') || errorString.includes('unauthorized')) {
+    return 'Authorization failed. Please contact support.';
+  }
+  if (errorString.includes('400') || errorString.includes('bad request')) {
+    return 'Invalid request. Please verify your information and try again.';
+  }
+  
+  return 'Service temporarily unavailable. Please try again later or contact support if the issue persists.';
+}
+
+/**
+ * Send consolidated email with all successful invites and error notifications
+ */
+async function sendConsolidatedTelegramEmail(user, invites, errors) {
+  try {
+    const emailQueue = require('../services/emailQueue');
+    
+    if (invites.length === 0 && errors.length === 0) {
+      return; // Nothing to send
+    }
+    
+    const hasInvites = invites.length > 0;
+    const hasErrors = errors.length > 0;
+    
+    let subject = '';
+    if (hasInvites && !hasErrors) {
+      subject = `Your Telegram Group Access${invites.length > 1 ? ` (${invites.length} groups)` : ''}`;
+    } else if (hasErrors && !hasInvites) {
+      subject = 'Telegram Group Access - Action Required';
+    } else {
+      subject = `Telegram Group Access - ${invites.length} successful, ${errors.length} issue${errors.length > 1 ? 's' : ''}`;
+    }
+    
+    // Generate HTML email
+    let html = `
+      <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px; border: 1px solid #e0e0e0; border-radius: 5px;">
+        <h2 style="color: #2E86C1; text-align: center;">Telegram Group Access Update</h2>
+    `;
+    
+    if (hasInvites) {
+      html += `
+        <div style="background-color: #d4edda; padding: 15px; border-left: 4px solid #28a745; margin: 20px 0; border-radius: 4px;">
+          <h3 style="color: #155724; margin-top: 0;">✅ Successful Access Granted</h3>
+          <p>You now have access to the following Telegram groups:</p>
+      `;
+      
+      invites.forEach(invite => {
+        const expiryDate = new Date(invite.expires_at).toLocaleDateString();
+        html += `
+          <div style="margin: 15px 0; padding: 10px; background-color: white; border-radius: 4px;">
+            <h4 style="margin: 0 0 10px 0; color: #2E86C1;">${invite.product_name}</h4>
+            <p style="margin: 5px 0;"><strong>Type:</strong> ${invite.product_type}</p>
+            ${invite.parent_bundle_name ? `<p style="margin: 5px 0;"><strong>Bundle:</strong> ${invite.parent_bundle_name}</p>` : ''}
+            <p style="margin: 5px 0;"><strong>Access expires:</strong> ${expiryDate}</p>
+            <a href="${invite.invite_link}" style="display: inline-block; background-color: #28a745; color: white; padding: 10px 20px; text-decoration: none; border-radius: 4px; margin-top: 10px;">Join Telegram Group</a>
+          </div>
+        `;
+      });
+      
+      html += `</div>`;
+    }
+    
+    if (hasErrors) {
+      html += `
+        <div style="background-color: #f8d7da; padding: 15px; border-left: 4px solid #dc3545; margin: 20px 0; border-radius: 4px;">
+          <h3 style="color: #721c24; margin-top: 0;">⚠️ Issues Encountered</h3>
+          <p>We encountered issues with the following products:</p>
+      `;
+      
+      errors.forEach(error => {
+        html += `
+          <div style="margin: 15px 0; padding: 10px; background-color: white; border-radius: 4px;">
+            <h4 style="margin: 0 0 10px 0; color: #dc3545;">${error.productName}</h4>
+            <p style="margin: 5px 0;"><strong>Type:</strong> ${error.productType}</p>
+            ${error.parentBundleName ? `<p style="margin: 5px 0;"><strong>Bundle:</strong> ${error.parentBundleName}</p>` : ''}
+            <p style="margin: 5px 0;"><strong>Issue:</strong> ${error.message}</p>
+            <p style="margin: 5px 0; font-size: 12px; color: #666;"><strong>Error Code:</strong> ${error.reason}</p>
+          </div>
+        `;
+      });
+      
+      html += `
+          <div style="background-color: #fff3cd; padding: 10px; border-radius: 4px; margin-top: 15px;">
+            <p style="margin: 0; color: #856404;"><strong>What to do:</strong> Please contact our support team with the error codes above. We'll resolve these issues and provide your access links.</p>
+          </div>
+        </div>
+      `;
+    }
+    
+    html += `
+        <div style="background-color: #f5f5f5; padding: 15px; border-radius: 4px; margin: 20px 0;">
+          <p style="margin: 0;"><strong>Need help?</strong> Contact our support team if you have any questions or issues accessing your Telegram groups.</p>
+        </div>
+        
+        <div style="text-align: center; color: #666; font-size: 12px; margin-top: 30px;">
+          <p>This email was sent automatically. Please do not reply to this email.</p>
+        </div>
+      </div>
+    `;
+    
+    // Generate plain text version
+    let text = `Telegram Group Access Update\n\n`;
+    
+    if (hasInvites) {
+      text += `✅ SUCCESSFUL ACCESS GRANTED:\n\n`;
+      invites.forEach(invite => {
+        const expiryDate = new Date(invite.expires_at).toLocaleDateString();
+        text += `${invite.product_name} (${invite.product_type})\n`;
+        if (invite.parent_bundle_name) text += `Bundle: ${invite.parent_bundle_name}\n`;
+        text += `Join here: ${invite.invite_link}\n`;
+        text += `Access expires: ${expiryDate}\n\n`;
+      });
+    }
+    
+    if (hasErrors) {
+      text += `⚠️ ISSUES ENCOUNTERED:\n\n`;
+      errors.forEach(error => {
+        text += `${error.productName} (${error.productType})\n`;
+        if (error.parentBundleName) text += `Bundle: ${error.parentBundleName}\n`;
+        text += `Issue: ${error.message}\n`;
+        text += `Error Code: ${error.reason}\n\n`;
+      });
+      text += `Please contact our support team with the error codes above.\n\n`;
+    }
+    
+    text += `Need help? Contact our support team if you have any questions.`;
+    
+    await emailQueue.add('sendEmail', {
+      to: user.email,
+      subject,
+      text,
+      html
+    });
+    
+    portfolioLogger.info('Consolidated Telegram email sent', {
+      operation: 'TELEGRAM_EMAIL_SENT',
+      userId: user._id,
+      userEmail: user.email,
+      details: {
+        successfulInvites: invites.length,
+        errors: errors.length,
+        subject
+      }
+    });
+    
+  } catch (error) {
+    portfolioLogger.error('Failed to send consolidated Telegram email', {
+      operation: 'TELEGRAM_EMAIL_ERROR',
+      userId: user._id,
+      userEmail: user.email,
+      details: {
+        error: error.message,
+        stack: error.stack,
+        inviteCount: invites.length,
+        errorCount: errors.length
       }
     });
   }

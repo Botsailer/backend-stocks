@@ -2336,20 +2336,30 @@ exports.verifyPayment = async (req, res) => {
       
       for (const subscription of newSubscriptions) {
         try {
-          const telegramInvites = await handleTelegramIntegration(
+          const telegramResult = await handleTelegramIntegration(
             req.user, 
             subscription.productType, // Use the actual product type from subscription
             subscription.productId, 
             subscription
           );
           
-          if (telegramInvites && telegramInvites.length > 0) {
-            allTelegramInvites.push(...telegramInvites);
+          if (telegramResult.invites && telegramResult.invites.length > 0) {
+            allTelegramInvites.push(...telegramResult.invites);
             logger.info('Telegram invites generated for cart item', {
               subscriptionId: subscription._id.toString(),
               productType: subscription.productType,
               productId: subscription.productId.toString(),
-              inviteCount: telegramInvites.length
+              inviteCount: telegramResult.invites.length,
+              errorCount: telegramResult.errors.length
+            });
+          }
+          
+          if (telegramResult.errors && telegramResult.errors.length > 0) {
+            logger.warn('Telegram integration errors for cart item', {
+              subscriptionId: subscription._id.toString(),
+              productType: subscription.productType,
+              productId: subscription.productId.toString(),
+              errors: telegramResult.errors
             });
           }
         } catch (error) {
@@ -2372,23 +2382,36 @@ exports.verifyPayment = async (req, res) => {
       
       try {
         // The enhanced handleTelegramIntegration now handles both the bundle itself and its portfolios
-        const bundleInvites = await handleTelegramIntegration(
+        const bundleResult = await handleTelegramIntegration(
           req.user,
           "Bundle",
           notes.productId,
           newSubscriptions[0] // Use the first subscription for bundle processing
         );
         
-        if (bundleInvites && bundleInvites.length > 0) {
-          allTelegramInvites.push(...bundleInvites);
+        if (bundleResult.invites && bundleResult.invites.length > 0) {
+          allTelegramInvites.push(...bundleResult.invites);
           logger.info('Generated Telegram invites for bundle', {
             userId: req.user._id.toString(),
             userEmail: req.user.email,
             bundleId: notes.productId,
-            inviteCount: bundleInvites.length
+            inviteCount: bundleResult.invites.length,
+            errorCount: bundleResult.errors.length
           });
-        } else {
-          logger.warn('No Telegram invite links generated for bundle', {
+        }
+        
+        if (bundleResult.errors && bundleResult.errors.length > 0) {
+          logger.warn('Telegram integration errors for bundle', {
+            userId: req.user._id.toString(),
+            userEmail: req.user.email,
+            bundleId: notes.productId,
+            errors: bundleResult.errors
+          });
+        }
+        
+        if ((!bundleResult.invites || bundleResult.invites.length === 0) && 
+            (!bundleResult.errors || bundleResult.errors.length === 0)) {
+          logger.warn('No Telegram invite links or errors generated for bundle', {
             userId: req.user._id.toString(),
             userEmail: req.user.email,
             bundleId: notes.productId
@@ -2413,24 +2436,38 @@ exports.verifyPayment = async (req, res) => {
       });
       
       try {
-        const telegramInvites = await handleTelegramIntegration(
+        const productResult = await handleTelegramIntegration(
           req.user,
           notes.productType,
           notes.productId,
           newSubscriptions[0]
         );
         
-        if (telegramInvites && telegramInvites.length > 0) {
-          allTelegramInvites.push(...telegramInvites);
+        if (productResult.invites && productResult.invites.length > 0) {
+          allTelegramInvites.push(...productResult.invites);
           logger.info('Generated Telegram invites for single product', {
             userId: req.user._id.toString(),
             userEmail: req.user.email,
             productType: notes.productType,
             productId: notes.productId,
-            inviteCount: telegramInvites.length
+            inviteCount: productResult.invites.length,
+            errorCount: productResult.errors.length
           });
-        } else {
-          logger.warn('No Telegram invite links generated for product', {
+        }
+        
+        if (productResult.errors && productResult.errors.length > 0) {
+          logger.warn('Telegram integration errors for single product', {
+            userId: req.user._id.toString(),
+            userEmail: req.user.email,
+            productType: notes.productType,
+            productId: notes.productId,
+            errors: productResult.errors
+          });
+        }
+        
+        if ((!productResult.invites || productResult.invites.length === 0) && 
+            (!productResult.errors || productResult.errors.length === 0)) {
+          logger.warn('No Telegram invite links or errors generated for product', {
             userId: req.user._id.toString(),
             userEmail: req.user.email,
             productType: notes.productType,
@@ -2505,7 +2542,10 @@ exports.verifyPayment = async (req, res) => {
                 logger.warn(`Retrying Telegram invite generation (${retryCount}/${maxRetries})...`);
                 await new Promise(resolve => setTimeout(resolve, 2000)); // Wait 2 seconds between retries
               } catch (retryError) {
-                logger.error(`Error during retry ${retryCount}/${maxRetries}:`, retryError.message);
+                logger.error(`Error during retry ${retryCount}/${maxRetries}:`, {
+                  error: retryError.message,
+                  stack: retryError.stack
+                });
                 retryCount++;
                 await new Promise(resolve => setTimeout(resolve, 2000));
               }
@@ -2769,24 +2809,38 @@ exports.verifyEmandate = async (req, res) => {
       for (const sub of existingSubs) {
         try {
           // Use the handleTelegramIntegration function for both Portfolio and Bundle products
-          const invites = await handleTelegramIntegration(
+          const result = await handleTelegramIntegration(
             req.user,
             sub.productType,
             sub.productId,
             sub
           );
           
-          if (invites && invites.length > 0) {
-            telegramInviteLinks.push(...invites);
+          if (result.invites && result.invites.length > 0) {
+            telegramInviteLinks.push(...result.invites);
             logger.info('Telegram invite(s) generated for eMandate subscription', {
               subscriptionId: sub._id,
               userEmail: req.user.email,
               productType: sub.productType,
               productId: sub.productId.toString(),
-              inviteCount: invites.length
+              inviteCount: result.invites.length,
+              errorCount: result.errors.length
             });
-          } else {
-            logger.warn('No Telegram invites generated for eMandate subscription', {
+          }
+          
+          if (result.errors && result.errors.length > 0) {
+            logger.warn('Telegram integration errors for eMandate subscription', {
+              subscriptionId: sub._id,
+              userEmail: req.user.email,
+              productType: sub.productType,
+              productId: sub.productId.toString(),
+              errors: result.errors
+            });
+          }
+          
+          if ((!result.invites || result.invites.length === 0) && 
+              (!result.errors || result.errors.length === 0)) {
+            logger.warn('No Telegram invites or errors generated for eMandate subscription', {
               subscriptionId: sub._id,
               userEmail: req.user.email,
               productType: sub.productType,
