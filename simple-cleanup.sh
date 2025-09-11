@@ -8,7 +8,7 @@ echo "🧹 Starting repository cleanup..."
 echo "📁 Working in: $(pwd)"
 
 removed_count=0
-
+ 
 # Function to safely remove with error handling
 cleanup_item() {
     local item="$1"

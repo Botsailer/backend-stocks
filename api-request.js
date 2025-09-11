@@ -3,7 +3,7 @@
 const fs = require('fs');
 const path = require('path');
 // Always store the counter file in the project root
-const COUNTER_FILE = path.join(process.cwd(), 'api-request-count.json');
+const COUNTER_FILE = path.join('api-request-count.json');
 
 function loadCount() {
   try {
