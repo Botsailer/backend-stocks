@@ -4,6 +4,7 @@ const express = require("express");
 const router = express.Router();
 const passport = require("passport");
 const subscriptionController = require("../controllers/subscriptionController");
+const { validateSubscriptions } = require("../middleware/subscriptionValidator");
 
 
 const requireAuth = passport.authenticate("jwt", { session: false });
@@ -275,7 +276,7 @@ router.post(
  *       500:
  *         description: Server error
  */
-router.get("/history", requireAuth, subscriptionController.getHistory);
+router.get("/history", requireAuth, validateSubscriptions, subscriptionController.getHistory);
 
 /**
  * @swagger
@@ -289,7 +290,7 @@ router.get("/history", requireAuth, subscriptionController.getHistory);
  *       405:
  *         description: Method not allowed - use POST to create emandate
  */
-router.get("/emandate", requireAuth, (req, res) => {
+router.get("/emandate", requireAuth, validateSubscriptions, (req, res) => {
   return res.status(405).json({
     success: false,
     error: "Method not allowed. Use POST to create emandate subscription.",

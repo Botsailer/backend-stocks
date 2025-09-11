@@ -18,6 +18,7 @@ const { COMPANY_INFO } = require("../config/billConfig");
 const emailQueue = require("../services/emailQueue");
 const { handleTelegramIntegration, sendTelegramInviteEmail } = require("./portfolioController");
 const winston = require("winston");
+const subscriptionEventService = require("../services/subscriptionEventService");
 
 // Logger setup
 const logger = winston.createLogger({
@@ -2230,6 +2231,24 @@ exports.verifyPayment = async (req, res) => {
 
     await session.commitTransaction();
     
+    // 🚀 Emit subscription events for real-time processing
+    try {
+      if (newSubscriptions && newSubscriptions.length > 0) {
+        for (const subscription of newSubscriptions) {
+          subscriptionEventService.emitSubscriptionActivated(subscription);
+          logger.info('Subscription activation event emitted', {
+            subscriptionId: subscription._id,
+            userId: subscription.user,
+            expiresAt: subscription.expiresAt,
+            productType: subscription.productType
+          });
+        }
+      }
+    } catch (eventError) {
+      logger.error('Failed to emit subscription events', { error: eventError.message });
+      // Don't throw - this shouldn't block the main flow
+    }
+    
     // Generate and send bill for the subscription
     try {
       if (newSubscriptions && newSubscriptions.length > 0) {
@@ -2682,6 +2701,30 @@ exports.verifyEmandate = async (req, res) => {
             { session }
           );
           activatedCount = update.modifiedCount;
+          
+          // 🚀 Emit activation events for emandate subscriptions  
+          try {
+            const activatedSubs = await Subscription.find({
+              razorpaySubscriptionId: subscription_id,
+              user: userId,
+              status: "active"
+            }).session(session);
+            
+            for (const activatedSub of activatedSubs) {
+              subscriptionEventService.emitSubscriptionActivated(activatedSub);
+              logger.info('Emandate subscription activation event emitted', {
+                subscriptionId: activatedSub._id,
+                userId: activatedSub.user,
+                razorpaySubscriptionId: subscription_id,
+                expiresAt: activatedSub.expiresAt
+              });
+            }
+          } catch (eventError) {
+            logger.error('Failed to emit emandate activation events', { 
+              error: eventError.message,
+              subscription_id
+            });
+          }
           
           // Process coupon usage if coupon was applied to eMandate
           if (couponUsed) {
@@ -3182,6 +3225,21 @@ exports.cancelSubscription = async (req, res) => {
       },
       { status: 'cancelled', cancelledAt: new Date() }
     );
+    
+    // 🚀 Emit cancellation events
+    try {
+      subscriptionEventService.emitSubscriptionCancelled(subscription);
+      logger.info('Subscription cancellation event emitted', {
+        subscriptionId: subscription._id,
+        userId: subscription.user,
+        productType: subscription.productType
+      });
+    } catch (eventError) {
+      logger.error('Failed to emit cancellation event', { 
+        error: eventError.message,
+        subscriptionId: subscription._id
+      });
+    }
     
     // Kick user from Telegram if applicable
     if (subscription.user) {

@@ -843,6 +843,7 @@ app.use('/api/user', require('./routes/userRoute'));
     });
 app.use('/api/subscriptions', require('./routes/Subscription'));
 app.use('/api/admin/subscriptions', require('./routes/adminSubscription'));
+app.use('/api/internal/webhooks/subscription', require('./routes/subscriptionWebhooks'));
 app.use('/api/admin/coupons', require('./routes/couponRoute'));
 app.use('/api/admin/telegram', require('./routes/telegram'));
 app.use('/api/stock-symbols', require('./routes/stocksymbol'));
