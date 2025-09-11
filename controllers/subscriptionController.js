@@ -649,6 +649,31 @@ exports.createOrder = async (req, res) => {
       status: { $in: ['signed', 'completed'] }
     }).sort({ createdAt: -1 });
 
+    // ENHANCED: For bundles, also check if user has signed for any portfolio within the bundle
+    if (!userEsignForProduct && productType === 'Bundle') {
+      const bundle = await Bundle.findById(productId).populate('portfolios');
+      if (bundle && bundle.portfolios && bundle.portfolios.length > 0) {
+        // Check if user has signed for any portfolio in this bundle
+        const portfolioIds = bundle.portfolios.map(p => p._id);
+        userEsignForProduct = await DigioSign.findOne({
+          userId: userId,
+          productType: 'Portfolio',
+          productId: { $in: portfolioIds },
+          isTemplate: false,
+          status: { $in: ['signed', 'completed'] }
+        }).sort({ createdAt: -1 });
+        
+        if (userEsignForProduct) {
+          logger.info('Found eSign for portfolio within bundle', {
+            userId: userId.toString(),
+            bundleId: productId.toString(),
+            portfolioId: userEsignForProduct.productId.toString(),
+            documentId: userEsignForProduct.documentId
+          });
+        }
+      }
+    }
+
     // ENHANCED: Log the eSign lookup attempt
     logger.info('Looking up eSign for product purchase', {
       userId: userId.toString(),
@@ -4109,8 +4134,8 @@ exports.getHistory = async (req, res) => {
 exports.startCleanupJob = () => {
   let isCleanupRunning = false;
 
-  // Main cleanup job - runs every 5 hours
-  const cleanupJob = cron.schedule("0 */5 * * *", async () => {
+  // Main cleanup job - runs every 1 minutes
+  const cleanupJob = cron.schedule("*/1 * * * *", async () => {
     if (isCleanupRunning) {
       logger.warn("Cleanup job skipped - previous run still in progress");
       return;
@@ -4240,7 +4265,7 @@ exports.startCleanupJob = () => {
   reminderJob.start();
   
   logger.info("Subscription cron jobs initialized:");
-  logger.info("- Cleanup: Every 5 hours (0 */5 * * *)");
+  // Cleanup: Every 5 minutes (*/5 * * * *)
   logger.info("- Renewal reminders: Daily at 9 AM (0 9 * * *)");
   logger.info("- Bill generation: Automatic on payment verification");
 };

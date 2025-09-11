@@ -155,7 +155,7 @@ const checkRecurringPaymentsJob = cron.schedule("0 * * * *", async () => {
       );
     }
   }
-  logger.info("Recurring payment check completed");
+  // Payment check completed
 }, { timezone: "Asia/Kolkata", scheduled: false });
 
 async function sendAdminNotification(subject, message, errorDetails = null) {
@@ -210,7 +210,7 @@ async function updateUserPremiumStatus(userId) {
 async function processExpiredSubscriptions() {
   try {
     const now = new Date();
-    logger.info(`Starting expired subscription processing at ${now.toISOString()}`);
+    // Starting cleanup process
     
     // Find subscriptions that expired but haven't been successfully processed
     // Either they're active and expired, or they're marked as expired but the telegram kick wasn't successful
@@ -234,7 +234,7 @@ async function processExpiredSubscriptions() {
       refPath: 'productType'
     }).populate('user');
     
-    logger.info(`Found ${expiredSubs.length} expired subscriptions to process`);
+    // Found expired subscriptions
     
     let processedCount = 0;
     let kickSuccessCount = 0;
@@ -264,15 +264,15 @@ async function processExpiredSubscriptions() {
             if (typeof sub.productId.externalId === 'string' && sub.productId.externalId.trim() !== '') {
               // Use the external ID if available and valid
               productId = sub.productId.externalId;
-              logger.info(`Using externalId for Telegram cancellation: ${productId}, user: ${userEmail}`);
+              // Using externalId for Telegram cancellation
             } else if (sub.productId._id) {
               // Fall back to MongoDB ID
               productId = sub.productId._id.toString();
-              logger.info(`Using MongoDB ID for Telegram cancellation: ${productId}, user: ${userEmail}`);
+              // Using MongoDB ID for Telegram cancellation
             } else if (typeof sub.productId === 'string') {
               // Handle case where productId is already a string
               productId = sub.productId;
-              logger.info(`Using string productId for Telegram cancellation: ${productId}, user: ${userEmail}`);
+              // Using string productId for Telegram cancellation
             }
           }
           
@@ -314,7 +314,7 @@ async function processExpiredSubscriptions() {
         // Attempt to kick user from Telegram group if they have a telegram_user_id
         let kickResult = { success: false };
         if (sub.telegram_user_id) {
-          logger.info(`Attempting to kick Telegram user ${sub.telegram_user_id} from product ${sub.productId._id || sub.productId}`);
+          // Attempting to kick Telegram user
           
           kickResult = await TelegramService.kickUser(sub.user._id || sub.user, sub.productId._id || sub.productId);
           
@@ -521,7 +521,7 @@ async function sendExpirationEmail(userId, subscription, portfolio) {
     `;
     
     await sendEmail(user.email, subject, text, html);
-    logger.info(`Expiration email sent to ${user.email}`);
+  // Email sent
   } catch (error) {
     logger.error('Failed to send expiration email', {
       userId,
@@ -534,7 +534,7 @@ async function sendExpirationEmail(userId, subscription, portfolio) {
 const cleanupExpiredSubscriptions = async () => {
   try {
     const now = new Date();
-    logger.info("Starting subscription cleanup job", { timestamp: now });
+    // Starting subscription cleanup job
 
     // Process expired subscriptions
     const expirationResult = await processExpiredSubscriptions();
@@ -551,7 +551,7 @@ const cleanupExpiredSubscriptions = async () => {
         updatedAt: now
       }
     );
-    logger.info(`Expired ${expiredOneTimeResult.modifiedCount} one-time subscriptions`);
+    // Cleanup completed
 
     // Step 2: Cancel stalled recurring subscriptions
     const thirtyDaysAgo = new Date(now.getTime() - (30 * 24 * 60 * 60 * 1000));
@@ -783,13 +783,13 @@ const enhancedCleanupExpiredSubscriptions = async () => {
   }
 };
 
-// Schedule the cron job to run every 5 hours
+// Schedule the cron job to run every 5 minutes
 const startSubscriptionCleanupJob = () => {
-  // Run every 5 hours
-  cron.schedule("0 */5 * * *", async () => {
-    logger.info("Subscription cleanup cron job triggered");
+  // Run every 1 minutes
+  cron.schedule("*/1 * * * *", async () => {
+    // Cleanup triggered
     await enhancedCleanupExpiredSubscriptions();
-    logger.info("Subscription cleanup cron job completed");
+    // Cleanup completed
   }, {
     scheduled: true,
     timezone: "Asia/Kolkata"

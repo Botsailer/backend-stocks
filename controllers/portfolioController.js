@@ -2118,8 +2118,9 @@ async function generateBundleInviteLinks(user, bundleId, subscription) {
       }
     });
 
-    // 1. Generate invite for bundle itself (if it has externalId)
-    if (bundle.externalId) {
+    // 1. Generate invite for bundle itself (if it has externalId or telegramProductId)
+    const bundleTelegramId = bundle.externalId || bundle.telegramProductId;
+    if (bundleTelegramId) {
       portfolioLogger.info('Generating Telegram invite for bundle main group', {
         operation: 'PAYMENT_TELEGRAM_BUNDLE_MAIN',
         userId: user._id,
@@ -2127,55 +2128,99 @@ async function generateBundleInviteLinks(user, bundleId, subscription) {
         details: { 
           bundleId: bundleId.toString(), 
           bundleName: bundle.name, 
-          externalId: bundle.externalId
+          externalId: bundle.externalId,
+          telegramProductId: bundle.telegramProductId,
+          usedTelegramId: bundleTelegramId
         }
       });
         
-        const bundleInviteResult = await TelegramService.generateInviteLink(user, bundle, subscription);
-        if (bundleInviteResult.success) {
-          // Update subscription with invite link
-          await Subscription.findByIdAndUpdate(subscription._id, {
-            invite_link_url: bundleInviteResult.invite_link,
-            invite_link_expires_at: bundleInviteResult.expires_at
+        try {
+          const bundleInviteResult = await TelegramService.generateInviteLink(user, bundle, subscription);
+          if (bundleInviteResult.success) {
+            // Update subscription with invite link
+            await Subscription.findByIdAndUpdate(subscription._id, {
+              invite_link_url: bundleInviteResult.invite_link,
+              invite_link_expires_at: bundleInviteResult.expires_at
+            });
+            
+            // Add to invite list
+            invites.push({
+              productId: bundleId,
+              product_name: bundle.name,
+              product_type: 'Bundle',
+              invite_link: bundleInviteResult.invite_link,
+              expires_at: bundleInviteResult.expires_at
+            });
+            
+            // Send email with invite
+            await sendTelegramInviteEmail(user, bundle, bundleInviteResult.invite_link, bundleInviteResult.expires_at);
+            
+            portfolioLogger.info('Telegram invite generated successfully for bundle main group', {
+              operation: 'PAYMENT_TELEGRAM_SUCCESS',
+              userId: user._id,
+              userEmail: user.email,
+              details: { 
+                bundleId: bundleId, 
+                bundleName: bundle.name, 
+                subscriptionId: subscription._id, 
+                telegramProductId: bundleTelegramId,
+                inviteLink: bundleInviteResult.invite_link,
+                expiresAt: bundleInviteResult.expires_at
+              }
+            });
+          } else {
+            errors.push({
+              productName: bundle.name,
+              productType: 'Bundle',
+              productId: bundleId.toString(),
+              reason: 'TELEGRAM_API_ERROR',
+              message: `Failed to generate Telegram invite for bundle: ${bundleInviteResult.error || 'Unknown error'}`
+            });
+            
+            portfolioLogger.warn('Failed to generate Telegram invite for bundle main group', {
+              operation: 'PAYMENT_TELEGRAM_ERROR',
+              userId: user._id,
+              userEmail: user.email,
+              details: { 
+                bundleId: bundleId, 
+                bundleName: bundle.name, 
+                telegramProductId: bundleTelegramId,
+                error: bundleInviteResult.error 
+              }
+            });
+          }
+        } catch (bundleError) {
+          errors.push({
+            productName: bundle.name,
+            productType: 'Bundle',
+            productId: bundleId.toString(),
+            reason: 'SYSTEM_ERROR',
+            message: `System error while generating bundle Telegram invite: ${bundleError.message}`
           });
           
-          // Add to invite list
-          invites.push({
-            productId,
-            product_name: bundle.name,
-            product_type: 'Bundle',
-            invite_link: bundleInviteResult.invite_link,
-            expires_at: bundleInviteResult.expires_at
-          });
-          
-          // Send email with invite
-          await sendTelegramInviteEmail(user, bundle, bundleInviteResult.invite_link, bundleInviteResult.expires_at);
-          
-          portfolioLogger.info('Telegram invite generated successfully for bundle main group', {
-            operation: 'PAYMENT_TELEGRAM',
+          portfolioLogger.error('System error generating bundle Telegram invite', {
+            operation: 'PAYMENT_TELEGRAM_SYSTEM_ERROR',
             userId: user._id,
-            userEmail: user.email,
-            details: { 
-              bundleId: productId, 
-              bundleName: bundle.name, 
-              subscriptionId: subscription._id, 
-              telegramProductId: bundle.externalId,
-              inviteLink: bundleInviteResult.invite_link,
-              expiresAt: bundleInviteResult.expires_at
-            }
-          });
-        } else {
-          portfolioLogger.error('Failed to generate Telegram invite for bundle main group', {
-            operation: 'PAYMENT_TELEGRAM',
-            userId: user._id,
-            userEmail: user.email,
-            details: { 
-              bundleId: productId, 
-              bundleName: bundle.name, 
-              error: bundleInviteResult.error 
+            details: {
+              bundleId: bundleId.toString(),
+              bundleName: bundle.name,
+              telegramProductId: bundleTelegramId,
+              error: bundleError.message,
+              stack: bundleError.stack
             }
           });
         }
+      } else {
+        portfolioLogger.warn('Bundle has no Telegram mapping', {
+          operation: 'PAYMENT_TELEGRAM_BUNDLE_NO_MAPPING',
+          userId: user._id,
+          details: { 
+            bundleId: bundleId.toString(), 
+            bundleName: bundle.name,
+            externalId: bundle.externalId,
+            telegramProductId: bundle.telegramProductId
+          }
+        });
       }
       
       // Then check if bundle has portfolios with Telegram external IDs (for portfolio-specific groups)
@@ -2185,14 +2230,15 @@ async function generateBundleInviteLinks(user, bundleId, subscription) {
           userId: user._id,
           userEmail: user.email,
           details: {
-            bundleId: productId,
+            bundleId: bundleId,
             bundleName: bundle.name,
             portfolioCount: bundle.portfolios.length
           }
         });
         
         for (const portfolio of bundle.portfolios) {
-          if (portfolio.externalId) {
+          const portfolioTelegramId = portfolio.externalId || portfolio.telegramProductId;
+          if (portfolioTelegramId) {
             try {
               const portfolioInviteResult = await TelegramService.generateInviteLink(user, portfolio, subscription);
               if (portfolioInviteResult.success) {
@@ -2240,14 +2286,16 @@ async function generateBundleInviteLinks(user, bundleId, subscription) {
               });
             }
           } else {
-            portfolioLogger.warn('Portfolio in bundle has no externalId for Telegram', {
-              operation: 'PAYMENT_TELEGRAM',
+            portfolioLogger.warn('Portfolio in bundle has no Telegram mapping', {
+              operation: 'PAYMENT_TELEGRAM_PORTFOLIO_NO_MAPPING',
               userId: user._id,
               userEmail: user.email,
               details: {
                 bundleId: bundle._id.toString(),
                 portfolioId: portfolio._id.toString(),
-                portfolioName: portfolio.name
+                portfolioName: portfolio.name,
+                externalId: portfolio.externalId,
+                telegramProductId: portfolio.telegramProductId
               }
             });
           }
@@ -2256,11 +2304,18 @@ async function generateBundleInviteLinks(user, bundleId, subscription) {
         portfolioLogger.info('Bundle has no portfolios', {
           operation: 'PAYMENT_TELEGRAM_BUNDLE_NO_PORTFOLIOS',
           userId: user._id,
-          details: { bundleId: bundleId.toString(), bundleName: bundle.name, hasExternalId: !!bundle.externalId }
+          details: { 
+            bundleId: bundleId.toString(), 
+            bundleName: bundle.name, 
+            hasExternalId: !!bundle.externalId,
+            hasTelegramProductId: !!bundle.telegramProductId,
+            hasAnyTelegramMapping: !!(bundle.externalId || bundle.telegramProductId)
+          }
         });
         
-        // If bundle has no portfolios but has externalId, generate invite for the bundle itself
-        if (bundle.externalId) {
+        // If bundle has no portfolios but has telegram mapping, generate invite for the bundle itself
+        const bundleTelegramId = bundle.externalId || bundle.telegramProductId;
+        if (bundleTelegramId) {
           portfolioLogger.info('Generating Telegram invite for bundle (no portfolios case)', {
             operation: 'PAYMENT_TELEGRAM_BUNDLE_MAIN_NO_PORTFOLIOS',
             userId: user._id,
@@ -2346,13 +2401,24 @@ async function generateBundleInviteLinks(user, bundleId, subscription) {
             });
           }
         } else {
-          // If bundle has no portfolios and no externalId, it's a configuration issue
+          // If bundle has no portfolios and no telegram mapping, it's a configuration issue
           errors.push({
             productName: bundle.name,
             productType: 'Bundle',
             productId: bundleId.toString(),
             reason: 'BUNDLE_NOT_CONFIGURED',
             message: `Bundle "${bundle.name}" has no portfolios and is not mapped to any Telegram group. Please contact admin to configure this bundle.`
+          });
+          
+          portfolioLogger.warn('Bundle has no portfolios and no Telegram mapping', {
+            operation: 'PAYMENT_TELEGRAM_BUNDLE_NOT_CONFIGURED',
+            userId: user._id,
+            details: { 
+              bundleId: bundleId.toString(), 
+              bundleName: bundle.name,
+              externalId: bundle.externalId,
+              telegramProductId: bundle.telegramProductId
+            }
           });
         }
       }

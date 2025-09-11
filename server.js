@@ -1438,6 +1438,8 @@ app.get('/api/request-count', (req, res) => {
         console.error('❌ Failed to start Digio sync service:', error.message);
       }
       
+
+      
       // Initialize existing portfolio cron jobs in production
       if (process.env.NODE_ENV === 'production') {
         console.log('Production environment detected. Initializing scheduled jobs.');

@@ -14,16 +14,13 @@ const SAMPLE_DAYS = 5; // Number of days to generate logs for
 const ENTRIES_PER_DAY = 15; // Number of log entries per day
 const LOG_DIR = path.join(__dirname, '..', 'mainlog');
 
-// Stock symbols for sample data
 const STOCK_SYMBOLS = [
   'RELIANCE', 'TCS', 'HDFCBANK', 'INFY', 'ICICIBANK', 
   'HINDUNILVR', 'SBIN', 'BHARTIARTL', 'ITC', 'KOTAKBANK'
 ];
 
-// Transaction types
 const TRANSACTION_TYPES = ['BUY', 'SELL', 'HOLD', 'REBALANCE'];
 
-// Create log directory if it doesn't exist
 function ensureLogDirectory() {
   if (!fs.existsSync(LOG_DIR)) {
     fs.mkdirSync(LOG_DIR, { recursive: true });
