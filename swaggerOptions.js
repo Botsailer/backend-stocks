@@ -36,7 +36,7 @@ const options = {
     servers: [
       {
         url: process.env.NODE_ENV === 'production' 
-          ? 'https://stocks-backend-cmjxc.ondigitalocean.app/' 
+          ? 'https://api.rangaone.finance' 
           : 'http://localhost:3012',
         description: process.env.NODE_ENV === 'production' 
           ? 'Production Server' 
@@ -344,3 +344,4 @@ module.exports = (app) => {
   console.log('   - JSON spec: /api-docs.json');
   console.log('   - Alternative: /docs');
 };
+
