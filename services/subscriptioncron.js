@@ -27,135 +27,114 @@ const logger = winston.createLogger({
   ]
 });
 
+// Database connection check utility
+const isDatabaseConnected = () => {
+  return mongoose.connection.readyState === 1;
+};
+
+// Safe database operation wrapper
+const safeDBOperation = async (operation, operationName = "database operation") => {
+  try {
+    if (!isDatabaseConnected()) {
+      logger.warn(`Skipping ${operationName}: Database not connected`);
+      return null;
+    }
+    return await operation();
+  } catch (error) {
+    logger.error(`Error in ${operationName}:`, {
+      error: error.message,
+      stack: error.stack
+    });
+    return null;
+  }
+};
+
 // Recurring payment check job (runs every hour)
 const checkRecurringPaymentsJob = cron.schedule("0 * * * *", async () => {
-  const now = new Date();
-  const thirtyDaysAgo = new Date(now.getTime() - (30 * 24 * 60 * 60 * 1000));
-  const subscriptions = await Subscription.find({ 
-    type: "recurring", 
-    status: "active" 
-  }).populate({
-    path: 'productId',
-    refPath: 'productType'
-  }).populate('user');
-  
-  const razorpay = await getRazorpayInstance();
-  
-  for (const sub of subscriptions) {
-    try {
-      const rSub = await razorpay.subscriptions.fetch(sub.razorpaySubscriptionId);
-      
-      if (["halted", "cancelled", "expired"].includes(rSub.status)) {
-        // Get product name and user email for API call
-        let productName = 'Unknown Product';
-        if (sub.productType === 'Portfolio' && sub.productId && sub.productId.name) {
-          productName = sub.productId.name;
-        } else if (sub.productType === 'Bundle' && sub.productId && sub.productId.name) {
-          productName = sub.productId.name;
-        }
+  const result = await safeDBOperation(async () => {
+    const now = new Date();
+    const thirtyDaysAgo = new Date(now.getTime() - (30 * 24 * 60 * 60 * 1000));
+    
+    const subscriptions = await Subscription.find({ 
+      type: "recurring", 
+      status: "active" 
+    }).populate({
+      path: 'productId',
+      refPath: 'productType'
+    }).populate('user');
+    
+    const razorpay = await getRazorpayInstance();
+    
+    for (const sub of subscriptions) {
+      try {
+        const rSub = await razorpay.subscriptions.fetch(sub.razorpaySubscriptionId);
         
-        const userEmail = sub.user && sub.user.email ? sub.user.email : null;
-        
-        // Call subscription cancellation API
-        if (userEmail && sub.productId) {
-          const cancelResult = await TelegramService.cancelSubscription(
-            userEmail,
-            sub.productId._id || sub.productId,
-            productName,
-            sub.expiresAt
-          );
-          
-          if (!cancelResult.success) {
-            logger.warn(`Failed to cancel subscription via API for ${userEmail}: ${cancelResult.error}`);
-            await sendAdminNotification(
-              'Recurring Subscription Cancellation API Failed',
-              `Failed to cancel recurring subscription via DELETE API for user ${userEmail}, product: ${productName}`,
-              {
-                subscriptionId: sub._id,
-                razorpayStatus: rSub.status,
-                userEmail,
-                productId: sub.productId._id || sub.productId,
-                productName,
-                error: cancelResult.error
-              }
-            );
-          } else {
-            logger.info(`Successfully cancelled recurring subscription for ${userEmail}, product: ${productName}`);
+        if (["halted", "cancelled", "expired"].includes(rSub.status)) {
+          // Get product name and user email for API call
+          let productName = 'Unknown Product';
+          if (sub.productType === 'Portfolio' && sub.productId && sub.productId.name) {
+            productName = sub.productId.name;
+          } else if (sub.productType === 'Bundle' && sub.productId && sub.productId.name) {
+            productName = sub.productId.name;
           }
-        }
-        
-        await Subscription.updateOne(
-          { _id: sub._id },
-          { status: "cancelled", cancelledAt: now, cancelReason: "Payment failed or mandate cancelled" }
-        );
-        await updateUserPremiumStatus(sub.user);
-        logger.info(`Cancelled recurring subscription (Razorpay status): ${sub._id} for user: ${sub.user}`);
-      }
-      
-      // If the subscription is active but last payment is more than 30 days ago, cancel
-      if (rSub.status === "active" && (!sub.lastPaymentAt || new Date(sub.lastPaymentAt) < thirtyDaysAgo)) {
-        // Get product name and user email for API call
-        let productName = 'Unknown Product';
-        if (sub.productType === 'Portfolio' && sub.productId && sub.productId.name) {
-          productName = sub.productId.name;
-        } else if (sub.productType === 'Bundle' && sub.productId && sub.productId.name) {
-          productName = sub.productId.name;
-        }
-        
-        const userEmail = sub.user && sub.user.email ? sub.user.email : null;
-        
-        // Call subscription cancellation API
-        if (userEmail && sub.productId) {
-          const cancelResult = await TelegramService.cancelSubscription(
-            userEmail,
-            sub.productId._id || sub.productId,
-            productName,
-            sub.expiresAt
-          );
           
-          if (!cancelResult.success) {
-            logger.warn(`Failed to cancel stalled subscription via API for ${userEmail}: ${cancelResult.error}`);
-            await sendAdminNotification(
-              'Stalled Recurring Subscription Cancellation API Failed',
-              `Failed to cancel stalled recurring subscription via DELETE API for user ${userEmail}, product: ${productName}`,
-              {
-                subscriptionId: sub._id,
-                stalledReason: 'No payment for 30+ days',
+          const userEmail = sub.user && sub.user.email ? sub.user.email : null;
+          
+          // Call subscription cancellation API with error handling
+          if (userEmail && sub.productId) {
+            try {
+              const cancelResult = await TelegramService.cancelSubscription(
                 userEmail,
-                productId: sub.productId._id || sub.productId,
+                sub.productId._id || sub.productId,
                 productName,
-                lastPaymentAt: sub.lastPaymentAt,
-                error: cancelResult.error
+                sub.expiresAt
+              );
+              
+              if (!cancelResult.success) {
+                logger.warn(`Failed to cancel subscription via API for ${userEmail}: ${cancelResult.error}`);
               }
-            );
-          } else {
-            logger.info(`Successfully cancelled stalled recurring subscription for ${userEmail}, product: ${productName}`);
+            } catch (apiError) {
+              logger.error(`Error calling cancel API for ${userEmail}:`, apiError.message);
+            }
           }
+          
+          await Subscription.updateOne(
+            { _id: sub._id },
+            { status: "cancelled", cancelledAt: new Date(), cancelReason: "Payment failed or mandate cancelled" }
+          );
+          await updateUserPremiumStatus(sub.user);
         }
         
-        await Subscription.updateOne(
-          { _id: sub._id },
-          { status: "cancelled", updatedAt: now, cancellationReason: "Payment failure - auto-cancelled after 30 days of no payment" }
-        );
-        await updateUserPremiumStatus(sub.user);
-        logger.info(`Cancelled stalled recurring subscription: ${sub._id} for user: ${sub.user}`);
-      }
-    } catch (err) {
-      logger.error(`Error checking subscription ${sub._id}:`, err);
-      
-      // Send admin notification for subscription check error
-      await sendAdminNotification(
-        'Recurring Payment Check Error',
-        `Error checking recurring subscription ${sub._id}`,
-        {
-          subscriptionId: sub._id,
-          error: err.message,
-          stack: err.stack
+        // If the subscription is active but last payment is more than 30 days ago, cancel
+        const thirtyDaysAgo = new Date(Date.now() - (30 * 24 * 60 * 60 * 1000));
+        if (rSub.status === "active" && (!sub.lastPaymentAt || new Date(sub.lastPaymentAt) < thirtyDaysAgo)) {
+          // Get product name and user email for API call
+          let productName = 'Unknown Product';
+          if (sub.productType === 'Portfolio' && sub.productId && sub.productId.name) {
+            productName = sub.productId.name;
+          } else if (sub.productType === 'Bundle' && sub.productId && sub.productId.name) {
+            productName = sub.productId.name;
+          }
+          
+          const userEmail = sub.user && sub.user.email ? sub.user.email : null;
+          
+          await Subscription.updateOne(
+            { _id: sub._id },
+            { status: "cancelled", updatedAt: new Date(), cancellationReason: "Payment failure - auto-cancelled after 30 days of no payment" }
+          );
+          await updateUserPremiumStatus(sub.user);
         }
-      );
+      } catch (err) {
+        logger.error(`Error checking subscription ${sub._id}:`, err.message);
+      }
     }
+    
+    return { success: true, message: "Recurring payment check completed" };
+  }, "recurring payment check");
+  
+  if (!result) {
+    logger.error("Recurring payment check failed due to database connection issues");
   }
-  // Payment check completed
 }, { timezone: "Asia/Kolkata", scheduled: false });
 
 async function sendAdminNotification(subject, message, errorDetails = null) {
@@ -208,9 +187,8 @@ async function updateUserPremiumStatus(userId) {
 }
 
 async function processExpiredSubscriptions() {
-  try {
+  return await safeDBOperation(async () => {
     const now = new Date();
-    // Starting cleanup process
     
     // Find subscriptions that expired but haven't been successfully processed
     // Either they're active and expired, or they're marked as expired but the telegram kick wasn't successful
@@ -233,8 +211,6 @@ async function processExpiredSubscriptions() {
       path: 'productId',
       refPath: 'productType'
     }).populate('user');
-    
-    // Found expired subscriptions
     
     let processedCount = 0;
     let kickSuccessCount = 0;
@@ -466,24 +442,7 @@ async function processExpiredSubscriptions() {
       kickSuccessCount
     };
     
-  } catch (error) {
-    logger.error('Error in processExpiredSubscriptions:', {
-      error: error.message,
-      stack: error.stack
-    });
-    
-    // Send admin notification for function-level error
-    await sendAdminNotification(
-      'processExpiredSubscriptions Function Error',
-      'Critical error in processExpiredSubscriptions function',
-      {
-        error: error.message,
-        stack: error.stack
-      }
-    );
-    
-    return { success: false, error: error.message };
-  }
+  }, "expired subscriptions processing");
 }
 
 async function sendExpirationEmail(userId, subscription, portfolio) {
@@ -688,8 +647,8 @@ const cleanupExpiredSubscriptions = async () => {
         deletedOld: deletedOldResult.deletedCount,
         deletedPaymentHistory: deletedPaymentHistoryResult.deletedCount,
         affectedUsers: cancelledUserIds.size,
-        cancelApiSuccessCount: expirationResult.cancelSuccessCount || 0,
-        telegramKickSuccessCount: expirationResult.kickSuccessCount || 0,
+        cancelApiSuccessCount: expirationResult?.cancelSuccessCount || 0,
+        telegramKickSuccessCount: expirationResult?.kickSuccessCount || 0,
         executionTimeMs: executionTime
       },
       currentStats: {
@@ -708,8 +667,8 @@ const cleanupExpiredSubscriptions = async () => {
         deletedOld: deletedOldResult.deletedCount,
         deletedPaymentHistory: deletedPaymentHistoryResult.deletedCount,
         affectedUsers: cancelledUserIds.size,
-        cancelApiSuccessCount: expirationResult.cancelSuccessCount || 0,
-        telegramKickSuccessCount: expirationResult.kickSuccessCount || 0,
+        cancelApiSuccessCount: expirationResult?.cancelSuccessCount || 0,
+        telegramKickSuccessCount: expirationResult?.kickSuccessCount || 0,
         currentStats: {
           active: totalActiveSubscriptions,
           expired: totalExpiredSubscriptions,
@@ -785,11 +744,12 @@ const enhancedCleanupExpiredSubscriptions = async () => {
 
 // Schedule the cron job to run every 5 minutes
 const startSubscriptionCleanupJob = () => {
-  // Run every 1 minutes
-  cron.schedule("*/1 * * * *", async () => {
-    // Cleanup triggered
-    await enhancedCleanupExpiredSubscriptions();
-    // Cleanup completed
+  // Run every 5 minutes
+  cron.schedule("*/5 * * * *", async () => {
+    await safeDBOperation(async () => {
+      await enhancedCleanupExpiredSubscriptions();
+      return { success: true };
+    }, "subscription cleanup cron job");
   }, {
     scheduled: true,
     timezone: "Asia/Kolkata"
@@ -797,8 +757,7 @@ const startSubscriptionCleanupJob = () => {
   
   // Daily summary report at 6 AM
   cron.schedule("0 6 * * *", async () => {
-    logger.info("Daily subscription summary job triggered");
-    try {
+    await safeDBOperation(async () => {
       const stats = {
         active: await Subscription.countDocuments({ status: "active" }),
         expired: await Subscription.countDocuments({ status: "expired" }),
@@ -809,9 +768,8 @@ const startSubscriptionCleanupJob = () => {
         oneTimeActive: await Subscription.countDocuments({ status: "active", type: "one_time" })
       };
       logger.info("Daily subscription summary", { dailySummary: stats });
-    } catch (error) {
-      logger.error("Daily summary failed", error);
-    }
+      return stats;
+    }, "daily subscription summary");
   }, {
     scheduled: true,
     timezone: "Asia/Kolkata"

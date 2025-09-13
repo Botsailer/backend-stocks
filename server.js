@@ -1,4 +1,56 @@
 require('dotenv').config();
+
+// **GLOBAL ERROR HANDLERS - PREVENT ALL CRASHES**
+process.on('uncaughtException', (error) => {
+  console.error('💥 UNCAUGHT EXCEPTION - Application will continue running:', error);
+  console.error('Stack trace:', error.stack);
+  
+  // Log to file if possible
+  try {
+    const fs = require('fs');
+    const logEntry = `${new Date().toISOString()} - UNCAUGHT EXCEPTION: ${error.message}\nStack: ${error.stack}\n\n`;
+    fs.appendFileSync('./logs/crash-recovery.log', logEntry);
+  } catch (logError) {
+    console.error('Failed to log uncaught exception:', logError);
+  }
+  
+  // Do NOT exit - keep the application running
+  console.log('🔄 Application continuing after uncaught exception...');
+});
+
+process.on('unhandledRejection', (reason, promise) => {
+  console.error('💥 UNHANDLED REJECTION - Application will continue running:', reason);
+  console.error('Promise:', promise);
+  
+  // Log to file if possible
+  try {
+    const fs = require('fs');
+    const logEntry = `${new Date().toISOString()} - UNHANDLED REJECTION: ${reason}\nPromise: ${promise}\n\n`;
+    fs.appendFileSync('./logs/crash-recovery.log', logEntry);
+  } catch (logError) {
+    console.error('Failed to log unhandled rejection:', logError);
+  }
+  
+  // Do NOT exit - keep the application running
+  console.log('🔄 Application continuing after unhandled rejection...');
+});
+
+// **DATABASE CONNECTION ERROR HANDLING**
+const mongoose = require('mongoose');
+
+mongoose.connection.on('disconnected', () => {
+  console.error('🔌 MongoDB disconnected - attempting to reconnect...');
+});
+
+mongoose.connection.on('reconnected', () => {
+  console.log('✅ MongoDB reconnected successfully');
+});
+
+mongoose.connection.on('error', (error) => {
+  console.error('💥 MongoDB connection error:', error.message);
+  // Don't crash - let mongoose handle reconnection
+});
+
 const express = require('express');
 const passport = require('passport');
 const cors = require('cors');
@@ -13,7 +65,6 @@ const { startSubscriptionCleanupJob } = require('./services/subscriptioncron');
 
 // Import the new cron scheduler
 const { CronScheduler, CronLogger } = require('./utils/cornscheduler');
-const { default: mongoose } = require('mongoose');
 
 // Setup global Winston default transport to prevent "no transports" warnings
 const winston = require('winston');
@@ -293,13 +344,62 @@ app.get('/', (req, res) => {
   });
 });
 
-dbAdapter.connect()
-  .then(() => {
-    console.log('✅ Database connected successfully');
-    CronLogger.info('Database connection established');
-    // Initialize Passport and routes after DB connection
-    app.use(passport.initialize());
-    require('./config/passport')(passport, dbAdapter);
+// **CRASH-PROOF DATABASE CONNECTION WITH RETRY**
+async function connectWithRetry() {
+  const maxRetries = 5;
+  const retryDelay = 5000; // 5 seconds
+  
+  for (let attempt = 1; attempt <= maxRetries; attempt++) {
+    try {
+      console.log(`🔌 Database connection attempt ${attempt}/${maxRetries}...`);
+      await dbAdapter.connect();
+      console.log('✅ Database connected successfully');
+      CronLogger.info('Database connection established');
+      
+      // Initialize Passport and routes after DB connection
+      app.use(passport.initialize());
+      require('./config/passport')(passport, dbAdapter);
+      return true;
+    } catch (error) {
+      console.error(`❌ Database connection attempt ${attempt} failed:`, error.message);
+      
+      if (attempt === maxRetries) {
+        console.error('💥 All database connection attempts failed. Starting server without DB connection.');
+        console.error('🔄 The application will continue running and retry connections automatically.');
+        return false;
+      }
+      
+      console.log(`⏳ Retrying in ${retryDelay/1000} seconds...`);
+      await new Promise(resolve => setTimeout(resolve, retryDelay));
+    }
+  }
+}
+
+// Start database connection with retry logic
+connectWithRetry().then((connected) => {
+  if (!connected) {
+    console.log('⚠️  Server started without database connection - monitoring for reconnection...');
+    
+    // Monitor for reconnection every 30 seconds
+    const reconnectInterval = setInterval(async () => {
+      if (mongoose.connection.readyState === 1) {
+        console.log('✅ Database reconnected - clearing monitor');
+        clearInterval(reconnectInterval);
+        return;
+      }
+      
+      try {
+        console.log('🔄 Attempting database reconnection...');
+        await dbAdapter.connect();
+      } catch (error) {
+        // Silently continue - will retry on next interval
+      }
+    }, 30000);
+  }
+}).catch((error) => {
+  console.error('🚨 Database connection setup failed:', error);
+  console.log('🔄 Application will continue running...');
+});
     
 
     /**
@@ -1474,38 +1574,34 @@ app.get('/api/request-count', (req, res) => {
         CronLogger.error('Failed to initialize stock price cron scheduler', error);
       }
     });
-  })
-  .catch(err => {
-    console.error('Database connection error:', err);
-    CronLogger.error('Database connection failed', err);
-    process.exit(1);
-  });
 
 // **GRACEFUL SHUTDOWN HANDLING**
-const gracefulShutdown = (signal) => {
+// **CRASH-PROOF GRACEFUL SHUTDOWN**
+const gracefulShutdown = async (signal) => {
   console.log(`👋 ${signal} received, shutting down gracefully`);
   CronLogger.info(`${signal} received, initiating graceful shutdown`);
   
   try {
-
     // Stop cron scheduler
-    cronScheduler.stop();
+    await cronScheduler.stop();
     console.log('🛑 Cron scheduler stopped');
+    CronLogger.info('🛑 All cron jobs stopped');
     
     // Close database connection
-    dbAdapter.disconnect()
-      .then(() => {
-        console.log('🔌 Database connection closed');
-        CronLogger.info('Database connection closed successfully');
-        process.exit(0);
-      })
-      .catch((error) => {
-        console.error('❌ Error closing database connection:', error);
-        process.exit(1);
-      });
+    try {
+      await dbAdapter.disconnect();
+      console.log('🔌 Database connection closed');
+      CronLogger.info('Database connection closed successfully');
+    } catch (dbError) {
+      console.error('⚠️  Error closing database connection:', dbError.message);
+    }
+    
+    console.log('✅ Graceful shutdown completed');
+    process.exit(0);
   } catch (error) {
-    console.error('❌ Error during graceful shutdown:', error);
+    console.error('⚠️  Error during graceful shutdown:', error.message);
     CronLogger.error('Error during graceful shutdown', error);
+    console.log('🚨 Forcing exit after shutdown error');
     process.exit(1);
   }
 };
@@ -1513,35 +1609,5 @@ const gracefulShutdown = (signal) => {
 // Handle shutdown signals
 process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
 process.on('SIGINT', () => gracefulShutdown('SIGINT'));
-
-// Handle uncaught exceptions
-process.on('uncaughtException', (error) => {
-  console.error('💥 Uncaught Exception:', error);
-  
-  gracefulShutdown('UNCAUGHT_EXCEPTION');
-});
-
-// Handle unhandled promise rejections
-process.on('unhandledRejection', (reason, promise) => {
-  console.error('💥 Unhandled Rejection at:', promise, 'reason:', reason);
-  // Check if this is a critical error that should cause shutdown
-  const errorString = String(reason);
-  const criticalErrors = [
-    'ECONNREFUSED', // Database connection issues
-    'ENOTFOUND',    // DNS resolution issues
-    'auth failed',  // Authentication failures
-    'connection failed'
-  ];
-  
-  const isCritical = criticalErrors.some(err => errorString.includes(err));
-  
-  if (isCritical) {
-    console.error('🚨 Critical error detected, shutting down...');
-    gracefulShutdown('UNHANDLED_REJECTION');
-  } else {
-    console.warn('⚠️ Non-critical error logged, continuing operation...');
-    // For non-critical errors, just log and continue
-  }
-});
 
 module.exports = app;
