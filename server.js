@@ -852,6 +852,25 @@ connectWithRetry().then((connected) => {
 app.use('/auth', authRoutes);
 app.use('/admin', require('./routes/admin'));
 app.use('/digio', require('./routes/digioRoutes'));
+
+// --- API Request Counter (persistent) ---
+const apiRequestCounter = require('./api-request');
+// Middleware to increment counter for all valid API calls (not 404)
+app.use((req, res, next) => {
+  console.log('[COUNTER MIDDLEWARE] Called for:', req.method, req.originalUrl);
+  res.on('finish', () => {
+    if (
+      res.statusCode !== 404 && !(req.method === 'GET' && req.originalUrl.startsWith('/api/request-count'))
+    ) {
+      console.log('[COUNTER] Incrementing for:', req.method, req.originalUrl, 'Status:', res.statusCode);
+      apiRequestCounter.increment();
+    } else {
+      console.log('[COUNTER] Not incrementing for:', req.method, req.originalUrl, 'Status:', res.statusCode);
+    }
+  });
+  next();
+});
+
 app.use('/api/user', require('./routes/userRoute'));
 
    /**
@@ -953,26 +972,7 @@ app.use('/api/bundles', require('./routes/bundleRouter'));
 app.use('/api/admin/configs', require('./routes/configRoute'));     
 app.use('/api/portfolio-calculation-logs', require('./routes/portfolioCalculationLogs')); 
 app.use('/api/chart-data', require('./routes/chartData'));    
-app.use('/api', require('./routes/Portfolio'));                                    
-
-
-// --- API Request Counter (persistent) ---
-const apiRequestCounter = require('./api-request');
-// Middleware to increment counter for all valid API calls (not 404)
-app.use((req, res, next) => {
-  console.log('[COUNTER MIDDLEWARE] Called for:', req.method, req.originalUrl);
-  res.on('finish', () => {
-    if (
-      res.statusCode !== 404 && !(req.method === 'GET' && req.originalUrl.startsWith('/api/request-count'))
-    ) {
-      console.log('[COUNTER] Incrementing for:', req.method, req.originalUrl, 'Status:', res.statusCode);
-      apiRequestCounter.increment();
-    } else {
-      console.log('[COUNTER] Not incrementing for:', req.method, req.originalUrl, 'Status:', res.statusCode);
-    }
-  });
-  next();
-});
+app.use('/api', require('./routes/Portfolio'));
 /**
 // ...existing code...
  * @swagger
